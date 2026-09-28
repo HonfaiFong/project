@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package feed.v1;
+
+import "common/v1/pagination.proto";
+import "content/v1/content.proto";
+
+option go_package = "social-backend/contracts/gen/go/feed/v1;feedv1";
+option php_namespace = "Contracts\\Gen\\Feed\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Feed\\V1";
+
+message FeedItem {
+  uint64 post_id = 1;
+  double score = 2;
+  content.v1.Post post = 3;
+}
+
+message GetFeedRequest {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+  common.v1.PaginationRequest pagination = 3;
+}
+
+message GetFeedResponse {
+  repeated FeedItem items = 1;
+  common.v1.PaginationResponse pagination = 2;
+}
+
+service FeedService {
+  rpc GetFeed(GetFeedRequest) returns (GetFeedResponse);
+}

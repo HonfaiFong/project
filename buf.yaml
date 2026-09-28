@@ -1,0 +1,12 @@
+version: v1
+directories:
+  - contracts/proto
+lint:
+  use:
+    - DEFAULT
+  except:
+    - PACKAGE_VERSION_SUFFIX
+    - FIELD_NOT_IN_USE
+breaking:
+  use:
+    - FILE

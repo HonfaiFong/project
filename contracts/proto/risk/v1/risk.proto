@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package risk.v1;
+
+option go_package = "social-backend/contracts/gen/go/risk/v1;riskv1";
+option php_namespace = "Contracts\\Gen\\Risk\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Risk\\V1";
+
+enum RiskDecision {
+  RISK_DECISION_ALLOW = 0;
+  RISK_DECISION_DENY = 1;
+  RISK_DECISION_CHALLENGE = 2;
+  RISK_DECISION_REVIEW = 3;
+}
+
+message CheckActionRequest {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+  string device_id = 3;
+  string ip_hash = 4;
+  string action = 5;
+  int32 target_type = 6;
+  uint64 target_id = 7;
+  map<string, string> context = 8;
+}
+
+message CheckActionResponse {
+  RiskDecision decision = 1;
+  string reason = 2;
+}
+
+service RiskService {
+  rpc CheckAction(CheckActionRequest) returns (CheckActionResponse);
+}

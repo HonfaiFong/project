@@ -1,0 +1,10 @@
+.git
+.env
+data/
+minio_data/
+mysql_data/
+redis_data/
+kafka_data/
+vendor/
+bin/
+*.log

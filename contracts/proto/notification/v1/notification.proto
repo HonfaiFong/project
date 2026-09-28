@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package notification.v1;
+
+option go_package = "social-backend/contracts/gen/go/notification/v1;notificationv1";
+option php_namespace = "Contracts\\Gen\\Notification\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Notification\\V1";
+
+message SendPushRequest {
+  uint64 user_id = 1;
+  string title = 2;
+  string body = 3;
+  map<string, string> extra = 4;
+}
+
+message SendPushResponse {
+  bool success = 1;
+}
+
+service NotificationService {
+  rpc SendPush(SendPushRequest) returns (SendPushResponse);
+}

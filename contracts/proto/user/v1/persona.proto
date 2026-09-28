@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package user.v1;
+
+option go_package = "social-backend/contracts/gen/go/user/v1;userv1";
+option php_namespace = "Contracts\\Gen\\User\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\User\\V1";
+
+message PersonaProfile {
+  uint64 id = 1;
+  uint64 user_id = 2;
+  int32 type = 3;
+  string nickname = 4;
+  string avatar_key = 5;
+  string bio = 6;
+  int32 status = 7;
+  string created_at = 8;
+  string updated_at = 9;
+}
+
+message CreatePersonaRequest {
+  uint64 user_id = 1;
+  int32 type = 2;
+  string nickname = 3;
+  string avatar_key = 4;
+  string bio = 5;
+}
+
+message CreatePersonaResponse {
+  PersonaProfile persona = 1;
+}
+
+message GetPersonaRequest {
+  uint64 persona_id = 1;
+}
+
+message GetPersonaResponse {
+  PersonaProfile persona = 1;
+}
+
+message BatchGetPersonasRequest {
+  repeated uint64 persona_ids = 1;
+}
+
+message BatchGetPersonasResponse {
+  repeated PersonaProfile personas = 1;
+}
+
+message UpdatePersonaRequest {
+  uint64 persona_id = 1;
+  uint64 user_id = 2; // for ownership check
+  optional string nickname = 3;
+  optional string avatar_key = 4;
+  optional string bio = 5;
+}
+
+message UpdatePersonaResponse {
+  PersonaProfile persona = 1;
+}
+
+message ListPersonasRequest {
+  uint64 user_id = 1;
+}
+
+message ListPersonasResponse {
+  repeated PersonaProfile personas = 1;
+}

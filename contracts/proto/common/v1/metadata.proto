@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "social-backend/contracts/gen/go/common/v1;commonv1";
+option php_namespace = "Contracts\\Gen\\Common\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Common\\V1";
+
+message RequestMetadata {
+  string request_id = 1;
+  string trace_id = 2;
+  uint64 user_id = 3;
+  uint64 persona_id = 4;
+  string device_id = 5;
+  string app_version = 6;
+  string client_ip = 7;
+}

@@ -1,0 +1,36 @@
+# Environment
+.env
+.env.local
+*.env
+
+# Composer & PHP
+vendor/
+composer.phar
+.phpunit.result.cache
+.php-cs-fixer.cache
+runtime/
+*.log
+
+# Go
+bin/
+*.exe
+*.test
+*.out
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Docker / local data
+data/
+minio_data/
+mysql_data/
+redis_data/
+kafka_data/
+
+# Protobuf generated
+# (keep committed if needed or ignore according to team preference; standard is contracts/gen or committed contracts)

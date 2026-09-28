@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package moderation.v1;
+
+option go_package = "social-backend/contracts/gen/go/moderation/v1;moderationv1";
+option php_namespace = "Contracts\\Gen\\Moderation\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Moderation\\V1";
+
+enum ModerationStatus {
+  MODERATION_STATUS_UNSPECIFIED = 0;
+  MODERATION_STATUS_PENDING = 1;
+  MODERATION_STATUS_PASS = 2;
+  MODERATION_STATUS_REVIEW = 3;
+  MODERATION_STATUS_REJECT = 4;
+}
+
+message SubmitContentRequest {
+  int32 content_type = 1; // 1 = post, 2 = comment, 3 = persona profile
+  uint64 content_id = 2;
+  uint64 user_id = 3;
+  uint64 persona_id = 4;
+  string text = 5;
+  repeated string media_keys = 6;
+}
+
+message SubmitContentResponse {
+  string task_id = 1;
+  ModerationStatus status = 2;
+}
+
+message GetModerationResultRequest {
+  string task_id = 1;
+}
+
+message GetModerationResultResponse {
+  string task_id = 1;
+  ModerationStatus status = 2;
+  string reason = 3;
+}
+
+service ModerationService {
+  rpc SubmitContent(SubmitContentRequest) returns (SubmitContentResponse);
+  rpc GetModerationResult(GetModerationResultRequest) returns (GetModerationResultResponse);
+}

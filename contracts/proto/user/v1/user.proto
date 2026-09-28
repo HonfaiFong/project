@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package user.v1;
+
+import "user/v1/persona.proto";
+
+option go_package = "social-backend/contracts/gen/go/user/v1;userv1";
+option php_namespace = "Contracts\\Gen\\User\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\User\\V1";
+
+message UserProfile {
+  uint64 id = 1;
+  int32 status = 2;
+  string phone = 3;
+  string email = 4;
+  string register_channel = 5;
+  int32 risk_level = 6;
+  string created_at = 7;
+  string updated_at = 8;
+}
+
+message GetUserRequest {
+  uint64 user_id = 1;
+}
+
+message GetUserResponse {
+  UserProfile user = 1;
+}
+
+message BatchGetUsersRequest {
+  repeated uint64 user_ids = 1;
+}
+
+message BatchGetUsersResponse {
+  repeated UserProfile users = 1;
+}
+
+message UpdateUserRequest {
+  uint64 user_id = 1;
+  optional string phone = 2;
+  optional string email = 3;
+}
+
+message UpdateUserResponse {
+  UserProfile user = 1;
+}
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc BatchGetUsers(BatchGetUsersRequest) returns (BatchGetUsersResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);
+
+  rpc CreatePersona(CreatePersonaRequest) returns (CreatePersonaResponse);
+  rpc GetPersona(GetPersonaRequest) returns (GetPersonaResponse);
+  rpc BatchGetPersonas(BatchGetPersonasRequest) returns (BatchGetPersonasResponse);
+  rpc UpdatePersona(UpdatePersonaRequest) returns (UpdatePersonaResponse);
+  rpc ListPersonas(ListPersonasRequest) returns (ListPersonasResponse);
+}

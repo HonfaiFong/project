@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package chat.v1;
+
+import "common/v1/pagination.proto";
+
+option go_package = "social-backend/contracts/gen/go/chat/v1;chatv1";
+option php_namespace = "Contracts\\Gen\\Chat\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Chat\\V1";
+
+message ConversationMember {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+  uint64 last_read_seq = 3;
+  string joined_at = 4;
+}
+
+message Conversation {
+  uint64 id = 1;
+  int32 type = 2; // 1 = private, 2 = group
+  uint64 last_message_id = 3;
+  string last_message_at = 4;
+  repeated ConversationMember members = 5;
+  string created_at = 6;
+}
+
+message GetOrCreatePrivateConversationRequest {
+  string request_id = 1;
+  uint64 user_id = 2;
+  uint64 persona_id = 3;
+  uint64 peer_user_id = 4;
+  uint64 peer_persona_id = 5;
+}
+
+message GetOrCreatePrivateConversationResponse {
+  Conversation conversation = 1;
+}
+
+message GetConversationRequest {
+  uint64 conversation_id = 1;
+  uint64 user_id = 2;
+}
+
+message GetConversationResponse {
+  Conversation conversation = 1;
+}
+
+message ListConversationsRequest {
+  uint64 user_id = 1;
+  common.v1.PaginationRequest pagination = 2;
+}
+
+message ListConversationsResponse {
+  repeated Conversation conversations = 1;
+  common.v1.PaginationResponse pagination = 2;
+}
+
+message CheckCanMessageRequest {
+  uint64 sender_user_id = 1;
+  uint64 recipient_user_id = 2;
+}
+
+message CheckCanMessageResponse {
+  bool allowed = 1;
+  string reason = 2;
+}
+
+message MarkReadRequest {
+  uint64 conversation_id = 1;
+  uint64 user_id = 2;
+  uint64 seq = 3;
+}
+
+message MarkReadResponse {
+  bool success = 1;
+}
+
+service ChatService {
+  rpc GetOrCreatePrivateConversation(GetOrCreatePrivateConversationRequest) returns (GetOrCreatePrivateConversationResponse);
+  rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
+  rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
+  rpc CheckCanMessage(CheckCanMessageRequest) returns (CheckCanMessageResponse);
+  rpc MarkRead(MarkReadRequest) returns (MarkReadResponse);
+}

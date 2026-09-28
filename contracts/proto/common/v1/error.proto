@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "social-backend/contracts/gen/go/common/v1;commonv1";
+option php_namespace = "Contracts\\Gen\\Common\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Common\\V1";
+
+message ErrorDetail {
+  uint32 code = 1;
+  string message = 2;
+  string domain = 3;
+  map<string, string> metadata = 4;
+}

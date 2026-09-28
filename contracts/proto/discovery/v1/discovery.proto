@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package discovery.v1;
+
+import "content/v1/content.proto";
+
+option go_package = "social-backend/contracts/gen/go/discovery/v1;discoveryv1";
+option php_namespace = "Contracts\\Gen\\Discovery\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Discovery\\V1";
+
+message CapsuleItem {
+  uint64 post_id = 1;
+  uint64 persona_id = 2;
+  string emotion = 3;
+  content.v1.Post post = 4;
+}
+
+message GetRandomCapsuleRequest {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+  optional string emotion = 3;
+  optional string topic = 4;
+}
+
+message GetRandomCapsuleResponse {
+  optional CapsuleItem capsule = 1;
+  bool found = 2;
+}
+
+message AcknowledgeExposureRequest {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+  uint64 post_id = 3;
+}
+
+message AcknowledgeExposureResponse {
+  bool success = 1;
+}
+
+service DiscoveryService {
+  rpc GetRandomCapsule(GetRandomCapsuleRequest) returns (GetRandomCapsuleResponse);
+  rpc AcknowledgeExposure(AcknowledgeExposureRequest) returns (AcknowledgeExposureResponse);
+}

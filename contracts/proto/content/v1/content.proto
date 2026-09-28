@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package content.v1;
+
+import "common/v1/pagination.proto";
+
+option go_package = "social-backend/contracts/gen/go/content/v1;contentv1";
+option php_namespace = "Contracts\\Gen\\Content\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Content\\V1";
+
+message MediaItem {
+  int32 type = 1;
+  string object_key = 2;
+  string mime_type = 3;
+  int32 width = 4;
+  int32 height = 5;
+  int32 duration_ms = 6;
+  int32 sort_order = 7;
+}
+
+message Post {
+  uint64 id = 1;
+  uint64 persona_id = 2;
+  int32 type = 3;
+  string content = 4;
+  int32 visibility = 5;
+  string emotion = 6;
+  int32 status = 7;
+  int32 moderation_status = 8;
+  uint64 like_count = 9;
+  uint64 comment_count = 10;
+  uint64 view_count = 11;
+  repeated MediaItem media = 12;
+  string published_at = 13;
+  string created_at = 14;
+}
+
+message CreatePostRequest {
+  string request_id = 1;
+  uint64 persona_id = 2;
+  int32 type = 3;
+  string content = 4;
+  int32 visibility = 5;
+  string emotion = 6;
+  repeated MediaItem media = 7;
+}
+
+message CreatePostResponse {
+  Post post = 1;
+}
+
+message GetPostRequest {
+  uint64 post_id = 1;
+}
+
+message GetPostResponse {
+  Post post = 1;
+}
+
+message BatchGetPostsRequest {
+  repeated uint64 post_ids = 1;
+}
+
+message BatchGetPostsResponse {
+  repeated Post posts = 1;
+}
+
+message DeletePostRequest {
+  uint64 post_id = 1;
+  uint64 persona_id = 2;
+}
+
+message DeletePostResponse {
+  bool success = 1;
+}
+
+message Comment {
+  uint64 id = 1;
+  uint64 post_id = 2;
+  uint64 persona_id = 3;
+  uint64 parent_id = 4;
+  uint64 reply_to_comment_id = 5;
+  string content = 6;
+  int32 status = 7;
+  uint64 like_count = 8;
+  string created_at = 9;
+}
+
+message CreateCommentRequest {
+  string request_id = 1;
+  uint64 post_id = 2;
+  uint64 persona_id = 3;
+  uint64 parent_id = 4;
+  uint64 reply_to_comment_id = 5;
+  string content = 6;
+}
+
+message CreateCommentResponse {
+  Comment comment = 1;
+}
+
+message ListCommentsRequest {
+  uint64 post_id = 1;
+  uint64 parent_id = 2;
+  common.v1.PaginationRequest pagination = 3;
+}
+
+message ListCommentsResponse {
+  repeated Comment comments = 1;
+  common.v1.PaginationResponse pagination = 2;
+}
+
+service ContentService {
+  rpc CreatePost(CreatePostRequest) returns (CreatePostResponse);
+  rpc GetPost(GetPostRequest) returns (GetPostResponse);
+  rpc BatchGetPosts(BatchGetPostsRequest) returns (BatchGetPostsResponse);
+  rpc DeletePost(DeletePostRequest) returns (DeletePostResponse);
+  rpc CreateComment(CreateCommentRequest) returns (CreateCommentResponse);
+  rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse);
+}

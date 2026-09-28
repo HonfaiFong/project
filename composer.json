@@ -1,0 +1,43 @@
+{
+  "name": "social/backend-monorepo",
+  "description": "Anonymous Social Backend Platform Monorepo",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": ">=8.2",
+    "ext-json": "*",
+    "ext-pdo": "*",
+    "ext-redis": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.0 || ^11.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Contracts\\Errors\\": "contracts/errors/",
+      "Contracts\\Events\\": "contracts/events/",
+      "Contracts\\Gen\\": "contracts/gen/php/Contracts/Gen/",
+      "GPBMetadata\\": "contracts/gen/php/GPBMetadata/",
+      "Packages\\IdGenerator\\": "packages/php/id-generator/src/",
+      "Packages\\Tracing\\": "packages/php/tracing/src/",
+      "Packages\\Logging\\": "packages/php/logging/src/",
+      "Packages\\Outbox\\": "packages/php/outbox/src/",
+      "Packages\\GrpcCommon\\": "packages/php/grpc-common/src/",
+      "Apps\\ApiGateway\\": "apps/api-gateway/app/",
+      "Services\\AuthService\\": "services/auth-service/src/",
+      "Services\\UserService\\": "services/user-service/src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": {}
+  }
+}

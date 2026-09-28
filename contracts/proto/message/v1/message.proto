@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package message.v1;
+
+import "common/v1/pagination.proto";
+
+option go_package = "social-backend/contracts/gen/go/message/v1;messagev1";
+option php_namespace = "Contracts\\Gen\\Message\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Message\\V1";
+
+message Message {
+  uint64 message_id = 1;
+  uint64 conversation_id = 2;
+  uint64 seq = 3;
+  uint64 sender_user_id = 4;
+  uint64 sender_persona_id = 5;
+  string client_message_id = 6;
+  int32 type = 7;
+  string content = 8; // JSON string
+  string created_at = 9;
+}
+
+message SendMessageRequest {
+  string request_id = 1;
+  string client_message_id = 2;
+  uint64 conversation_id = 3;
+  uint64 sender_user_id = 4;
+  uint64 sender_persona_id = 5;
+  int32 type = 6;
+  string content = 7;
+}
+
+message SendMessageResponse {
+  Message message = 1;
+}
+
+message SyncMessagesRequest {
+  uint64 user_id = 1;
+  uint64 conversation_id = 2;
+  uint64 after_seq = 3;
+  uint32 limit = 4;
+}
+
+message SyncMessagesResponse {
+  repeated Message messages = 1;
+  bool has_more = 2;
+  uint64 latest_seq = 3;
+}
+
+message GetMessagesRequest {
+  uint64 conversation_id = 1;
+  common.v1.PaginationRequest pagination = 2;
+}
+
+message GetMessagesResponse {
+  repeated Message messages = 1;
+  common.v1.PaginationResponse pagination = 2;
+}
+
+service MessageService {
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  rpc SyncMessages(SyncMessagesRequest) returns (SyncMessagesResponse);
+  rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
+}

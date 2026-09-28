@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package social.v1;
+
+option go_package = "social-backend/contracts/gen/go/social/v1;socialv1";
+option php_namespace = "Contracts\\Gen\\Social\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Social\\V1";
+
+message LikeRequest {
+  uint64 persona_id = 1;
+  int32 target_type = 2; // 1 = post, 2 = comment
+  uint64 target_id = 3;
+}
+
+message LikeResponse {
+  bool success = 1;
+}
+
+message UnlikeRequest {
+  uint64 persona_id = 1;
+  int32 target_type = 2;
+  uint64 target_id = 3;
+}
+
+message UnlikeResponse {
+  bool success = 1;
+}
+
+message FollowRequest {
+  uint64 follower_persona_id = 1;
+  uint64 followee_persona_id = 2;
+}
+
+message FollowResponse {
+  bool success = 1;
+}
+
+message UnfollowRequest {
+  uint64 follower_persona_id = 1;
+  uint64 followee_persona_id = 2;
+}
+
+message UnfollowResponse {
+  bool success = 1;
+}
+
+message BlockRequest {
+  uint64 blocker_user_id = 1;
+  uint64 blocked_user_id = 2;
+}
+
+message BlockResponse {
+  bool success = 1;
+}
+
+message UnblockRequest {
+  uint64 blocker_user_id = 1;
+  uint64 blocked_user_id = 2;
+}
+
+message UnblockResponse {
+  bool success = 1;
+}
+
+message InteractionState {
+  uint64 target_id = 1;
+  bool is_liked = 2;
+  bool is_followed = 3;
+}
+
+message BatchGetInteractionStateRequest {
+  uint64 persona_id = 1;
+  int32 target_type = 2;
+  repeated uint64 target_ids = 3;
+}
+
+message BatchGetInteractionStateResponse {
+  repeated InteractionState states = 1;
+}
+
+service SocialService {
+  rpc Like(LikeRequest) returns (LikeResponse);
+  rpc Unlike(UnlikeRequest) returns (UnlikeResponse);
+  rpc Follow(FollowRequest) returns (FollowResponse);
+  rpc Unfollow(UnfollowRequest) returns (UnfollowResponse);
+  rpc Block(BlockRequest) returns (BlockResponse);
+  rpc Unblock(UnblockRequest) returns (UnblockResponse);
+  rpc BatchGetInteractionState(BatchGetInteractionStateRequest) returns (BatchGetInteractionStateResponse);
+}

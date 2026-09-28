@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "social-backend/contracts/gen/go/auth/v1;authv1";
+option php_namespace = "Contracts\\Gen\\Auth\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Auth\\V1";
+
+message DeviceInfo {
+  string device_uuid = 1;
+  string platform = 2;
+  string app_version = 3;
+  string push_token = 4;
+}
+
+message LoginRequest {
+  string phone = 1;
+  string code = 2; // dev verification code or sms
+  string password = 3;
+  DeviceInfo device = 4;
+}
+
+message LoginResponse {
+  uint64 user_id = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+  int64 access_token_expires_at = 4;
+  int64 refresh_token_expires_at = 5;
+  bool is_new_user = 6;
+}
+
+message RefreshTokenRequest {
+  string refresh_token = 1;
+  DeviceInfo device = 2;
+}
+
+message RefreshTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 access_token_expires_at = 3;
+  int64 refresh_token_expires_at = 4;
+}
+
+message LogoutRequest {
+  string refresh_token = 1;
+}
+
+message LogoutResponse {
+  bool success = 1;
+}
+
+message VerifyTokenRequest {
+  string access_token = 1;
+}
+
+message VerifyTokenResponse {
+  bool valid = 1;
+  uint64 user_id = 2;
+  uint64 device_id = 3;
+}
+
+message CreateWsTicketRequest {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+  string device_id = 3;
+}
+
+message CreateWsTicketResponse {
+  string ticket = 1;
+  int64 expires_at = 2;
+}
+
+service AuthService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse);
+  rpc CreateWsTicket(CreateWsTicketRequest) returns (CreateWsTicketResponse);
+}

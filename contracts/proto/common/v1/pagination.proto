@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "social-backend/contracts/gen/go/common/v1;commonv1";
+option php_namespace = "Contracts\\Gen\\Common\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Common\\V1";
+
+message PaginationRequest {
+  uint32 page_size = 1;
+  string cursor = 2;
+}
+
+message PaginationResponse {
+  string next_cursor = 1;
+  bool has_more = 2;
+  uint64 total = 3;
+}

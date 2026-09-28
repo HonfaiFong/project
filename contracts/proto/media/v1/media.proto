@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package media.v1;
+
+option go_package = "social-backend/contracts/gen/go/media/v1;mediav1";
+option php_namespace = "Contracts\\Gen\\Media\\V1";
+option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Media\\V1";
+
+message CreateUploadSessionRequest {
+  uint64 user_id = 1;
+  string file_name = 2;
+  string mime_type = 3;
+  int64 file_size = 4;
+  string purpose = 5; // avatar, post_image, post_video
+}
+
+message CreateUploadSessionResponse {
+  string upload_url = 1;
+  string object_key = 2;
+  int64 expires_at = 3;
+}
+
+message CompleteUploadRequest {
+  uint64 user_id = 1;
+  string object_key = 2;
+}
+
+message CompleteUploadResponse {
+  bool success = 1;
+  string object_key = 2;
+}
+
+service MediaService {
+  rpc CreateUploadSession(CreateUploadSessionRequest) returns (CreateUploadSessionResponse);
+  rpc CompleteUpload(CompleteUploadRequest) returns (CompleteUploadResponse);
+}
