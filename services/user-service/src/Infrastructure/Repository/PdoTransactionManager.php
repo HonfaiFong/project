@@ -29,6 +29,7 @@ final class PdoTransactionManager implements TransactionManagerInterface
 
             return $result;
         } catch (Throwable $e) {
+            // @phpstan-ignore booleanAnd.rightAlwaysFalse (the callback runs arbitrary SQL and may have committed/rolled back the shared PDO)
             if ($ownsTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }

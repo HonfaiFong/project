@@ -184,6 +184,7 @@ final class UserGrpcService implements UserServiceInterface
 
             throw GRPCException::create(
                 $this->publicErrorMessage($e),
+                // @phpstan-ignore argument.type (grpcStatus returns StatusCode constants; the stub's literal-union param can't be inferred through match)
                 $this->grpcStatus($e),
                 $e,
             );

@@ -6,6 +6,7 @@ namespace Packages\Outbox;
 
 use PDO;
 use Packages\IdGenerator\Snowflake;
+use Throwable;
 
 final class OutboxRepository
 {
@@ -49,53 +50,103 @@ final class OutboxRepository
     }
 
     /**
+     * Atomically claims pending events for this worker.
+     *
+     * Runs a SELECT ... FOR UPDATE SKIP LOCKED pass inside a transaction and
+     * flips the claimed rows to status=2 before committing, so concurrent
+     * workers never receive the same row. Crashed workers leave rows claimed;
+     * releaseStaleClaims() returns them to the queue.
+     *
+     * Statuses: 0 = pending, 1 = published, 2 = claimed (in-flight).
+     *
      * @return array<OutboxRecord>
      */
-    public function fetchPending(int $limit = 50): array
+    public function claimPending(int $limit = 50): array
     {
         $now = gmdate('Y-m-d H:i:s.v');
-        $stmt = $this->pdo->prepare(
-            'SELECT id, event_id, aggregate_type, aggregate_id, event_type, event_version, payload, status, available_at, published_at, created_at
-             FROM outbox_events
-             WHERE status = 0 AND available_at <= :now
-             ORDER BY id ASC
-             LIMIT :limit'
-        );
-        $stmt->bindValue(':now', $now);
-        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-        $stmt->execute();
+        $claimed = [];
 
-        $records = [];
-        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $records[] = new OutboxRecord(
-                eventId: (string)$row['event_id'],
-                aggregateType: (string)$row['aggregate_type'],
-                aggregateId: (string)$row['aggregate_id'],
-                eventType: (string)$row['event_type'],
-                eventVersion: (int)$row['event_version'],
-                payload: json_decode((string)$row['payload'], true) ?: [],
-                status: (int)$row['status'],
-                availableAt: (string)$row['available_at'],
-                publishedAt: $row['published_at'] ? (string)$row['published_at'] : null,
-                createdAt: (string)$row['created_at'],
-                id: (string)$row['id'],
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT id, event_id, aggregate_type, aggregate_id, event_type, event_version, payload, status, available_at, published_at, created_at
+                 FROM outbox_events
+                 WHERE status = 0 AND available_at <= :now
+                 ORDER BY id ASC
+                 LIMIT :limit
+                 FOR UPDATE SKIP LOCKED'
             );
+            $stmt->bindValue(':now', $now);
+            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+            $stmt->execute();
+
+            $ids = [];
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $ids[] = (string)$row['id'];
+                $claimed[] = new OutboxRecord(
+                    eventId: (string)$row['event_id'],
+                    aggregateType: (string)$row['aggregate_type'],
+                    aggregateId: (string)$row['aggregate_id'],
+                    eventType: (string)$row['event_type'],
+                    eventVersion: (int)$row['event_version'],
+                    payload: json_decode((string)$row['payload'], true) ?: [],
+                    status: 2,
+                    availableAt: (string)$row['available_at'],
+                    publishedAt: $row['published_at'] ? (string)$row['published_at'] : null,
+                    createdAt: (string)$row['created_at'],
+                    id: (string)$row['id'],
+                );
+            }
+
+            if ($ids !== []) {
+                $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                $update = $this->pdo->prepare(
+                    "UPDATE outbox_events SET status = 2, claimed_at = '{$now}' WHERE id IN ({$placeholders}) AND status = 0"
+                );
+                $update->execute($ids);
+            }
+
+            $this->pdo->commit();
+        } catch (Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
         }
 
-        return $records;
+        return $claimed;
+    }
+
+    /**
+     * Returns rows claimed longer than $olderThanSeconds ago to the pending
+     * queue (crash recovery for workers that died mid-publish).
+     *
+     * @return int number of released rows
+     */
+    public function releaseStaleClaims(int $olderThanSeconds = 300): int
+    {
+        $cutoff = gmdate('Y-m-d H:i:s.v', time() - $olderThanSeconds);
+        $stmt = $this->pdo->prepare(
+            "UPDATE outbox_events SET status = 0, claimed_at = NULL WHERE status = 2 AND claimed_at IS NOT NULL AND claimed_at < '{$cutoff}'"
+        );
+        $stmt->execute();
+
+        return $stmt->rowCount();
     }
 
     public function markPublished(string $id): void
     {
         $now = gmdate('Y-m-d H:i:s.v');
-        $stmt = $this->pdo->prepare('UPDATE outbox_events SET status = 1, published_at = :now WHERE id = :id');
-        $stmt->execute(['now' => $now, 'id' => $id]);
+        $stmt = $this->pdo->prepare(
+            "UPDATE outbox_events SET status = 1, published_at = '{$now}', claimed_at = NULL WHERE id = :id AND status = 2"
+        );
+        $stmt->execute(['id' => $id]);
     }
 
     public function markFailed(string $id, int $retryDelaySeconds = 10): void
     {
         $nextAvailable = gmdate('Y-m-d H:i:s.v', time() + $retryDelaySeconds);
-        $stmt = $this->pdo->prepare('UPDATE outbox_events SET available_at = :available WHERE id = :id');
-        $stmt->execute(['available' => $nextAvailable, 'id' => $id]);
+        $stmt = $this->pdo->prepare(
+            "UPDATE outbox_events SET status = 0, claimed_at = NULL, available_at = '{$nextAvailable}' WHERE id = :id AND status = 2"
+        );
+        $stmt->execute(['id' => $id]);
     }
 }

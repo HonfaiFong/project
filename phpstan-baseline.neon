@@ -1,0 +1,157 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Call to function is_array\(\) with array\<string, mixed\> will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: apps/api-gateway/app/Http/WebmanGateway.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getAccessToken\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getAccessTokenExpiresAt\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getDeviceId\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getExpiresAt\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getMessage\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getRefreshToken\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getRefreshTokenExpiresAt\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getStatus\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getSuccess\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getTicket\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getUserId\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getValid\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/AuthServiceClient.php
+
+		-
+			message: '#^Constant STATUS_DEADLINE_EXCEEDED not found\.$#'
+			identifier: constant.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/UnaryGrpcClient.php
+
+		-
+			message: '#^Constant STATUS_OK not found\.$#'
+			identifier: constant.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/UnaryGrpcClient.php
+
+		-
+			message: '#^Offset ''metadata'' does not exist on array\{timeout\: int, call_credentials\?\: mixed\}\.$#'
+			identifier: offsetAccess.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/UnaryGrpcClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getIsNewUser\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/UserServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getMessage\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/UserServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getPersona\(\)\.$#'
+			identifier: method.notFound
+			count: 3
+			path: apps/api-gateway/app/grpc/UserServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getPersonas\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: apps/api-gateway/app/grpc/UserServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getStatus\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/UserServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getUser\(\)\.$#'
+			identifier: method.notFound
+			count: 2
+			path: apps/api-gateway/app/grpc/UserServiceClient.php
+
+		-
+			message: '#^Call to an undefined method Google\\Protobuf\\Internal\\Message\:\:getUsers\(\)\.$#'
+			identifier: method.notFound
+			count: 1
+			path: apps/api-gateway/app/grpc/UserServiceClient.php
+
+		-
+			message: '#^Call to function is_array\(\) with array\<string\> will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: packages/php/grpc-common/src/GrpcClientContext.php
+
+		-
+			message: '#^PHPDoc tag @param references unknown parameter\: \$metadata$#'
+			identifier: parameter.notFound
+			count: 1
+			path: services/auth-service/src/Transport/Grpc/RoadRunnerAuthService.php
+
+		-
+			message: '#^Parameter \#2 \$code of static method Spiral\\RoadRunner\\GRPC\\Exception\\GRPCException\:\:create\(\) expects 0\|1\|2\|3\|4\|5\|6\|7\|8\|9\|10\|11\|12\|13\|14\|15\|16, int given\.$#'
+			identifier: argument.type
+			count: 2
+			path: services/auth-service/src/Transport/Grpc/RoadRunnerAuthService.php

@@ -13,12 +13,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # buf breaking compares against the merge base
+          fetch-depth: 0
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_mysql, redis, bcmath, sockets
+          extensions: pdo, pdo_mysql, redis, bcmath, sockets, grpc
           coverage: none
 
       - name: Setup Go
@@ -34,8 +37,21 @@ jobs:
           make proto
           test -z "$(git status --porcelain -- contracts/gen)"
 
+      - name: Setup Buf
+        uses: bufbuild/buf-setup-action@v1
+
+      - name: Buf Lint
+        run: buf lint
+
+      - name: Buf Breaking
+        if: github.event_name == 'pull_request'
+        run: buf breaking --against ".git#ref=${{ github.event.pull_request.base.sha }}"
+
       - name: Run Lint
         run: make lint
+
+      - name: Run Static Analysis
+        run: make analyse
 
       - name: Run Tests
         run: make test
@@ -51,5 +67,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker images
-        run: docker compose build
+      - name: Build PHP runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/php/Dockerfile
+          push: false
+          tags: project-php-runtime:ci
+          cache-from: type=gha,scope=php-runtime
+          cache-to: type=gha,scope=php-runtime,mode=max
+
+      - name: Build realtime gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/gateway/Dockerfile
+          push: false
+          tags: project-realtime-gateway:ci
+          cache-from: type=gha,scope=realtime-gateway
+          cache-to: type=gha,scope=realtime-gateway,mode=max

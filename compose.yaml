@@ -19,7 +19,7 @@ services:
       start_period: 15s
 
   redis:
-    image: redis:alpine
+    image: redis:7.2.4-alpine
     container_name: social-redis
     restart: unless-stopped
     command: redis-server --save "" --appendonly no
@@ -34,7 +34,7 @@ services:
       retries: 5
 
   kafka:
-    image: apache/kafka:latest
+    image: apache/kafka:3.8.0
     container_name: social-kafka
     restart: unless-stopped
     ports:
@@ -56,7 +56,9 @@ services:
       - kafka_data:/tmp/kraft-combined-logs
 
   minio:
-    image: minio/minio:latest
+    # MinIO withdrew their community images from Docker Hub; the official
+    # source is quay.io. Some environments now require authenticated pulls.
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: social-minio
     restart: unless-stopped
     profiles:
@@ -71,17 +73,31 @@ services:
     volumes:
       - minio_data:/data
 
-  auth-service:
+  # 唯一的 PHP 运行时镜像;业务代码通过 bind mount 进容器,改代码无需重建。
+  # 仅在 Dockerfile / PHP 版本 / 扩展 / RoadRunner 版本变化时:
+  #   docker compose build php-runtime
+  php-runtime:
+    profiles:
+      - build
     build:
       context: .
       dockerfile: infra/docker/php/Dockerfile
-    image: project-auth-service:latest
+    image: project-php-runtime:dev
+
+  auth-service:
+    image: project-php-runtime:dev
     container_name: social-auth-service
     restart: unless-stopped
     working_dir: /app
     command: rr serve -c infra/roadrunner/auth.yaml
+    ports:
+      - "50051:50051"
     environment:
       - SERVICE_NAME=auth-service
+      # Snowflake service slot (0-31). Replicas of this service must use
+      # distinct values; WorkerId::resolve() spreads rr worker processes
+      # within the slot automatically.
+      - WORKER_ID=1
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
@@ -100,16 +116,17 @@ services:
         condition: service_healthy
 
   user-service:
-    build:
-      context: .
-      dockerfile: infra/docker/php/Dockerfile
-    image: project-user-service:latest
+    image: project-php-runtime:dev
     container_name: social-user-service
     restart: unless-stopped
     working_dir: /app
     command: rr serve -c infra/roadrunner/user.yaml
+    ports:
+      - "50052:50052"
     environment:
       - SERVICE_NAME=user-service
+      # Snowflake service slot (0-31). See auth-service note above.
+      - WORKER_ID=2
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
@@ -126,14 +143,11 @@ services:
         condition: service_healthy
 
   api-gateway:
-    build:
-      context: .
-      dockerfile: infra/docker/php/Dockerfile
-    image: project-api-gateway:latest
+    image: project-php-runtime:dev
     container_name: social-api-gateway
     restart: unless-stopped
     working_dir: /app
-    command: php apps/api-gateway/start.php
+    command: php apps/api-gateway/start.php start
     ports:
       - "8787:8787"
     environment:
@@ -165,8 +179,6 @@ services:
       - GATEWAY_PORT=8080
       - REDIS_HOST=redis:6379
       - WS_TICKET_SECRET=${WS_TICKET_SECRET:?Set WS_TICKET_SECRET in .env}
-    volumes:
-      - .:/app
     depends_on:
       redis:
         condition: service_healthy

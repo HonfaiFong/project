@@ -1,4 +1,7 @@
-.PHONY: all bootstrap proto lint test up down restart migrate seed e2e logs clean
+.PHONY: all bootstrap proto lint analyse test up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
+
+PHP_RUNTIME_IMAGE := project-php-runtime:dev
+GATEWAY_IMAGE     := project-realtime-gateway:latest
 
 all: test
 
@@ -24,7 +27,16 @@ test:
 	@echo "Running Go Tests..."
 	@go test -mod=mod ./...
 
+# 日常开发入口:镜像缺失时才构建,日常改代码不触发任何 build
 up:
+	@if ! docker image inspect $(PHP_RUNTIME_IMAGE) >/dev/null 2>&1; then \
+		echo ">>> $(PHP_RUNTIME_IMAGE) 不存在,先构建 PHP runtime..."; \
+		docker compose build php-runtime; \
+	fi
+	@if ! docker image inspect $(GATEWAY_IMAGE) >/dev/null 2>&1; then \
+		echo ">>> $(GATEWAY_IMAGE) 不存在,先构建 realtime gateway..."; \
+		docker compose build realtime-gateway; \
+	fi
 	docker compose up -d
 
 down:
@@ -34,12 +46,24 @@ restart:
 	docker compose down
 	docker compose up -d
 
+# 仅当 PHP 版本 / 扩展 / RoadRunner / Dockerfile 变化时才需要
+build-runtime:
+	docker compose build php-runtime realtime-gateway
+
+# 缓存全弃用,排查 Dockerfile 问题时用
+rebuild-runtime:
+	docker compose build --no-cache php-runtime
+
 migrate:
-	@echo "Applying database schemas..."
+	@echo "Applying baseline schema (idempotent)..."
 	docker compose exec -T mysql sh -c 'exec mysql -uroot -p"$$MYSQL_ROOT_PASSWORD"' < infra/docker/mysql/init/01-databases.sql
+	bash scripts/run_migrations.sh
 
 seed:
 	@echo "Seeding initial dev fixtures..."
+
+analyse:
+	vendor/bin/phpstan analyse --no-progress
 
 e2e:
 	bash scripts/e2e_test.sh

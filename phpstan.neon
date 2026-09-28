@@ -1,0 +1,19 @@
+includes:
+    - phpstan-baseline.neon
+
+parameters:
+    level: 5
+    # The baseline is generated on hosts both with and without ext-grpc /
+    # ext-redis; entries for extension-provided symbols legitimately stop
+    # matching depending on the environment, which must not fail the run.
+    reportUnmatchedIgnoredErrors: false
+    paths:
+        - apps
+        - services
+        - packages
+        - contracts/errors
+        - contracts/events
+        - tests
+    excludePaths:
+        # generated protobuf code
+        - contracts/gen

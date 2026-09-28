@@ -45,30 +45,30 @@
 
 | 服务目录 | 服务名称 | 运行时 / 技术栈 | 职责与边界 |
 | :--- | :--- | :--- | :--- |
-| `apps/api-gateway` | API Gateway (BFF) | Webman / PHP 8.4 | 对外 HTTP API 入口、JWT 认证、gRPC 客户端聚合 |
-| `gateways/realtime-gateway` | Realtime Gateway | Go 1.24 / WebSocket | 实时长连接维持、心跳、多端连接管理、下行 Push |
-| `services/auth-service` | AuthService | RoadRunner / PHP 8.4 | 账号认证、Token 签发 / 轮转、设备管理、WS Ticket |
-| `services/user-service` | UserService | RoadRunner / PHP 8.4 | 用户主体、Persona 分身管理 (**User != Persona**) |
-| `services/content-service` | ContentService | RoadRunner / PHP 8.4 | 帖子、图文媒体元数据、一级与回复评论 |
-| `services/social-service` | SocialService | RoadRunner / PHP 8.4 | 点赞、分身关注、用户级双向拉黑 |
-| `services/discovery-service` | DiscoveryService | RoadRunner / PHP 8.4 | 漂流罐头、情绪池、随机发现、曝光过滤 |
-| `services/feed-service` | FeedService | RoadRunner / PHP 8.4 | 首页 Feed 规则召回、ZSET Timeline 聚合 |
-| `services/recommend-service` | RecommendService | RoadRunner / PHP 8.4 | 用户兴趣画像、候选打分排序 |
-| `services/chat-service` | ChatService | RoadRunner / PHP 8.4 | 私聊会话、会话成员、已读点、权限校验 |
-| `services/message-service` | MessageService | RoadRunner / PHP 8.4 | 消息持久化、递增 seq、幂等去重、分片路由 |
-| `services/risk-service` | RiskService | RoadRunner / PHP 8.4 | 同步风险决策 (ALLOW/DENY/CHALLENGE) |
-| `services/moderation-service` | ModerationService | RoadRunner / PHP 8.4 | 内容敏感词与多媒体审核流转 |
-| `services/notification-service` | NotificationService | RoadRunner / PHP 8.4 | 站内通知与离线推送通道 |
-| `services/media-service` | MediaService | RoadRunner / PHP 8.4 | 预签名上传 URL 签发与对象元数据确认 |
-| `services/search-service` | SearchService | RoadRunner / PHP 8.4 | OpenSearch 内容与标签检索 |
-| `services/config-service` | ConfigService | RoadRunner / PHP 8.4 | 客户端 RouteProfile 与动态功能开关 |
-| `apps/admin-api` | Admin API | Webman / PHP 8.4 | 运营后台、审核队列处理、封禁管理 |
+| `apps/api-gateway` | API Gateway (BFF) | Webman / PHP 8.4 | 对外 HTTP API 入口、JWT 认证、gRPC 客户端聚合 (**Phase 1 已实现**) |
+| `gateways/realtime-gateway` | Realtime Gateway | Go 1.24 / WebSocket | 实时长连接维持、心跳、多端连接管理、下行 Push (**Skeleton**：连接/心跳/票据校验已实现，消息协议与 Presence 见其 README) |
+| `services/auth-service` | AuthService | RoadRunner / PHP 8.4 | 账号认证、Token 签发 / 轮转、设备管理、WS Ticket (**Phase 1 已实现**) |
+| `services/user-service` | UserService | RoadRunner / PHP 8.4 | 用户主体、Persona 分身管理 (**User != Persona**) (**Phase 1 已实现**) |
+| `services/content-service` | ContentService | RoadRunner / PHP 8.4 | 帖子、图文媒体元数据、一级与回复评论 (**骨架，未实现**) |
+| `services/social-service` | SocialService | RoadRunner / PHP 8.4 | 点赞、分身关注、用户级双向拉黑 (**骨架，未实现**) |
+| `services/discovery-service` | DiscoveryService | RoadRunner / PHP 8.4 | 漂流罐头、情绪池、随机发现、曝光过滤 (**骨架，未实现**) |
+| `services/feed-service` | FeedService | RoadRunner / PHP 8.4 | 首页 Feed 规则召回、ZSET Timeline 聚合 (**骨架，未实现**) |
+| `services/recommend-service` | RecommendService | RoadRunner / PHP 8.4 | 用户兴趣画像、候选打分排序 (**骨架，未实现**) |
+| `services/chat-service` | ChatService | RoadRunner / PHP 8.4 | 私聊会话、会话成员、已读点、权限校验 (**骨架，未实现**) |
+| `services/message-service` | MessageService | RoadRunner / PHP 8.4 | 消息持久化、递增 seq、幂等去重、分片路由 (**骨架，未实现**) |
+| `services/risk-service` | RiskService | RoadRunner / PHP 8.4 | 同步风险决策 (ALLOW/DENY/CHALLENGE) (**骨架，未实现**) |
+| `services/moderation-service` | ModerationService | RoadRunner / PHP 8.4 | 内容敏感词与多媒体审核流转 (**骨架，未实现**) |
+| `services/notification-service` | NotificationService | RoadRunner / PHP 8.4 | 站内通知与离线推送通道 (**骨架，未实现**) |
+| `services/media-service` | MediaService | RoadRunner / PHP 8.4 | 预签名上传 URL 签发与对象元数据确认 (**骨架，未实现**) |
+| `services/search-service` | SearchService | RoadRunner / PHP 8.4 | OpenSearch 内容与标签检索 (**骨架，未实现**) |
+| `services/config-service` | ConfigService | RoadRunner / PHP 8.4 | 客户端 RouteProfile 与动态功能开关 (**骨架，未实现**) |
+| `apps/admin-api` | Admin API | Webman / PHP 8.4 | 运营后台、审核队列处理、封禁管理 (**骨架，未实现**) |
 
 ---
 
 ## 3. 环境依赖
 
-全部依赖均封装于 Docker 与 `docker-compose.yml` 中：
+全部依赖均封装于 Docker 与 `compose.yaml` 中：
 - **Docker Engine**: >= 24.0.0
 - **Docker Compose**: >= v2.20.0
 - (本地开发可选): PHP >= 8.2 (带 pdo_mysql, redis, bcmath), Go >= 1.22, Composer >= 2.0
@@ -78,15 +78,19 @@
 ## 4. 本地启动
 
 ```bash
-# 1. 复制配置文件
+# 1. 复制配置文件，并设置其中的 MYSQL_PASSWORD / JWT_SECRET / WS_TICKET_SECRET
+#    （compose.yaml 对这三个变量做强校验，缺失会拒绝启动）
 cp .env.example .env
 
 # 2. 一键启动所有基础依赖与微服务容器
 docker compose up -d
 
 # 3. 检查服务健康状态
+#    网关会对 auth/user 服务发起真实的 gRPC 健康探测；任一下游不可用返回 503
 curl http://127.0.0.1:8787/health
 ```
+
+Snowflake Worker ID 说明：`compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 pid 消散，无需人工干预。水平扩容同一服务的多副本时，必须为每个副本分配不同的 `WORKER_ID`（0-31）。
 
 ---
 
@@ -114,7 +118,7 @@ make proto
 
 ## 6. 数据库设计与迁移
 
-数据库初始化脚本位于 `infra/docker/mysql/init/01-databases.sql`，容器启动时自动挂载执行：
+数据库初始化基线位于 `infra/docker/mysql/init/01-databases.sql`，容器启动时自动挂载执行；增量变更放 `infra/docker/mysql/migrations/`，由 `scripts/run_migrations.sh` 按 `meta.schema_migrations` 表追踪、每个文件只应用一次：
 - `auth_db`: 存储 `devices`, `refresh_tokens`, `outbox_events`
 - `user_db`: 存储 `users`, `personas`, `outbox_events`
 - `content_db`: 存储 `posts`, `post_media`, `comments`, `outbox_events`
@@ -122,7 +126,7 @@ make proto
 - `chat_db`: 存储 `conversations`, `conversation_members`, `outbox_events`
 - `message_db`: 存储 `messages`, `outbox_events` (预置 ShardRouter 槽位)
 
-手动重新执行迁移：
+手动重新执行基线并应用增量迁移：
 ```bash
 make migrate
 ```
@@ -135,8 +139,14 @@ make migrate
 # 运行单元测试（覆盖 Snowflake, ShardRouter, 错误码, 事件模型, 业务服务）
 make test
 
-# 运行代码静态检查与语法验证
+# 运行代码静态检查（PHP 语法 + Go vet）
 make lint
+
+# 运行 PHPStan 静态分析
+make analyse
+
+# Proto 契约检查（CI 同款）
+buf lint
 ```
 
 ---
@@ -158,9 +168,11 @@ make e2e
 | `make up` | 启动全部 Docker 容器 |
 | `make down` | 停止并移除容器 |
 | `make lint` | 执行 PHP 语法校验与 Go vet |
+| `make analyse` | 执行 PHPStan 静态分析 |
 | `make test` | 执行全套单元测试 |
 | `make e2e` | 执行端到端接口冒烟测试 |
 | `make logs` | 查看所有容器运行日志 |
+| `make migrate` | 应用基线 Schema 与增量迁移 |
 | `make clean` | 停止并清除本地数据卷 |
 
 ---
@@ -176,8 +188,8 @@ make e2e
 | `3306` | MySQL | MySQL 8.4 数据库集群 |
 | `6379` | Redis | Redis 7.2 缓存与即时状态 |
 | `9092` | Kafka | Apache Kafka KRaft Broker |
-| `9000` | S3 API | MinIO 对象存储 API |
-| `9001` | HTTP | MinIO 控制台 Console |
+| `9000` | S3 API | MinIO 对象存储 API（需 `--profile storage`） |
+| `9001` | HTTP | MinIO 控制台 Console（需 `--profile storage`） |
 
 ---
 
@@ -207,8 +219,8 @@ make e2e
 ## 13. 故障排查 (Troubleshooting)
 
 1. **容器未就绪 / MySQL 连接拒绝**:
-   MySQL 容器首次初始化需载入数据表，可通过 `docker compose logs -f mysql` 观察健康检查状态，或执行 `make migrate` 重新校验。
+   MySQL 容器首次初始化需载入数据表，可通过 `docker compose logs -f mysql` 观察健康检查状态，或执行 `make migrate` 重新校验（会重放基线并补齐 `infra/docker/mysql/migrations/` 下的增量迁移）。
 2. **WebSocket 无法连接**:
-   确认已先调用 `POST /api/v1/ws/ticket` 获取合法 Ticket，在 60 秒内通过 `/ws?ticket=<ticket>` 建立握手连接。
+   确认已先调用 `POST /api/v1/ws/ticket` 获取合法 Ticket；Ticket 有效期 60 秒且**单次使用**（同一 Ticket 二次握手会被网关拒绝），需在 60 秒内通过 `/ws?ticket=<ticket>` 建立连接。
 3. **日志排查**:
    所有微服务输出严格的 JSON 日志，包含 `trace_id` 与 `request_id`，可通过 `docker compose logs -f <service_name>` 检索单个链路。

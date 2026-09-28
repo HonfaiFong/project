@@ -1,53 +1,45 @@
+# syntax=docker/dockerfile:1
+
 FROM php:8.4-cli-bookworm
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    unzip \
-    curl \
-    libzip-dev \
-    libicu-dev \
-    libonig-dev \
-    procps \
-    netcat-openbsd \
-    protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
+# apt 缓存放在 BuildKit cache mount,不进镜像层;Debian 源走 https,代理链路下更稳
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        unzip \
+        curl \
+        procps \
+        netcat-openbsd
 
-# Install docker-php-extension-installer
-ADD https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+# 固定版本来源,不再请求 GitHub releases/latest
+COPY --from=ghcr.io/mlocati/php-extension-installer:2 \
+    /usr/bin/install-php-extensions \
+    /usr/local/bin/
 
-RUN chmod +x /usr/local/bin/install-php-extensions && \
+# 编译型扩展(grpc)只在这一层发生;业务代码变动不会触发本镜像重建
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
     install-php-extensions \
-    pdo_mysql \
-    pcntl \
-    posix \
-    sockets \
-    bcmath \
-    grpc \
-    zip \
-    intl \
-    opcache
+        pdo_mysql \
+        pcntl \
+        posix \
+        sockets \
+        bcmath \
+        grpc \
+        redis \
+        zip \
+        intl \
+        opcache
 
-# Build phpredis from source for PHP 8.4 compatibility
-RUN git clone --depth 1 -b develop https://github.com/phpredis/phpredis.git /tmp/phpredis && \
-    cd /tmp/phpredis && \
-    phpize && \
-    ./configure && \
-    make -j$(nproc) && \
-    make install && \
-    docker-php-ext-enable redis && \
-    rm -rf /tmp/phpredis
-
-# Copy Composer binary
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 
-# Copy RoadRunner binary
 COPY --from=ghcr.io/roadrunner-server/roadrunner:2025.1.15 /usr/bin/rr /usr/local/bin/rr
 
 WORKDIR /app
 
-# Enable opcache for CLI
-RUN echo "opcache.enable_cli=1" >> /usr/local/etc/php/conf.d/docker-php-ext-opcache.ini
+RUN echo "opcache.enable_cli=1" > /usr/local/etc/php/conf.d/99-opcache-cli.ini
 
 EXPOSE 8787 50051 50052
 
