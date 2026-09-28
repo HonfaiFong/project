@@ -7,10 +7,11 @@ option php_namespace = "Contracts\\Gen\\Risk\\V1";
 option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Risk\\V1";
 
 enum RiskDecision {
-  RISK_DECISION_ALLOW = 0;
-  RISK_DECISION_DENY = 1;
-  RISK_DECISION_CHALLENGE = 2;
-  RISK_DECISION_REVIEW = 3;
+  RISK_DECISION_UNSPECIFIED = 0;
+  RISK_DECISION_ALLOW = 1;
+  RISK_DECISION_DENY = 2;
+  RISK_DECISION_CHALLENGE = 3;
+  RISK_DECISION_REVIEW = 4;
 }
 
 message CheckActionRequest {

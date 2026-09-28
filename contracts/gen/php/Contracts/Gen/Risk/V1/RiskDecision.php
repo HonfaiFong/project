@@ -12,23 +12,28 @@ use UnexpectedValueException;
 class RiskDecision
 {
     /**
-     * Generated from protobuf enum <code>RISK_DECISION_ALLOW = 0;</code>
+     * Generated from protobuf enum <code>RISK_DECISION_UNSPECIFIED = 0;</code>
      */
-    const RISK_DECISION_ALLOW = 0;
+    const RISK_DECISION_UNSPECIFIED = 0;
     /**
-     * Generated from protobuf enum <code>RISK_DECISION_DENY = 1;</code>
+     * Generated from protobuf enum <code>RISK_DECISION_ALLOW = 1;</code>
      */
-    const RISK_DECISION_DENY = 1;
+    const RISK_DECISION_ALLOW = 1;
     /**
-     * Generated from protobuf enum <code>RISK_DECISION_CHALLENGE = 2;</code>
+     * Generated from protobuf enum <code>RISK_DECISION_DENY = 2;</code>
      */
-    const RISK_DECISION_CHALLENGE = 2;
+    const RISK_DECISION_DENY = 2;
     /**
-     * Generated from protobuf enum <code>RISK_DECISION_REVIEW = 3;</code>
+     * Generated from protobuf enum <code>RISK_DECISION_CHALLENGE = 3;</code>
      */
-    const RISK_DECISION_REVIEW = 3;
+    const RISK_DECISION_CHALLENGE = 3;
+    /**
+     * Generated from protobuf enum <code>RISK_DECISION_REVIEW = 4;</code>
+     */
+    const RISK_DECISION_REVIEW = 4;
 
     private static $valueToName = [
+        self::RISK_DECISION_UNSPECIFIED => 'RISK_DECISION_UNSPECIFIED',
         self::RISK_DECISION_ALLOW => 'RISK_DECISION_ALLOW',
         self::RISK_DECISION_DENY => 'RISK_DECISION_DENY',
         self::RISK_DECISION_CHALLENGE => 'RISK_DECISION_CHALLENGE',

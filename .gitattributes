@@ -1,0 +1,13 @@
+# Shell scripts must stay LF: they run inside Linux containers (make proto,
+# migrations runner) and CRLF breaks busybox/dash even with autocrlf on.
+*.sh text eol=lf
+
+# Compose/Docker/CI configs read by Linux tooling
+Makefile text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# Generated Go protobuf code — keep LF to avoid spurious diffs with autocrlf
+*.pb.go text eol=lf
+*.pb.gw.go text eol=lf
+*_grpc.pb.go text eol=lf

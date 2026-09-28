@@ -10,6 +10,7 @@ composer.phar
 .php-cs-fixer.cache
 runtime/
 *.log
+*.pid
 
 # Go
 bin/gateway
@@ -34,3 +35,6 @@ kafka_data/
 
 # Protobuf generated
 # (keep committed if needed or ignore according to team preference; standard is contracts/gen or committed contracts)
+
+# CodeGraph local index
+.codegraph/

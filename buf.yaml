@@ -1,12 +1,18 @@
-version: v1
-directories:
-  - contracts/proto
+version: v2
+modules:
+  - path: contracts/proto
 lint:
   use:
-    - DEFAULT
+    - STANDARD
   except:
     - PACKAGE_VERSION_SUFFIX
-    - FIELD_NOT_IN_USE
+  ignore_only:
+    # health.proto intentionally mirrors the gRPC health checking protocol's
+    # message names (HealthCheckRequest / HealthCheckResponse).
+    RPC_REQUEST_STANDARD_NAME:
+      - contracts/proto/common/v1/health.proto
+    RPC_RESPONSE_STANDARD_NAME:
+      - contracts/proto/common/v1/health.proto
 breaking:
   use:
     - FILE
