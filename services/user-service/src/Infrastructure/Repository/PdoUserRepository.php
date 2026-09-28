@@ -23,6 +23,20 @@ final class PdoUserRepository implements UserRepositoryInterface
         return $row ? $this->hydrate($row) : null;
     }
 
+    public function findByIdForUpdate(string $id): ?User
+    {
+        $sql = 'SELECT * FROM users WHERE id = :id AND deleted_at IS NULL LIMIT 1';
+        if ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+            $sql .= ' FOR UPDATE';
+        }
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ? $this->hydrate($row) : null;
+    }
+
     public function findByPhone(string $phone): ?User
     {
         $stmt = $this->pdo->prepare('SELECT * FROM users WHERE phone = :phone AND deleted_at IS NULL LIMIT 1');

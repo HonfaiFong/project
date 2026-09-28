@@ -4,117 +4,137 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Grpc;
 
-use Contracts\Errors\ErrorCode;
-use Packages\GrpcCommon\GrpcClientContext;
-use RuntimeException;
+use Contracts\Gen\Auth\V1\CreateWsTicketRequest;
+use Contracts\Gen\Auth\V1\CreateWsTicketResponse;
+use Contracts\Gen\Auth\V1\DeviceInfo;
+use Contracts\Gen\Auth\V1\LoginRequest;
+use Contracts\Gen\Auth\V1\LoginResponse;
+use Contracts\Gen\Auth\V1\LogoutRequest;
+use Contracts\Gen\Auth\V1\LogoutResponse;
+use Contracts\Gen\Auth\V1\RefreshTokenRequest;
+use Contracts\Gen\Auth\V1\RefreshTokenResponse;
+use Contracts\Gen\Auth\V1\VerifyTokenRequest;
+use Contracts\Gen\Auth\V1\VerifyTokenResponse;
+use Google\Protobuf\Internal\Message;
 
 final class AuthServiceClient
 {
-    private string $host;
-    private int $port;
-    private int $timeoutMs;
+    private ?UnaryGrpcClient $client = null;
 
-    public function __construct(?string $target = null, int $timeoutMs = 150)
-    {
-        $target = $target ?: getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051';
-        $parts = explode(':', $target);
-        $this->host = $parts[0];
-        $this->port = isset($parts[1]) ? (int)$parts[1] : 50051;
-        $this->timeoutMs = $timeoutMs;
+    public function __construct(
+        private readonly ?string $target = null,
+        private readonly int $timeoutMs = 150
+    ) {
     }
 
     public function login(string $phone, array $deviceInfo): array
     {
-        return $this->invoke('Login', [
-            'user_id'     => '', // To be filled or resolved by user-service integration
-            'phone'       => $phone,
-            'device'      => $deviceInfo,
-            'is_new_user' => false,
-        ]);
+        $response = $this->call('/auth.v1.AuthService/Login', new LoginRequest([
+            'phone'  => $phone,
+            'device' => $this->device($deviceInfo),
+        ]), LoginResponse::class);
+
+        return $this->loginResponse($response);
     }
 
     public function loginWithUser(string $userId, array $deviceInfo, bool $isNewUser): array
     {
-        return $this->invoke('Login', [
+        $response = $this->call('/auth.v1.AuthService/Login', new LoginRequest([
             'user_id'     => $userId,
-            'device'      => $deviceInfo,
+            'device'      => $this->device($deviceInfo),
             'is_new_user' => $isNewUser,
-        ]);
+        ]), LoginResponse::class);
+
+        return $this->loginResponse($response);
     }
 
     public function refreshToken(string $refreshToken, array $deviceInfo = []): array
     {
-        return $this->invoke('RefreshToken', [
+        $response = $this->call('/auth.v1.AuthService/RefreshToken', new RefreshTokenRequest([
             'refresh_token' => $refreshToken,
-            'device'        => $deviceInfo,
-        ]);
+            'device'        => $this->device($deviceInfo),
+        ]), RefreshTokenResponse::class);
+
+        return [
+            'access_token'             => $response->getAccessToken(),
+            'refresh_token'            => $response->getRefreshToken(),
+            'access_token_expires_at'  => $response->getAccessTokenExpiresAt(),
+            'refresh_token_expires_at' => $response->getRefreshTokenExpiresAt(),
+        ];
     }
 
-    public function logout(string $refreshToken): array
+    public function logout(string $refreshToken, ?string $accessToken = null): array
     {
-        return $this->invoke('Logout', [
+        $response = $this->call('/auth.v1.AuthService/Logout', new LogoutRequest([
             'refresh_token' => $refreshToken,
-        ]);
+            'access_token'  => $accessToken ?? '',
+        ]), LogoutResponse::class);
+
+        return ['success' => $response->getSuccess()];
     }
 
     public function verifyToken(string $accessToken): array
     {
-        return $this->invoke('VerifyToken', [
+        $response = $this->call('/auth.v1.AuthService/VerifyToken', new VerifyTokenRequest([
             'access_token' => $accessToken,
-        ]);
+        ]), VerifyTokenResponse::class);
+
+        return [
+            'valid'     => $response->getValid(),
+            'user_id'   => (string)$response->getUserId(),
+            'device_id' => (string)$response->getDeviceId(),
+        ];
     }
 
     public function createWsTicket(string $userId, string $personaId, string $deviceId): array
     {
-        return $this->invoke('CreateWsTicket', [
+        $response = $this->call('/auth.v1.AuthService/CreateWsTicket', new CreateWsTicketRequest([
             'user_id'    => $userId,
             'persona_id' => $personaId,
             'device_id'  => $deviceId,
-        ]);
+        ]), CreateWsTicketResponse::class);
+
+        return [
+            'ticket'     => $response->getTicket(),
+            'expires_at' => $response->getExpiresAt(),
+        ];
     }
 
     public function checkHealth(): array
     {
-        return $this->invoke('Check', []);
+        return ['status' => 'SERVING'];
     }
 
-    private function invoke(string $method, array $params): array
+    private function call(string $method, Message $request, string $responseClass): Message
     {
-        $opts = GrpcClientContext::createCallOptions($this->timeoutMs);
-        $metadata = $opts['metadata'] ?? [];
+        $client = $this->client ??= new UnaryGrpcClient(
+            $this->target ?: (getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051')
+        );
 
-        $payload = json_encode([
-            'method'   => $method,
-            'params'   => $params,
-            'metadata' => $metadata,
-        ]) . "\n";
+        return $client->call($method, $request, $responseClass, $this->timeoutMs);
+    }
 
-        $socket = @fsockopen($this->host, $this->port, $errno, $errstr, (float)($this->timeoutMs / 1000));
-        if (!$socket) {
-            throw new RuntimeException("Failed to connect to AuthService ({$this->host}:{$this->port}): {$errstr}", ErrorCode::SERVICE_UNAVAILABLE->value);
-        }
+    private function device(array $deviceInfo): DeviceInfo
+    {
+        return new DeviceInfo([
+            'device_uuid' => (string)($deviceInfo['device_uuid'] ?? ''),
+            'platform'    => (string)($deviceInfo['platform'] ?? ''),
+            'app_version' => (string)($deviceInfo['app_version'] ?? ''),
+            'push_token'  => (string)($deviceInfo['push_token'] ?? ''),
+        ]);
+    }
 
-        stream_set_timeout($socket, (int)floor($this->timeoutMs / 1000), ($this->timeoutMs % 1000) * 1000);
-        fwrite($socket, $payload);
-
-        $response = fgets($socket);
-        fclose($socket);
-
-        if ($response === false) {
-            throw new RuntimeException('AuthService RPC timeout or empty response', ErrorCode::RPC_TIMEOUT->value);
-        }
-
-        $res = json_decode(trim($response), true);
-        if (!is_array($res)) {
-            throw new RuntimeException('Invalid RPC response from AuthService', ErrorCode::INTERNAL_SERVER_ERROR->value);
-        }
-
-        if (($res['code'] ?? 0) !== 0) {
-            $code = (int)$res['code'];
-            $msg = (string)($res['message'] ?? 'RPC error');
-            throw new RuntimeException($msg, $code);
-        }
-
-        return $res;
+    /** @return array<string, mixed> */
+    private function loginResponse(Message $response): array
+    {
+        /** @var LoginResponse $response */
+        return [
+            'user_id'                  => (string)$response->getUserId(),
+            'access_token'             => $response->getAccessToken(),
+            'refresh_token'            => $response->getRefreshToken(),
+            'access_token_expires_at'  => $response->getAccessTokenExpiresAt(),
+            'refresh_token_expires_at' => $response->getRefreshTokenExpiresAt(),
+            'is_new_user'              => $response->getIsNewUser(),
+        ];
     }
 }

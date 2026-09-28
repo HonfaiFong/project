@@ -12,7 +12,7 @@ runtime/
 *.log
 
 # Go
-bin/
+bin/gateway
 *.exe
 *.test
 *.out

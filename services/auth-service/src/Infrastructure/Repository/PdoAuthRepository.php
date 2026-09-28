@@ -122,6 +122,79 @@ final class PdoAuthRepository implements AuthRepositoryInterface
         );
     }
 
+    public function rotateRefreshToken(
+        string $tokenHash,
+        string $newTokenHash,
+        string $newExpiresAt
+    ): ?RefreshToken {
+        $now = gmdate('Y-m-d H:i:s.v');
+
+        $this->pdo->beginTransaction();
+
+        try {
+            $stmt = $this->pdo->prepare(
+                'SELECT * FROM refresh_tokens WHERE token_hash = :hash LIMIT 1 FOR UPDATE'
+            );
+            $stmt->execute(['hash' => $tokenHash]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                $this->pdo->commit();
+                return null;
+            }
+
+            $record = new RefreshToken(
+                id: (string)$row['id'],
+                userId: (string)$row['user_id'],
+                deviceId: (string)$row['device_id'],
+                tokenHash: (string)$row['token_hash'],
+                expiresAt: (string)$row['expires_at'],
+                revokedAt: $row['revoked_at'] ? (string)$row['revoked_at'] : null,
+                createdAt: (string)$row['created_at'],
+            );
+
+            if (!$record->isValid()) {
+                $this->pdo->commit();
+                return null;
+            }
+
+            $revoke = $this->pdo->prepare(
+                'UPDATE refresh_tokens
+                 SET revoked_at = :now
+                 WHERE id = :id AND revoked_at IS NULL'
+            );
+            $revoke->execute(['now' => $now, 'id' => $record->id]);
+
+            if ($revoke->rowCount() !== 1) {
+                $this->pdo->rollBack();
+                return null;
+            }
+
+            $insert = $this->pdo->prepare(
+                'INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at, created_at)
+                 VALUES (:id, :user_id, :device_id, :token_hash, :expires_at, :created_at)'
+            );
+            $insert->execute([
+                'id'         => $this->snowflake->nextId(),
+                'user_id'    => $record->userId,
+                'device_id'  => $record->deviceId,
+                'token_hash' => $newTokenHash,
+                'expires_at' => $newExpiresAt,
+                'created_at' => $now,
+            ]);
+
+            $this->pdo->commit();
+
+            return $record;
+        } catch (\Throwable $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+
+            throw $e;
+        }
+    }
+
     public function findRefreshToken(string $tokenHash): ?RefreshToken
     {
         $stmt = $this->pdo->prepare('SELECT * FROM refresh_tokens WHERE token_hash = :hash LIMIT 1');

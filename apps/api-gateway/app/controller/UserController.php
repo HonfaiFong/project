@@ -6,6 +6,7 @@ namespace Apps\ApiGateway\Controller;
 
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\ApiResponse;
+use Apps\ApiGateway\Response\PersonaPresenter;
 use Contracts\Errors\ErrorCode;
 
 final class UserController
@@ -26,7 +27,7 @@ final class UserController
 
         return ApiResponse::success([
             'user'     => $userRes['user'] ?? null,
-            'personas' => $personasRes['personas'] ?? [],
+            'personas' => PersonaPresenter::many($personasRes['personas'] ?? []),
         ]);
     }
 }

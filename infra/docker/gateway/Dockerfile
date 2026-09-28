@@ -4,7 +4,7 @@ WORKDIR /app
 ENV GOFLAGS="-mod=mod"
 
 COPY go.mod go.sum* ./
-RUN go mod download || true
+RUN go mod download
 
 COPY . .
 

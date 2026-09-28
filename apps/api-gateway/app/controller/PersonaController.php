@@ -6,6 +6,7 @@ namespace Apps\ApiGateway\Controller;
 
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\ApiResponse;
+use Apps\ApiGateway\Response\PersonaPresenter;
 use Contracts\Errors\ErrorCode;
 
 final class PersonaController
@@ -23,7 +24,7 @@ final class PersonaController
 
         $res = $this->userClient->listPersonas($userId);
         return ApiResponse::success([
-            'personas' => $res['personas'] ?? [],
+            'personas' => PersonaPresenter::many($res['personas'] ?? []),
         ]);
     }
 
@@ -45,7 +46,7 @@ final class PersonaController
 
         $res = $this->userClient->createPersona($userId, $type, $nickname, $avatarKey, $bio);
 
-        return ApiResponse::success($res['persona'] ?? [], 201);
+        return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []), 201);
     }
 
     public function get(string $personaId): array
@@ -55,7 +56,7 @@ final class PersonaController
         }
 
         $res = $this->userClient->getPersona($personaId);
-        return ApiResponse::success($res['persona'] ?? []);
+        return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []));
     }
 
     public function update(string $personaId, array $body, array $authContext): array
@@ -70,6 +71,6 @@ final class PersonaController
         $bio = isset($body['bio']) ? (string)$body['bio'] : null;
 
         $res = $this->userClient->updatePersona($personaId, $userId, $nickname, $avatarKey, $bio);
-        return ApiResponse::success($res['persona'] ?? []);
+        return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []));
     }
 }

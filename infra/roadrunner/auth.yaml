@@ -1,0 +1,16 @@
+version: '3'
+
+server:
+  command: php services/auth-service/bin/server.php
+  relay: pipes
+
+grpc:
+  listen: tcp://0.0.0.0:50051
+  proto:
+    - contracts/proto/auth/v1/auth.proto
+  pool:
+    num_workers: 2
+
+logs:
+  mode: production
+  level: info

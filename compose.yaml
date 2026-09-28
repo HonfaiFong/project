@@ -1,10 +1,10 @@
 services:
   mysql:
-    image: mysql:latest
+    image: mysql:8.4
     container_name: social-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-root_password}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       MYSQL_DATABASE: auth_db
     ports:
       - "${MYSQL_PORT:-3306}:3306"
@@ -66,8 +66,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio_admin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio_password}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
     volumes:
       - minio_data:/data
 
@@ -79,20 +79,18 @@ services:
     container_name: social-auth-service
     restart: unless-stopped
     working_dir: /app
-    command: php services/auth-service/bin/server.php
-    ports:
-      - "50051:50051"
+    command: rr serve -c infra/roadrunner/auth.yaml
     environment:
       - SERVICE_NAME=auth-service
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
-      - MYSQL_PASSWORD=root_password
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       - AUTH_DB_NAME=auth_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - JWT_SECRET=super-secret-jwt-key-minimum-32-chars-long-123456
-      - WS_TICKET_SECRET=ws-ticket-secret-32-chars-key-abcdef
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env}
+      - WS_TICKET_SECRET=${WS_TICKET_SECRET:?Set WS_TICKET_SECRET in .env}
     volumes:
       - .:/app
     depends_on:
@@ -109,15 +107,13 @@ services:
     container_name: social-user-service
     restart: unless-stopped
     working_dir: /app
-    command: php services/user-service/bin/server.php
-    ports:
-      - "50052:50052"
+    command: rr serve -c infra/roadrunner/user.yaml
     environment:
       - SERVICE_NAME=user-service
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
-      - MYSQL_PASSWORD=root_password
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       - USER_DB_NAME=user_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -146,7 +142,9 @@ services:
       - GRPC_USER_SERVICE=user-service:50052
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - JWT_SECRET=super-secret-jwt-key-minimum-32-chars-long-123456
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env}
+      - ENABLE_DEV_LOGIN=${ENABLE_DEV_LOGIN:-false}
+      - DEV_LOGIN_CODE=${DEV_LOGIN_CODE:-}
     volumes:
       - .:/app
     depends_on:
@@ -166,7 +164,7 @@ services:
     environment:
       - GATEWAY_PORT=8080
       - REDIS_HOST=redis:6379
-      - WS_TICKET_SECRET=ws-ticket-secret-32-chars-key-abcdef
+      - WS_TICKET_SECRET=${WS_TICKET_SECRET:?Set WS_TICKET_SECRET in .env}
     volumes:
       - .:/app
     depends_on:

@@ -101,8 +101,12 @@ final class AuthGrpcHandler
 
     private function logout(array $req): array
     {
-        $token = (string)($req['refresh_token'] ?? '');
-        $success = $this->authService->logout($token);
+        $refreshToken = (string)($req['refresh_token'] ?? '');
+        $accessToken = (string)($req['access_token'] ?? '');
+        $success = $this->authService->logout(
+            $refreshToken,
+            $accessToken !== '' ? $accessToken : null
+        );
 
         return [
             'code'    => 0,

@@ -19,6 +19,15 @@ message UserProfile {
   string updated_at = 8;
 }
 
+message FindOrCreateByPhoneRequest {
+  string phone = 1;
+}
+
+message FindOrCreateByPhoneResponse {
+  UserProfile user = 1;
+  bool is_new_user = 2;
+}
+
 message GetUserRequest {
   uint64 user_id = 1;
 }
@@ -46,6 +55,7 @@ message UpdateUserResponse {
 }
 
 service UserService {
+  rpc FindOrCreateByPhone(FindOrCreateByPhoneRequest) returns (FindOrCreateByPhoneResponse);
   rpc GetUser(GetUserRequest) returns (GetUserResponse);
   rpc BatchGetUsers(BatchGetUsersRequest) returns (BatchGetUsersResponse);
   rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);

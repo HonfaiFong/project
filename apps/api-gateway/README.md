@@ -29,7 +29,18 @@
 - `user-service` (gRPC :50052)
 - Redis (Rate limiting and cache)
 
-## 5. Local Run
+## 5. Login credential configuration
+
+`APP_ENV=local`, `development`, `dev`, or `testing` requires a configured
+`AUTH_DEV_VERIFICATION_CODE` (the legacy aliases `AUTH_DEV_LOGIN_CODE`,
+`DEV_VERIFICATION_CODE`, and `DEV_LOGIN_CODE` are also accepted). The gateway
+never accepts an empty or hard-coded development code.
+
+Other environments require a real credential verifier to be injected at the
+composition root. Without one, login is rejected before UserService can create
+or resolve a user.
+
+## 6. Local Run
 ```bash
 docker compose up -d api-gateway
 # Or directly:

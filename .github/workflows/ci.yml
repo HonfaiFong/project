@@ -27,7 +27,12 @@ jobs:
           go-version: '1.24'
 
       - name: Install Composer dependencies
-        run: composer dump-autoload
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Verify generated Proto contracts
+        run: |
+          make proto
+          test -z "$(git status --porcelain -- contracts/gen)"
 
       - name: Run Lint
         run: make lint

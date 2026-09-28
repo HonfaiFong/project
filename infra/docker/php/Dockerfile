@@ -23,6 +23,7 @@ RUN chmod +x /usr/local/bin/install-php-extensions && \
     posix \
     sockets \
     bcmath \
+    grpc \
     zip \
     intl \
     opcache
@@ -41,7 +42,7 @@ RUN git clone --depth 1 -b develop https://github.com/phpredis/phpredis.git /tmp
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 
 # Copy RoadRunner binary
-COPY --from=ghcr.io/roadrunner-server/roadrunner:2024.2.0 /usr/bin/rr /usr/local/bin/rr
+COPY --from=ghcr.io/roadrunner-server/roadrunner:2025.1.15 /usr/bin/rr /usr/local/bin/rr
 
 WORKDIR /app
 

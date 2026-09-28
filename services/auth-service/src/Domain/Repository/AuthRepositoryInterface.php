@@ -25,6 +25,15 @@ interface AuthRepositoryInterface
         string $expiresAt
     ): RefreshToken;
 
+    /**
+     * Atomically consume an active refresh token and create its replacement.
+     */
+    public function rotateRefreshToken(
+        string $tokenHash,
+        string $newTokenHash,
+        string $newExpiresAt
+    ): ?RefreshToken;
+
     public function findRefreshToken(string $tokenHash): ?RefreshToken;
 
     public function revokeRefreshToken(string $tokenHash): bool;

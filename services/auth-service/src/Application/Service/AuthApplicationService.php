@@ -6,6 +6,7 @@ namespace Services\AuthService\Application\Service;
 
 use Contracts\Errors\ErrorCode;
 use RuntimeException;
+use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
 
 final class AuthApplicationService
@@ -16,7 +17,8 @@ final class AuthApplicationService
         private readonly string $wsTicketSecret,
         private readonly int $accessTokenTtl = 7200,      // 2 hours
         private readonly int $refreshTokenTtl = 2592000,   // 30 days
-        private readonly int $wsTicketTtl = 60            // 60 seconds per spec line 1504
+        private readonly int $wsTicketTtl = 60,            // 60 seconds per spec line 1504
+        private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null
     ) {
     }
 
@@ -73,18 +75,23 @@ final class AuthApplicationService
     public function refreshToken(string $rawRefreshToken, array $deviceInfo = []): array
     {
         $tokenHash = hash('sha256', $rawRefreshToken);
-        $record = $this->authRepo->findRefreshToken($tokenHash);
-
-        if (!$record || !$record->isValid()) {
-            throw new RuntimeException('Token invalid or expired', ErrorCode::AUTH_TOKEN_EXPIRED->value);
-        }
-
-        // Revoke used token (token rotation)
-        $this->authRepo->revokeRefreshToken($tokenHash);
 
         $now = time();
         $accessExpiresAt = $now + $this->accessTokenTtl;
         $refreshExpiresAt = $now + $this->refreshTokenTtl;
+
+        $newRawRefreshToken = bin2hex(random_bytes(32));
+        $newTokenHash = hash('sha256', $newRawRefreshToken);
+
+        $record = $this->authRepo->rotateRefreshToken(
+            tokenHash: $tokenHash,
+            newTokenHash: $newTokenHash,
+            newExpiresAt: gmdate('Y-m-d H:i:s.v', $refreshExpiresAt)
+        );
+
+        if (!$record) {
+            throw new RuntimeException('Token invalid or expired', ErrorCode::AUTH_TOKEN_EXPIRED->value);
+        }
 
         $accessToken = $this->generateJwt([
             'sub'       => $record->userId,
@@ -92,16 +99,6 @@ final class AuthApplicationService
             'iat'       => $now,
             'exp'       => $accessExpiresAt,
         ]);
-
-        $newRawRefreshToken = bin2hex(random_bytes(32));
-        $newTokenHash = hash('sha256', $newRawRefreshToken);
-
-        $this->authRepo->createRefreshToken(
-            userId: $record->userId,
-            deviceId: $record->deviceId,
-            tokenHash: $newTokenHash,
-            expiresAt: gmdate('Y-m-d H:i:s.v', $refreshExpiresAt)
-        );
 
         return [
             'access_token'             => $accessToken,
@@ -111,10 +108,41 @@ final class AuthApplicationService
         ];
     }
 
-    public function logout(string $rawRefreshToken): bool
+    public function logout(string $rawRefreshToken, ?string $rawAccessToken = null): bool
     {
         $tokenHash = hash('sha256', $rawRefreshToken);
-        return $this->authRepo->revokeRefreshToken($tokenHash);
+        $record = $this->authRepo->findRefreshToken($tokenHash);
+        $refreshRevoked = $this->authRepo->revokeRefreshToken($tokenHash);
+        $accessRevoked = false;
+
+        if ($this->accessTokenRevocationStore !== null && $record !== null) {
+            $this->accessTokenRevocationStore->revokeDevice($record->deviceId, $this->accessTokenTtl);
+            $accessRevoked = true;
+        }
+
+        if ($this->accessTokenRevocationStore !== null && $rawAccessToken !== null && $rawAccessToken !== '') {
+            $payload = null;
+            try {
+                $payload = $this->verifyJwt($rawAccessToken);
+            } catch (\Throwable) {
+                // An invalid access token cannot be used for authentication and needs no blacklist entry.
+            }
+
+            if (
+                $payload !== null
+                && ($record === null
+                    || ((string)($payload['sub'] ?? '') === $record->userId
+                        && (string)($payload['device_id'] ?? '') === $record->deviceId))
+            ) {
+                $this->accessTokenRevocationStore->revokeToken(
+                    hash('sha256', $rawAccessToken),
+                    max(1, (int)$payload['exp'] - time())
+                );
+                $accessRevoked = true;
+            }
+        }
+
+        return $refreshRevoked || $accessRevoked;
     }
 
     /**
@@ -124,6 +152,15 @@ final class AuthApplicationService
     {
         try {
             $payload = $this->verifyJwt($token);
+
+            if ($this->accessTokenRevocationStore?->isRevoked(
+                hash('sha256', $token),
+                (string)($payload['device_id'] ?? ''),
+                (int)($payload['iat'] ?? 0)
+            )) {
+                return ['valid' => false];
+            }
+
             return [
                 'valid'     => true,
                 'user_id'   => (string)$payload['sub'],

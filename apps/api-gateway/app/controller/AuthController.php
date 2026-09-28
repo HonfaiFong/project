@@ -4,24 +4,36 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Controller;
 
+use Apps\ApiGateway\Auth\LoginCredentialVerifier;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
+use RuntimeException;
 
 final class AuthController
 {
     public function __construct(
         private readonly AuthServiceClient $authClient,
-        private readonly UserServiceClient $userClient
+        private readonly UserServiceClient $userClient,
+        ?LoginCredentialVerifier $credentialVerifier = null
     ) {
+        $this->credentialVerifier = $credentialVerifier ?? LoginCredentialVerifier::fromEnvironment();
     }
+
+    private readonly LoginCredentialVerifier $credentialVerifier;
 
     public function login(array $body, array $headers): array
     {
         $phone = trim((string)($body['phone'] ?? ''));
         if ($phone === '') {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'phone is required');
+        }
+
+        try {
+            $this->credentialVerifier->verify($phone, $body);
+        } catch (RuntimeException $e) {
+            return ApiResponse::error($e->getCode(), $e->getMessage());
         }
 
         $device = (array)($body['device'] ?? []);
@@ -67,14 +79,23 @@ final class AuthController
         ]);
     }
 
-    public function logout(array $body): array
+    /**
+     * @param array<string, mixed> $body
+     * @param array<string, string> $headers
+     */
+    public function logout(array $body, array $headers = []): array
     {
         $refreshToken = (string)($body['refresh_token'] ?? '');
         if ($refreshToken === '') {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'refresh_token is required');
         }
 
-        $this->authClient->logout($refreshToken);
+        $accessToken = self::bearerToken($headers);
+        if ($accessToken === null) {
+            return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
+        }
+
+        $this->authClient->logout($refreshToken, $accessToken);
         return ApiResponse::success(['success' => true]);
     }
 
@@ -82,10 +103,27 @@ final class AuthController
     {
         $userId = $authContext['user_id'] ?? '';
         $deviceId = $authContext['device_id'] ?? '';
-        $personaId = (string)($body['persona_id'] ?? $authContext['persona_id'] ?? '0');
+        $requestedPersonaId = trim((string)($body['persona_id'] ?? ''));
+        $contextPersonaId = trim((string)($authContext['persona_id'] ?? ''));
 
-        if ($userId === '') {
+        if ($requestedPersonaId !== '' && $contextPersonaId !== '' && $requestedPersonaId !== $contextPersonaId) {
+            return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'forbidden persona access');
+        }
+
+        $personaId = $requestedPersonaId !== '' ? $requestedPersonaId : $contextPersonaId;
+
+        if ($userId === '' || $personaId === '' || $personaId === '0') {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
+        }
+
+        $personaRes = $this->userClient->getPersona($personaId);
+        $persona = $personaRes['persona'] ?? null;
+        if (!is_array($persona) || (string)($persona['user_id'] ?? '') !== (string)$userId) {
+            return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'forbidden persona access');
+        }
+
+        if ((int)($persona['status'] ?? 0) !== 1) {
+            return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'persona is inactive');
         }
 
         $res = $this->authClient->createWsTicket($userId, $personaId, $deviceId);
@@ -94,5 +132,19 @@ final class AuthController
             'ticket'     => $res['ticket'],
             'expires_at' => $res['expires_at'],
         ]);
+    }
+
+    /**
+     * @param array<string, string> $headers
+     */
+    private static function bearerToken(array $headers): ?string
+    {
+        $authorization = trim((string)($headers['authorization'] ?? ''));
+        if (!str_starts_with($authorization, 'Bearer ')) {
+            return null;
+        }
+
+        $token = trim(substr($authorization, 7));
+        return $token === '' ? null : $token;
     }
 }

@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Services\AuthService\Domain\Entity\Device;
 use Services\AuthService\Domain\Entity\RefreshToken;
+use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
 use Tests\TestCase;
 
@@ -54,6 +55,29 @@ final class InMemoryAuthRepository implements AuthRepositoryInterface
         return $tok;
     }
 
+    public function rotateRefreshToken(
+        string $tokenHash,
+        string $newTokenHash,
+        string $newExpiresAt
+    ): ?RefreshToken {
+        $record = $this->tokens[$tokenHash] ?? null;
+
+        if (!$record || !$record->isValid()) {
+            return null;
+        }
+
+        unset($this->tokens[$tokenHash]);
+        $this->tokens[$newTokenHash] = new RefreshToken(
+            id: 'tok_' . (2001 + count($this->tokens)),
+            userId: $record->userId,
+            deviceId: $record->deviceId,
+            tokenHash: $newTokenHash,
+            expiresAt: $newExpiresAt
+        );
+
+        return $record;
+    }
+
     public function findRefreshToken(string $tokenHash): ?RefreshToken
     {
         return $this->tokens[$tokenHash] ?? null;
@@ -78,18 +102,47 @@ final class InMemoryAuthRepository implements AuthRepositoryInterface
     }
 }
 
+final class InMemoryAccessTokenRevocationStore implements AccessTokenRevocationStoreInterface
+{
+    /** @var array<string, true> */
+    public array $tokenHashes = [];
+
+    /** @var array<string, int> */
+    public array $deviceRevokedAt = [];
+
+    public function revokeToken(string $tokenHash, int $ttl): void
+    {
+        $this->tokenHashes[$tokenHash] = true;
+    }
+
+    public function revokeDevice(string $deviceId, int $ttl): void
+    {
+        $this->deviceRevokedAt[$deviceId] = time();
+    }
+
+    public function isRevoked(string $tokenHash, string $deviceId, int $issuedAt): bool
+    {
+        return isset($this->tokenHashes[$tokenHash])
+            || (isset($this->deviceRevokedAt[$deviceId]) && $issuedAt <= $this->deviceRevokedAt[$deviceId]);
+    }
+}
+
 final class AuthServiceTest extends TestCase
 {
     private InMemoryAuthRepository $repo;
+    private InMemoryAccessTokenRevocationStore $revocationStore;
     private AuthApplicationService $authService;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
+        parent::setUp();
         $this->repo = new InMemoryAuthRepository();
+        $this->revocationStore = new InMemoryAccessTokenRevocationStore();
         $this->authService = new AuthApplicationService(
             authRepo: $this->repo,
             jwtSecret: 'test-secret-at-least-32-chars-long-12345',
-            wsTicketSecret: 'test-ws-secret-at-least-32-chars-12345'
+            wsTicketSecret: 'test-ws-secret-at-least-32-chars-12345',
+            accessTokenRevocationStore: $this->revocationStore
         );
     }
 
@@ -109,6 +162,39 @@ final class AuthServiceTest extends TestCase
         $verify = $this->authService->verifyToken($result['access_token']);
         $this->assertTrue($verify['valid']);
         $this->assertSame('20001', $verify['user_id']);
+    }
+
+    public function testRefreshTokenCanOnlyBeConsumedOnce(): void
+    {
+        $login = $this->authService->login('20001', [
+            'device_uuid' => 'uuid-123',
+            'platform'    => 'ios',
+            'app_version' => '1.0.0',
+        ]);
+
+        $refresh = $this->authService->refreshToken($login['refresh_token']);
+
+        $this->assertNotSame($login['refresh_token'], $refresh['refresh_token']);
+        $this->assertArrayNotHasKey(
+            hash('sha256', $login['refresh_token']),
+            $this->repo->tokens
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->authService->refreshToken($login['refresh_token']);
+    }
+
+    public function testLogoutRevokesAccessTokenImmediately(): void
+    {
+        $login = $this->authService->login('20001', [
+            'device_uuid' => 'uuid-123',
+            'platform'    => 'ios',
+            'app_version' => '1.0.0',
+        ]);
+
+        $this->assertTrue($this->authService->verifyToken($login['access_token'])['valid']);
+        $this->assertTrue($this->authService->logout($login['refresh_token']));
+        $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
     }
 
     public function testCreateWsTicketGeneratesValidSignature(): void

@@ -2,102 +2,100 @@
 set -euo pipefail
 
 BASE_URL="${API_BASE_URL:-http://127.0.0.1:8787}"
+LOGIN_CODE="${E2E_LOGIN_CODE:-123456}"
+BODY_FILE="$(mktemp)"
+trap 'rm -f "$BODY_FILE"' EXIT
 
-echo "=========================================================="
-echo "Starting E2E Verification for Social Backend (Phase 1)"
-echo "Target: ${BASE_URL}"
-echo "=========================================================="
+request() {
+  local expected="$1" method="$2" path="$3" payload="${4:-}" token="${5:-}"
+  local headers=(-H 'Content-Type: application/json')
+  if [[ -n "$token" ]]; then
+    headers+=(-H "Authorization: Bearer ${token}")
+  fi
+  local status
+  status="$(curl --silent --show-error --max-time 10 -o "$BODY_FILE" -w '%{http_code}' \
+    -X "$method" "${BASE_URL}${path}" "${headers[@]}" ${payload:+--data "$payload"})"
+  if [[ "$status" != "$expected" ]]; then
+    echo "FAILED ${method} ${path}: HTTP ${status}, expected ${expected}" >&2
+    exit 1
+  fi
+  if ! php -r '$body=json_decode(file_get_contents($argv[1]), true); exit(is_array($body) && isset($body["code"]) ? 0 : 1);' "$BODY_FILE"; then
+    echo "FAILED ${method} ${path}: invalid API response" >&2
+    exit 1
+  fi
+}
 
-# 1. Healthcheck
-echo -n "[1/8] Checking API Gateway Health... "
-HEALTH_RESP=$(curl -s -f "${BASE_URL}/health" || curl -s -f "${BASE_URL}/api/v1/health")
-echo "OK"
-echo "  Response: ${HEALTH_RESP}"
+field() {
+  php -r '
+    $body=json_decode(file_get_contents($argv[1]), true);
+    $value=$body;
+    foreach (explode(".", $argv[2]) as $key) {
+      if (!is_array($value) || !array_key_exists($key, $value)) exit(1);
+      $value=$value[$key];
+    }
+    if (is_scalar($value)) echo $value;
+  ' "$BODY_FILE" "$1"
+}
 
-# 2. Login
-PHONE="+8613800138$(date +%s | tail -c 4)"
-DEVICE_UUID="dev-$(date +%s)"
-echo -n "[2/8] Logging in with phone ${PHONE}... "
-LOGIN_RESP=$(curl -s -X POST "${BASE_URL}/api/v1/auth/login" \
-  -H "Content-Type: application/json" \
-  -H "X-Device-Id: ${DEVICE_UUID}" \
-  -d "{\"phone\":\"${PHONE}\",\"device\":{\"device_uuid\":\"${DEVICE_UUID}\",\"platform\":\"ios\"}}")
+expect_code() {
+  local actual
+  actual="$(field code)"
+  if [[ "$actual" != "$1" ]]; then
+    echo "FAILED: business code ${actual}, expected $1" >&2
+    exit 1
+  fi
+}
 
-ACCESS_TOKEN=$(echo "${LOGIN_RESP}" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
-REFRESH_TOKEN=$(echo "${LOGIN_RESP}" | grep -o '"refresh_token":"[^"]*' | cut -d'"' -f4)
-USER_ID=$(echo "${LOGIN_RESP}" | grep -o '"user_id":"[^"]*' | cut -d'"' -f4)
+stamp="$(date +%s)"
+phone_a="+8613800${stamp}"
+phone_b="+8613900${stamp}"
 
-if [[ -z "${ACCESS_TOKEN}" ]]; then
-  echo "FAILED: Could not retrieve access_token"
-  echo "Response: ${LOGIN_RESP}"
-  exit 1
-fi
-echo "OK (User ID: ${USER_ID})"
+request 200 GET /health
+expect_code 0
 
-# 3. Get /me
-echo -n "[3/8] Fetching profile (GET /api/v1/me)... "
-ME_RESP=$(curl -s -X GET "${BASE_URL}/api/v1/me" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}")
-echo "OK"
+request 401 POST /api/v1/auth/login "{\"phone\":\"${phone_a}\",\"code\":\"invalid\"}"
 
-# 4. Create new Persona
-echo -n "[4/8] Creating secondary Persona (POST /api/v1/personas)... "
-CREATE_PERSONA_RESP=$(curl -s -X POST "${BASE_URL}/api/v1/personas" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"type":1,"nickname":"NightWatcher","bio":"Looking at the stars"}')
+request 201 POST /api/v1/auth/login "{\"phone\":\"${phone_a}\",\"code\":\"${LOGIN_CODE}\",\"device\":{\"device_uuid\":\"e2e-a-${stamp}\",\"platform\":\"ios\"}}"
+expect_code 0
+access_a="$(field data.access_token)"
+refresh_a="$(field data.refresh_token)"
+user_a="$(field data.user_id)"
+[[ -n "$access_a" && -n "$refresh_a" && -n "$user_a" ]]
 
-PERSONA_ID=$(echo "${CREATE_PERSONA_RESP}" | grep -o '"id":"[^"]*' | cut -d'"' -f4)
-if [[ -z "${PERSONA_ID}" ]]; then
-  echo "FAILED: Could not create persona"
-  echo "Response: ${CREATE_PERSONA_RESP}"
-  exit 1
-fi
-echo "OK (Persona ID: ${PERSONA_ID})"
+request 200 GET /api/v1/me '' "$access_a"
+expect_code 0
+[[ "$(field data.user.id)" == "$user_a" ]]
 
-# 5. List Personas
-echo -n "[5/8] Listing Personas (GET /api/v1/personas)... "
-LIST_PERSONAS_RESP=$(curl -s -X GET "${BASE_URL}/api/v1/personas" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}")
-echo "OK"
+request 201 POST /api/v1/personas '{"type":1,"nickname":"NightWatcher"}' "$access_a"
+expect_code 0
+persona_a="$(field data.id)"
+[[ -n "$persona_a" ]]
 
-# 6. Update Persona
-echo -n "[6/8] Updating Persona (PATCH /api/v1/personas/${PERSONA_ID})... "
-UPDATE_RESP=$(curl -s -X PATCH "${BASE_URL}/api/v1/personas/${PERSONA_ID}" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"bio":"Updated bio for night owl"}')
-echo "OK"
+request 200 GET /api/v1/personas '' "$access_a"
+expect_code 0
+php -r '$body=json_decode(file_get_contents($argv[1]), true); $ids=array_column($body["data"]["personas"] ?? [], "id"); exit(in_array($argv[2], array_map("strval", $ids), true) ? 0 : 1);' "$BODY_FILE" "$persona_a"
 
-# 7. Request WebSocket Ticket
-echo -n "[7/8] Requesting WS Ticket (POST /api/v1/ws/ticket)... "
-TICKET_RESP=$(curl -s -X POST "${BASE_URL}/api/v1/ws/ticket" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d "{\"persona_id\":\"${PERSONA_ID}\"}")
+request 200 GET "/api/v1/personas/${persona_a}" '' "$access_a"
+expect_code 0
+php -r '$body=json_decode(file_get_contents($argv[1]), true); exit(isset($body["data"]["user_id"]) ? 1 : 0);' "$BODY_FILE"
 
-TICKET=$(echo "${TICKET_RESP}" | grep -o '"ticket":"[^"]*' | cut -d'"' -f4)
-if [[ -z "${TICKET}" ]]; then
-  echo "FAILED: No ticket in response"
-  echo "Response: ${TICKET_RESP}"
-  exit 1
-fi
-echo "OK"
+request 201 POST /api/v1/auth/login "{\"phone\":\"${phone_b}\",\"code\":\"${LOGIN_CODE}\",\"device\":{\"device_uuid\":\"e2e-b-${stamp}\",\"platform\":\"ios\"}}"
+expect_code 0
+access_b="$(field data.access_token)"
 
-# 8. Token Refresh
-echo -n "[8/8] Refreshing Token (POST /api/v1/auth/refresh)... "
-REFRESH_RESP=$(curl -s -X POST "${BASE_URL}/api/v1/auth/refresh" \
-  -H "Content-Type: application/json" \
-  -d "{\"refresh_token\":\"${REFRESH_TOKEN}\"}")
+request 403 POST /api/v1/ws/ticket "{\"persona_id\":\"${persona_a}\"}" "$access_b"
+request 200 POST /api/v1/ws/ticket "{\"persona_id\":\"${persona_a}\"}" "$access_a"
+expect_code 0
+[[ -n "$(field data.ticket)" ]]
 
-NEW_ACCESS_TOKEN=$(echo "${REFRESH_RESP}" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4)
-if [[ -z "${NEW_ACCESS_TOKEN}" ]]; then
-  echo "FAILED to refresh token"
-  echo "Response: ${REFRESH_RESP}"
-  exit 1
-fi
-echo "OK"
+request 200 POST /api/v1/auth/refresh "{\"refresh_token\":\"${refresh_a}\"}"
+expect_code 0
+new_access="$(field data.access_token)"
+new_refresh="$(field data.refresh_token)"
+[[ -n "$new_access" && -n "$new_refresh" ]]
 
-echo "=========================================================="
-echo "ALL E2E CHECKS PASSED SUCCESSFULLY!"
-echo "=========================================================="
+request 200 POST /api/v1/auth/logout "{\"refresh_token\":\"${new_refresh}\"}" "$new_access"
+expect_code 0
+request 401 GET /api/v1/me '' "$new_access"
+
+echo 'Phase 1 E2E passed: login, profile, persona privacy, ticket ownership, refresh, logout revocation.'

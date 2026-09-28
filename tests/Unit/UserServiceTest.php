@@ -22,6 +22,11 @@ final class InMemoryUserRepository implements UserRepositoryInterface
         return $this->users[$id] ?? null;
     }
 
+    public function findByIdForUpdate(string $id): ?User
+    {
+        return $this->findById($id);
+    }
+
     public function findByPhone(string $phone): ?User
     {
         foreach ($this->users as $u) {
@@ -182,7 +187,7 @@ final class UserServiceTest extends TestCase
     private InMemoryPersonaRepository $personaRepo;
     private UserApplicationService $userService;
 
-    public function setUp(): void
+    protected function setUp(): void
     {
         $this->userRepo = new InMemoryUserRepository();
         $this->personaRepo = new InMemoryPersonaRepository();
