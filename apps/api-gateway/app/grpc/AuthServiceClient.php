@@ -15,6 +15,8 @@ use Contracts\Gen\Auth\V1\RefreshTokenRequest;
 use Contracts\Gen\Auth\V1\RefreshTokenResponse;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
+use Contracts\Gen\Common\V1\HealthCheckRequest;
+use Contracts\Gen\Common\V1\HealthCheckResponse;
 use Google\Protobuf\Internal\Message;
 
 final class AuthServiceClient
@@ -102,7 +104,12 @@ final class AuthServiceClient
 
     public function checkHealth(): array
     {
-        return ['status' => 'SERVING'];
+        $response = $this->call('/common.v1.HealthService/Check', new HealthCheckRequest(), HealthCheckResponse::class);
+
+        return [
+            'status'  => $response->getStatus(),
+            'message' => $response->getMessage(),
+        ];
     }
 
     private function call(string $method, Message $request, string $responseClass): Message

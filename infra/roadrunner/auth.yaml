@@ -1,13 +1,16 @@
 version: '3'
 
 server:
-  command: php services/auth-service/bin/server.php
+  command: php /app/services/auth-service/bin/server.php
   relay: pipes
 
 grpc:
   listen: tcp://0.0.0.0:50051
+  # proto 路径必须写容器内绝对路径(/app 由 compose 的 .:/app 挂载保证):
+  # 带 server 段时 rr worker 侧按非 CWD 的基准解析相对路径,实测只有绝对路径可靠
   proto:
-    - contracts/proto/auth/v1/auth.proto
+    - /app/contracts/proto/auth/v1/auth.proto
+    - /app/contracts/proto/common/v1/health.proto
   pool:
     num_workers: 2
 

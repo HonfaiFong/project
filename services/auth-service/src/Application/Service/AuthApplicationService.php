@@ -180,7 +180,10 @@ final class AuthApplicationService
         $signData = sprintf('%s:%s:%s:%s:%d', $userId, $personaId, $deviceId, $nonce, $expireAt);
         $signature = hash_hmac('sha256', $signData, $this->wsTicketSecret);
 
-        $ticket = base64_encode(sprintf('%s:%s', $signData, $signature));
+        // base64url (RFC 4648 §5, unpadded): the ticket travels in the
+        // `GET /ws?ticket=` query string, where standard base64's `+/=`
+        // characters get mangled by URL query decoding.
+        $ticket = $this->base64UrlEncode(sprintf('%s:%s', $signData, $signature));
 
         return [
             'ticket'    => $ticket,

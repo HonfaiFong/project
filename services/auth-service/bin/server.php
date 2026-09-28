@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../../vendor/autoload.php';
 
+use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\IdGenerator\Snowflake;
+use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
 use Contracts\Gen\Auth\V1\AuthServiceInterface;
+use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
 use Services\AuthService\Infrastructure\Repository\PdoAuthRepository;
@@ -77,7 +80,7 @@ if (!$redis) {
     exit(1);
 }
 
-$snowflake = new Snowflake((int)(getenv('WORKER_ID') ?: 1));
+$snowflake = new Snowflake(WorkerId::resolve());
 $authRepo = new PdoAuthRepository($pdo, $snowflake);
 $jwtSecret = trim((string)getenv('JWT_SECRET'));
 $wsSecret = trim((string)getenv('WS_TICKET_SECRET'));
@@ -96,6 +99,7 @@ $handler = new AuthGrpcHandler($appService, $logger);
 $grpcService = new RoadRunnerAuthService($handler);
 $server = new Server(new Invoker());
 $server->registerService(AuthServiceInterface::class, $grpcService);
+$server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService());
 
 $logger->info('AuthService started with RoadRunner gRPC worker');
 $server->serve(Worker::create());

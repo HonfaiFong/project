@@ -31,12 +31,27 @@ func main() {
 	}
 	secret := os.Getenv("WS_TICKET_SECRET")
 	if secret == "" {
-		secret = "ws-ticket-secret-32-chars-key-abcdef"
+		log.Fatal("WS_TICKET_SECRET env is required (minimum 32 bytes, shared with auth-service)")
+	}
+	if len(secret) < 32 {
+		log.Fatal("WS_TICKET_SECRET must be at least 32 bytes")
 	}
 
 	logger := logging.NewLogger("realtime-gateway", "gw-01")
 	hub := connection.NewHub()
 	go hub.Run()
+
+	// Single-use enforcement for WS ticket nonces. In-memory keeps the
+	// Phase 1 single-instance skeleton dependency-free; a multi-replica
+	// gateway must switch this to a shared store (e.g. Redis SETNX).
+	nonces := auth.NewNonceStore()
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			nonces.GC()
+		}
+	}()
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -57,6 +72,14 @@ func main() {
 		if err != nil {
 			logger.Warn("", "", "", "WS ticket verification failed", map[string]any{"error": err.Error()})
 			http.Error(w, fmt.Sprintf(`{"code":1001007,"message":"ticket verification failed: %s"}`, err.Error()), http.StatusUnauthorized)
+			return
+		}
+
+		// Reject replays: the same ticket may open a connection only once
+		// within its TTL.
+		if !nonces.Consume(ticket.Nonce, time.Unix(ticket.ExpireAt, 0)) {
+			logger.Warn("", "", ticket.UserID, "WS ticket replay rejected", map[string]any{"nonce": ticket.Nonce})
+			http.Error(w, `{"code":1001007,"message":"ticket already used"}`, http.StatusUnauthorized)
 			return
 		}
 

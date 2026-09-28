@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Grpc;
 
+use Contracts\Gen\Common\V1\HealthCheckRequest;
+use Contracts\Gen\Common\V1\HealthCheckResponse;
 use Contracts\Gen\User\V1\BatchGetPersonasRequest;
 use Contracts\Gen\User\V1\BatchGetPersonasResponse;
 use Contracts\Gen\User\V1\BatchGetUsersRequest;
@@ -97,13 +99,24 @@ final class UserServiceClient
 
     public function updatePersona(string $personaId, string $userId, ?string $nickname, ?string $avatarKey, ?string $bio): array
     {
-        $response = $this->call('/user.v1.UserService/UpdatePersona', new UpdatePersonaRequest([
+        // UpdatePersonaRequest fields are proto3 `optional`: only set the keys that
+        // were actually provided, otherwise the server sees presence and overwrites
+        // the stored value with an empty string (PATCH would clear unspecified fields).
+        $fields = [
             'persona_id' => $personaId,
             'user_id'    => $userId,
-            'nickname'   => $nickname ?? '',
-            'avatar_key' => $avatarKey ?? '',
-            'bio'        => $bio ?? '',
-        ]), UpdatePersonaResponse::class);
+        ];
+        if ($nickname !== null) {
+            $fields['nickname'] = $nickname;
+        }
+        if ($avatarKey !== null) {
+            $fields['avatar_key'] = $avatarKey;
+        }
+        if ($bio !== null) {
+            $fields['bio'] = $bio;
+        }
+
+        $response = $this->call('/user.v1.UserService/UpdatePersona', new UpdatePersonaRequest($fields), UpdatePersonaResponse::class);
 
         return ['persona' => $this->persona($response->getPersona())];
     }
@@ -119,7 +132,12 @@ final class UserServiceClient
 
     public function checkHealth(): array
     {
-        return ['status' => 'SERVING'];
+        $response = $this->call('/common.v1.HealthService/Check', new HealthCheckRequest(), HealthCheckResponse::class);
+
+        return [
+            'status'  => $response->getStatus(),
+            'message' => $response->getMessage(),
+        ];
     }
 
     private function call(string $method, Message $request, string $responseClass): Message

@@ -8,6 +8,8 @@ use Contracts\Errors\ErrorCode;
 use Google\Protobuf\Internal\Message;
 use Grpc\BaseStub;
 use Grpc\ChannelCredentials;
+use const Grpc\STATUS_DEADLINE_EXCEEDED;
+use const Grpc\STATUS_OK;
 use Packages\GrpcCommon\GrpcClientContext;
 use RuntimeException;
 
@@ -28,14 +30,12 @@ final class UnaryGrpcClient extends BaseStub
         array $metadata = []
     ): Message {
         $options = GrpcClientContext::createCallOptions($timeoutMs, $metadata);
+        // 本项目的 grpc/grpc 版本按 list($className, $func) 解构反序列化器,
+        // 只认二元数组不认 Closure,第二个元素仅占位
         $call = $this->_simpleRequest(
             $method,
             $request,
-            static function (string $payload) use ($responseClass): Message {
-                $response = new $responseClass();
-                $response->mergeFromString($payload);
-                return $response;
-            },
+            [$responseClass, 'mergeFromString'],
             $options['metadata'],
             ['timeout' => $options['timeout']]
         );

@@ -7,6 +7,8 @@ namespace Apps\ApiGateway\Controller;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\ApiResponse;
+use Contracts\Errors\ErrorCode;
+use Contracts\Gen\Common\V1\HealthStatus;
 
 final class HealthController
 {
@@ -21,23 +23,40 @@ final class HealthController
         $services = [
             'api_gateway' => 'SERVING',
         ];
+        $healthy = true;
 
-        if ($this->authClient) {
-            try {
-                $res = $this->authClient->checkHealth();
-                $services['auth_service'] = ($res['status'] ?? 0) === 1 ? 'SERVING' : 'NOT_SERVING';
-            } catch (\Throwable $e) {
-                $services['auth_service'] = 'DOWN: ' . $e->getMessage();
+        $clients = [
+            'auth_service' => $this->authClient,
+            'user_service' => $this->userClient,
+        ];
+
+        foreach ($clients as $name => $client) {
+            if ($client === null) {
+                continue;
             }
+
+            try {
+                $res = $client->checkHealth();
+                $status = ($res['status'] ?? 0) === HealthStatus::HEALTH_STATUS_SERVING
+                    ? 'SERVING'
+                    : 'NOT_SERVING';
+            } catch (\Throwable $e) {
+                $status = 'DOWN: ' . $e->getMessage();
+            }
+
+            if ($status !== 'SERVING') {
+                $healthy = false;
+            }
+            $services[$name] = $status;
         }
 
-        if ($this->userClient) {
-            try {
-                $res = $this->userClient->checkHealth();
-                $services['user_service'] = ($res['status'] ?? 0) === 1 ? 'SERVING' : 'NOT_SERVING';
-            } catch (\Throwable $e) {
-                $services['user_service'] = 'DOWN: ' . $e->getMessage();
-            }
+        if (!$healthy) {
+            // Degraded: report 503 so orchestrators and load balancers stop routing.
+            return ApiResponse::error(
+                ErrorCode::SERVICE_UNAVAILABLE->value,
+                'one or more upstream services are unhealthy',
+                ['services' => $services]
+            );
         }
 
         return ApiResponse::success([

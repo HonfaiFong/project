@@ -70,7 +70,9 @@ final class JsonLogger
         if (is_resource($this->outputStream)) {
             fwrite($this->outputStream, $json);
         } else {
-            file_put_contents('php://stdout', $json);
+            // 默认走 STDERR:RoadRunner worker 的 STDOUT 被 goridge 协议独占,
+            // 直接写会破坏帧校验导致 worker 被 rr 杀掉
+            file_put_contents('php://stderr', $json);
         }
     }
 

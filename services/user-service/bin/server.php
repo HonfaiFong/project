@@ -4,9 +4,12 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../../vendor/autoload.php';
 
+use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\IdGenerator\Snowflake;
+use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
 use Packages\Outbox\OutboxRepository;
+use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Contracts\Gen\User\V1\UserServiceInterface;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Infrastructure\Repository\PdoPersonaRepository;
@@ -49,7 +52,7 @@ if (!$pdo) {
     exit(1);
 }
 
-$snowflake = new Snowflake((int)(getenv('WORKER_ID') ?: 2));
+$snowflake = new Snowflake(WorkerId::resolve());
 $userRepo = new PdoUserRepository($pdo);
 $personaRepo = new PdoPersonaRepository($pdo);
 $transactionManager = new PdoTransactionManager($pdo);
@@ -59,6 +62,7 @@ $appService = new UserApplicationService($userRepo, $personaRepo, $snowflake, $t
 $grpcService = new UserGrpcService($appService, $logger);
 $server = new Server(new Invoker());
 $server->registerService(UserServiceInterface::class, $grpcService);
+$server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService());
 
 $logger->info('UserService started with RoadRunner gRPC worker');
 $server->serve(Worker::create());

@@ -1,14 +1,15 @@
 version: '3'
 
 server:
-  command: php services/user-service/bin/server.php
+  command: php /app/services/user-service/bin/server.php
   relay: pipes
 
 grpc:
   listen: tcp://0.0.0.0:50052
   proto:
-    - contracts/proto/user/v1/user.proto
-    - contracts/proto/user/v1/persona.proto
+    - /app/contracts/proto/user/v1/user.proto
+    - /app/contracts/proto/user/v1/persona.proto
+    - /app/contracts/proto/common/v1/health.proto
   pool:
     num_workers: 2
 

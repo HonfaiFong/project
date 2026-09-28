@@ -20,9 +20,12 @@ type TicketPayload struct {
 }
 
 func VerifyTicket(ticketStr, secret string) (*TicketPayload, error) {
-	decodedBytes, err := base64.StdEncoding.DecodeString(ticketStr)
+	// Tickets are base64url without padding (RFC 4648 §5), matching the PHP
+	// auth service: they travel in the /ws?ticket= query string where standard
+	// base64's `+/=` would be mangled by URL query decoding.
+	decodedBytes, err := base64.RawURLEncoding.DecodeString(ticketStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid base64 ticket: %w", err)
+		return nil, fmt.Errorf("invalid base64url ticket: %w", err)
 	}
 
 	decoded := string(decodedBytes)
