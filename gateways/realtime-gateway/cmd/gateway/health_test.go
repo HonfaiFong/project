@@ -5,10 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 
 	"github.com/redis/go-redis/v9"
+	"social-backend/gateways/realtime-gateway/internal/connection"
 )
 
 type readinessPinger struct{ err error }
@@ -34,7 +34,7 @@ func TestReadinessFollowsRedis(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			newReadinessHandler(readinessPinger{tc.err}, &atomic.Bool{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+			newReadinessHandler(readinessPinger{tc.err}, connection.NewHub()).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
 			if response.Code != tc.want {
 				t.Fatalf("status = %d, want %d", response.Code, tc.want)
 			}
@@ -43,10 +43,10 @@ func TestReadinessFollowsRedis(t *testing.T) {
 }
 
 func TestReadinessStopsDuringDrain(t *testing.T) {
-	var draining atomic.Bool
-	draining.Store(true)
+	hub := connection.NewHub()
+	hub.StartDraining()
 	response := httptest.NewRecorder()
-	newReadinessHandler(readinessPinger{}, &draining).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	newReadinessHandler(readinessPinger{}, hub).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", response.Code)
 	}

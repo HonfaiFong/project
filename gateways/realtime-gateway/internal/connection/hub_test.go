@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,6 +83,45 @@ func TestDrainClosesWebSocketWithGoingAway(t *testing.T) {
 	if hub.Register(NewClient(hub, nil, "user", "persona", "device", "late")) {
 		t.Fatal("draining hub accepted a client")
 	}
+}
+
+func TestDrainReturnsWhenPumpDoesNotExit(t *testing.T) {
+	hub := NewHub()
+	registered := make(chan *Client, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		client := NewClient(hub, conn, "user", "persona", "device", "conn")
+		if !hub.Register(client) {
+			_ = conn.Close()
+			return
+		}
+		registered <- client
+	}))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	client := <-registered
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	returned := make(chan error, 1)
+	go func() { returned <- hub.Drain(ctx) }()
+	select {
+	case err := <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("drain error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("drain waited indefinitely for a stuck pump")
+	}
+	hub.Unregister(client)
+	hub.PumpDone()
+	hub.PumpDone()
 }
 
 func TestReadLimitRejectsOversizedMessage(t *testing.T) {

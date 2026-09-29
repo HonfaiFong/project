@@ -37,6 +37,8 @@
   - `ERROR` — ⏳
 
 ## 4. Dependencies
+- Build with Go 1.27 in development, CI, and production. The `go 1.24`
+  directive in `go.mod` remains the language compatibility baseline.
 - WS_TICKET_SECRET shared with auth-service (required, min 32 bytes).
 - Redis is required for shared WS ticket replay protection. The gateway fails
   closed if Redis is unavailable.
@@ -47,6 +49,7 @@
   connect. Inbound WebSocket messages are limited to 64 KiB.
 - A full outbound queue disconnects the client for resynchronization, except
   for `TYPING` events, which may be dropped.
+- Logs use `SERVICE_INSTANCE_ID` when set, otherwise `HOSTNAME` (or `unknown`).
 
 ## 5. Local Run
 ```bash

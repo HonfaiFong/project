@@ -51,10 +51,17 @@ func (h *Hub) IsDraining() bool {
 	return h.draining
 }
 
-// Drain rejects new clients and asks every existing writer to send GoingAway.
-func (h *Hub) Drain(ctx context.Context) error {
+// StartDraining stops new registrations before HTTP shutdown begins.
+func (h *Hub) StartDraining() {
 	h.mu.Lock()
 	h.draining = true
+	h.mu.Unlock()
+}
+
+// Drain asks existing writers to send GoingAway and waits for both pumps.
+func (h *Hub) Drain(ctx context.Context) error {
+	h.StartDraining()
+	h.mu.Lock()
 	clients := make([]*Client, 0)
 	for _, userClients := range h.clients {
 		for _, client := range userClients {
@@ -73,7 +80,6 @@ func (h *Hub) Drain(ctx context.Context) error {
 		for _, client := range clients {
 			_ = client.Conn.Close()
 		}
-		<-done
 		return ctx.Err()
 	}
 }
@@ -122,8 +128,9 @@ func (h *Hub) PushToUser(userID string, message []byte) bool {
 		return false
 	}
 	pushed := false
+	ephemeral := isEphemeral(message)
 	for _, client := range h.clients[userID] {
-		if h.enqueue(client, message, isEphemeral(message)) {
+		if h.enqueue(client, message, ephemeral) {
 			pushed = true
 		}
 	}

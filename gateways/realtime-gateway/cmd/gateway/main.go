@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -62,15 +61,14 @@ func run() error {
 		return fmt.Errorf("Redis unavailable for WS ticket replay protection: %w", err)
 	}
 
-	logger := logging.NewLogger("realtime-gateway", "gw-01")
+	logger := logging.NewLogger("realtime-gateway", envDefault("SERVICE_INSTANCE_ID", envDefault("HOSTNAME", "unknown")))
 	hub := connection.NewHub()
-	var draining atomic.Bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "SERVING", "service": "realtime-gateway"})
 	})
-	readiness := newReadinessHandler(redisClient, &draining)
+	readiness := newReadinessHandler(redisClient, hub)
 	mux.Handle("/ready", readiness)
 	mux.Handle("/health", readiness)
 	var nonces auth.NonceStore = auth.NewRedisNonceStore(redisClient)
@@ -92,11 +90,11 @@ func run() error {
 	case <-signalCtx.Done():
 	case serveErr = <-serverErr:
 	}
+	hub.StartDraining()
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		serveErr = nil
 	}
 	logger.Info("", "", "", "Shutting down Realtime Gateway...", nil)
-	draining.Store(true)
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer shutdownCancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {

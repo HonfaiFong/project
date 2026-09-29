@@ -41,6 +41,10 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.hub.IsDraining() {
+		http.Error(w, "gateway shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		h.logger.Error("", "", ticket.UserID, "WebSocket upgrade error", map[string]any{"error": err.Error()})
@@ -87,6 +91,10 @@ func (h *wsHandler) consumeTicket(w http.ResponseWriter, r *http.Request) (*auth
 	if err != nil {
 		h.logger.Warn("", "", "", "WS ticket verification failed", map[string]any{"error": err.Error()})
 		http.Error(w, fmt.Sprintf(`{"code":1001007,"message":"ticket verification failed: %s"}`, err.Error()), http.StatusUnauthorized)
+		return nil, false
+	}
+	if h.hub.IsDraining() {
+		http.Error(w, "gateway shutting down", http.StatusServiceUnavailable)
 		return nil, false
 	}
 	consumed, err := h.nonces.Consume(r.Context(), ticket.Nonce, time.Unix(ticket.ExpireAt, 0))

@@ -8,7 +8,7 @@
 
 - **外部入口**:
   - HTTP REST BFF: `apps/api-gateway` (Webman 2.x / PHP 8.4, 负责鉴权入口、参数校验、gRPC Client 聚合，**禁止直接访问业务数据库**)。
-  - 实时连接 Gateway: `gateways/realtime-gateway` (Go 1.24 + WebSocket；当前 Skeleton 使用 JSON Envelope；Phase 3 切换 Protobuf Binary Envelope，仅负责连接管理、心跳、Ticket 鉴权、消息 Push，**禁止业务 SQL 耦合**)。
+  - 实时连接 Gateway: `gateways/realtime-gateway` (Go 1.27 + WebSocket；当前 Skeleton 使用 JSON Envelope；Phase 3 切换 Protobuf Binary Envelope，仅负责连接管理、心跳、Ticket 鉴权、消息 Push，**禁止业务 SQL 耦合**)。
 - **内部核心微服务**:
   - 同步调用：全部基于 **gRPC**，携带 trace_id、request_id、user_id 与 deadline。
   - 异步通信：基于 **RabbitMQ Streams（领域事件）和 Quorum Queues（任务）**；领域事件写入 Transactional Outbox，消费者按事件 ID 幂等处理。
@@ -46,7 +46,7 @@
 | 服务目录 | 服务名称 | 运行时 / 技术栈 | 职责与边界 |
 | :--- | :--- | :--- | :--- |
 | `apps/api-gateway` | API Gateway (BFF) | Webman / PHP 8.4 | 对外 HTTP API 入口、JWT 认证、gRPC 客户端聚合 (**Phase 1 已实现**) |
-| `gateways/realtime-gateway` | Realtime Gateway | Go 1.24 / WebSocket | 实时长连接维持、心跳、多端连接管理、下行 Push (**Skeleton**：连接/心跳/票据校验已实现，当前使用 JSON Envelope，Phase 3 切换 Protobuf Binary Envelope；消息协议与 Presence 见其 README) |
+| `gateways/realtime-gateway` | Realtime Gateway | Go 1.27 / WebSocket | 实时长连接维持、心跳、多端连接管理、下行 Push (**Skeleton**：连接/心跳/票据校验已实现，当前使用 JSON Envelope，Phase 3 切换 Protobuf Binary Envelope；消息协议与 Presence 见其 README) |
 | `services/auth-service` | AuthService | RoadRunner / PHP 8.4 | 账号认证、Token 签发 / 轮转、设备管理、WS Ticket (**Phase 1 已实现**) |
 | `services/user-service` | UserService | RoadRunner / PHP 8.4 | 用户主体、Persona 分身管理 (**User != Persona**) (**Phase 1 已实现**) |
 | `services/content-service` | ContentService | RoadRunner / PHP 8.4 | 帖子、图文媒体元数据、一级与回复评论 (**骨架，未实现**) |
@@ -71,7 +71,7 @@
 全部依赖均封装于 Docker 与 `compose.yaml` 中：
 - **Docker Engine**: >= 24.0.0
 - **Docker Compose**: >= v2.20.0
-- (本地开发可选): PHP >= 8.2 (带 pdo_mysql, redis, bcmath), Go >= 1.22, Composer >= 2.0
+- (本地开发可选): PHP >= 8.2 (带 pdo_mysql, redis, bcmath), Go >= 1.27, Composer >= 2.0
 
 ---
 
