@@ -47,13 +47,16 @@ func main() {
 	cancel()
 	var nonces auth.NonceStore = auth.NewRedisNonceStore(redisClient)
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status":  "SERVING",
 			"service": "realtime-gateway",
 		})
 	})
+	readiness := newReadinessHandler(redisClient)
+	http.Handle("/ready", readiness)
+	http.Handle("/health", readiness)
 
 	http.Handle("/ws", newWSHandler(secret, nonces, hub, logger))
 

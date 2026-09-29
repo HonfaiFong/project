@@ -9,7 +9,7 @@ use Throwable;
 final class OutboxRelay
 {
     public function __construct(
-        private readonly OutboxRepository $outbox,
+        private readonly OutboxRelayStore $outbox,
         private readonly EventPublisher $publisher,
     ) {
     }

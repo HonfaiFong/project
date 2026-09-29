@@ -56,8 +56,6 @@ services:
 
   rabbitmq-init:
     image: curlimages/curl:8.16.0
-    profiles:
-      - init
     environment:
       RABBITMQ_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
@@ -71,7 +69,7 @@ services:
         condition: service_healthy
 
   rustfs:
-    image: rustfs/rustfs:1.0.0-rc.6-glibc
+    image: ghcr.io/rustfs/rustfs:1.0.0-glibc
     container_name: social-rustfs
     restart: unless-stopped
     profiles:
@@ -221,6 +219,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
 
   api-gateway:
     image: project-php-runtime:rabbitmq

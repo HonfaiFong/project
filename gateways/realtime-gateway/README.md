@@ -1,6 +1,6 @@
 # Realtime Gateway
 
-> **Status: Skeleton (Phase 1).** What is implemented today: `/health`, `/ws`
+> **Status: Skeleton (Phase 1).** What is implemented today: `/live`, `/ready`, `/health`, `/ws`
 > acceptance with ticket verification (base64url + HMAC-SHA256, single-use
 > nonce backed by Redis), in-memory connection registry, and PING/PONG heartbeat. Everything
 > marked ⏳ below is specified but **not implemented yet**.
@@ -25,7 +25,9 @@
 ## 3. Endpoints & Protocol
 - `GET /ws?ticket=<token>` — ticket is created via
   `POST /api/v1/ws/ticket` on the API Gateway and is single-use.
-- `GET /health`
+- `GET /live` — process liveness.
+- `GET /ready` — Redis-backed readiness; returns 503 when Redis is unavailable.
+- `GET /health` — compatibility alias for `/ready`.
 - WebSocket Envelopes:
   - `AUTH_OK` (sent on connect), `PING`, `PONG` — **implemented**
   - `MESSAGE_SEND`, `MESSAGE_ACK`, `MESSAGE_PUSH` — ⏳
@@ -42,5 +44,5 @@
 ```bash
 docker compose up -d realtime-gateway
 # Or directly:
-WS_TICKET_SECRET=<same-as-auth-service> REDIS_HOST=localhost:6379 go run gateways/realtime-gateway/cmd/gateway/main.go
+WS_TICKET_SECRET=<same-as-auth-service> REDIS_HOST=localhost:6379 go run ./gateways/realtime-gateway/cmd/gateway
 ```

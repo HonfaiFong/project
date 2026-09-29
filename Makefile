@@ -32,7 +32,7 @@ infra-up:
 	$(MAKE) broker-init
 
 broker-init:
-	docker compose --profile init run --rm rabbitmq-init
+	docker compose run --rm rabbitmq-init
 
 storage-up:
 	docker compose --profile storage up -d rustfs
