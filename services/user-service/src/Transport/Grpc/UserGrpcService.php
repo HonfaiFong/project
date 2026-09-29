@@ -176,10 +176,9 @@ final class UserGrpcService implements UserServiceInterface
         try {
             return $operation();
         } catch (GRPCException $e) {
-            $code = (int)$e->getCode();
-            if ($code > 0) {
-                $this->attachAppErrorTrailer($ctx, $code);
-            }
+            // GRPCException::getCode() is the gRPC transport status (e.g. INVALID_ARGUMENT = 3),
+            // never a business ErrorCode, so it must not be propagated as x-app-error-code.
+            // The gateway client maps the transport status via its own fallback table.
             throw $e;
         } catch (Throwable $e) {
             $this->logger->error("Error in {$method}: " . $e->getMessage(), [
@@ -187,9 +186,9 @@ final class UserGrpcService implements UserServiceInterface
                 'error_code' => $e->getCode(),
             ]);
 
-            $code = (int)$e->getCode();
-            if ($code > 0) {
-                $this->attachAppErrorTrailer($ctx, $code);
+            $error = $this->appErrorCode((int)$e->getCode());
+            if ($error !== null) {
+                $this->attachAppErrorTrailer($ctx, $error->value);
             }
 
             throw GRPCException::create(
@@ -203,12 +202,21 @@ final class UserGrpcService implements UserServiceInterface
         }
     }
 
+    /**
+     * Only contract ErrorCode values may travel in `x-app-error-code`: the gateway client treats a
+     * present trailer as the authoritative business code and skips its gRPC status fallback
+     * entirely. Infrastructure exception codes (PDO 23000, arbitrary codes) resolve to null, and
+     * OK (0) is excluded too -- it means success, not a failure to publish.
+     */
+    private function appErrorCode(int $code): ?ErrorCode
+    {
+        $error = $code > 0 ? ErrorCode::tryFrom($code) : null;
+
+        return $error === ErrorCode::OK ? null : $error;
+    }
+
     private function attachAppErrorTrailer(ContextInterface $ctx, int $code): void
     {
-        if ($code <= 0) {
-            return;
-        }
-
         $trailers = $ctx->getValue(ResponseTrailers::class);
         if ($trailers instanceof ResponseTrailers) {
             $trailers->set('x-app-error-code', (string)$code);

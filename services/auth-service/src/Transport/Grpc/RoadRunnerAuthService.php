@@ -43,11 +43,11 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             ],
             fn (array $result): LoginResponse => new LoginResponse([
                 'user_id'                  => $this->uint64($result['user_id'] ?? '0', 'user_id'),
-                'access_token'             => (string)$result['access_token'],
-                'refresh_token'            => (string)$result['refresh_token'],
-                'access_token_expires_at'  => (string)$result['access_token_expires_at'],
-                'refresh_token_expires_at' => (string)$result['refresh_token_expires_at'],
-                'is_new_user'              => (bool)$result['is_new_user'],
+                'access_token'             => (string)($result['access_token'] ?? ''),
+                'refresh_token'            => (string)($result['refresh_token'] ?? ''),
+                'access_token_expires_at'  => (string)($result['access_token_expires_at'] ?? ''),
+                'refresh_token_expires_at' => (string)($result['refresh_token_expires_at'] ?? ''),
+                'is_new_user'              => (bool)($result['is_new_user'] ?? false),
             ])
         );
     }
@@ -135,46 +135,50 @@ final class RoadRunnerAuthService implements AuthServiceInterface
     ): object {
         try {
             $result = $this->handler->handle($method, $request, $this->metadata($ctx));
-            $code = (int)($result['code'] ?? 0);
+            $error = $this->appErrorCode((int)($result['code'] ?? 0));
 
-            if ($code !== 0) {
-                $this->attachAppErrorTrailer($ctx, $code);
-                $this->throwMappedError($code, (string)($result['message'] ?? 'RPC failed'));
+            if ($error !== null) {
+                $this->attachAppErrorTrailer($ctx, $error->value);
+                $this->throwMappedError($error);
             }
 
             return $responseFactory($result);
         } catch (GRPCException $e) {
             throw $e;
         } catch (Throwable $e) {
-            $code = (int)$e->getCode();
-            if ($code > 0) {
-                $this->attachAppErrorTrailer($ctx, $code);
+            $error = $this->appErrorCode((int)$e->getCode());
+            if ($error !== null) {
+                $this->attachAppErrorTrailer($ctx, $error->value);
             }
+
             throw $this->mapThrowable($e);
         }
     }
 
+    /**
+     * Only contract ErrorCode values may travel in `x-app-error-code`: the gateway client treats a
+     * present trailer as the authoritative business code and skips its gRPC status fallback
+     * entirely. Infrastructure exception codes (PDO 23000, arbitrary codes) resolve to null, and
+     * OK (0) is excluded too -- it means success, not a failure to publish.
+     */
+    private function appErrorCode(int $code): ?ErrorCode
+    {
+        $error = $code > 0 ? ErrorCode::tryFrom($code) : null;
+
+        return $error === ErrorCode::OK ? null : $error;
+    }
+
     private function attachAppErrorTrailer(ContextInterface $ctx, int $code): void
     {
-        if ($code <= 0) {
-            return;
-        }
-
         $trailers = $ctx->getValue(ResponseTrailers::class);
         if ($trailers instanceof ResponseTrailers) {
             $trailers->set('x-app-error-code', (string)$code);
         }
     }
 
-    private function throwMappedError(int $code, string $fallback): never
+    private function throwMappedError(ErrorCode $error): never
     {
-        $error = ErrorCode::tryFrom($code);
-        $status = $this->statusFor($code, $error);
-        $message = $error?->message() ?? ($status === StatusCode::INTERNAL
-            ? ErrorCode::INTERNAL_SERVER_ERROR->message()
-            : $fallback);
-
-        throw GRPCException::create($message, $status);
+        throw GRPCException::create($error->message(), $this->statusFor($error->value, $error));
     }
 
     private function mapThrowable(Throwable $e): GRPCException
@@ -183,7 +187,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             return GRPCException::create('invalid request arguments', StatusCode::INVALID_ARGUMENT, $e);
         }
 
-        $error = ErrorCode::tryFrom((int)$e->getCode());
+        $error = $this->appErrorCode((int)$e->getCode());
         $status = $this->statusFor((int)$e->getCode(), $error);
         $message = $error?->message() ?? ErrorCode::INTERNAL_SERVER_ERROR->message();
 
