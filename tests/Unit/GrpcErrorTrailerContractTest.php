@@ -187,11 +187,9 @@ final class GrpcErrorTrailerContractTest extends TestCase
                 var_export($response->getSuccess(), true)
             ));
         } catch (GRPCException $e) {
-            $this->assertNotSame(
-                StatusCode::OK,
-                $e->getCode(),
-                'An unknown non-zero code must never surface as a successful RPC'
-            );
+            // Pin the exact transport contract: a fault inside this service is INTERNAL(13),
+            // not UNKNOWN(2). A loose assertion here would let the error chain drift again.
+            $this->assertSame(StatusCode::INTERNAL, $e->getCode());
             $this->assertSame(ErrorCode::INTERNAL_SERVER_ERROR->message(), $e->getMessage());
             $this->assertStringNotContainsString('SQLSTATE', $e->getMessage());
         }

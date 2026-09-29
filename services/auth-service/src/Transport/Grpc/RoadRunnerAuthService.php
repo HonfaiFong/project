@@ -147,7 +147,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
                     $this->attachAppErrorTrailer($ctx, $error->value);
                 }
 
-                $this->throwMappedError($code, $error);
+                $this->throwMappedError($error);
             }
 
             return $responseFactory($result);
@@ -184,14 +184,15 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         }
     }
 
-    private function throwMappedError(int $code, ?ErrorCode $error): never
+    private function throwMappedError(?ErrorCode $error): never
     {
         if ($error === null) {
-            // Unknown non-zero handler code: fail closed as an internal error instead of
-            // letting the caller treat the RPC as succeeded.
+            // Unknown non-zero handler code: this is a fault inside this service, not an
+            // unclassifiable one, so report INTERNAL rather than UNKNOWN and fail closed
+            // instead of letting the caller treat the RPC as succeeded.
             throw GRPCException::create(
                 ErrorCode::INTERNAL_SERVER_ERROR->message(),
-                $this->statusFor($code, null)
+                StatusCode::INTERNAL
             );
         }
 
