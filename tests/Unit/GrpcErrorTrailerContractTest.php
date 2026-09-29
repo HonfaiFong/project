@@ -22,17 +22,19 @@ use Services\AuthService\Domain\Client\UserDirectoryInterface;
 use Services\AuthService\Domain\Entity\Device;
 use Services\AuthService\Domain\Entity\RefreshToken;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
-use Packages\Outbox\NullEventOutbox;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
+use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
+use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
 use Services\UserService\Domain\Repository\PersonaRepositoryInterface;
 use Services\UserService\Domain\Repository\UserRepositoryInterface;
-use Services\UserService\Infrastructure\Repository\PassThroughTransactionManager;
 use Services\UserService\Transport\Grpc\UserGrpcService;
 use Spiral\RoadRunner\GRPC\Context;
+use Tests\Support\PassThroughTransactionManager;
+use Tests\Support\RecordingEventOutbox;
 use Spiral\RoadRunner\GRPC\ContextInterface;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
 use Spiral\RoadRunner\GRPC\ResponseTrailers;
@@ -84,7 +86,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
             personaRepo: new EmptyPersonaRepository(),
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
-            outbox: new NullEventOutbox(),
+            outbox: new RecordingEventOutbox(),
         );
 
         $ctx = $this->context();
@@ -265,7 +267,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
             personaRepo: new EmptyPersonaRepository(),
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
-            outbox: new NullEventOutbox(),
+            outbox: new RecordingEventOutbox(),
         );
 
         $ctx = $this->context();
@@ -312,8 +314,8 @@ final class GrpcErrorTrailerContractTest extends TestCase
                     }
                 }
                 : new EmptyAuthRepository(),
-            jwtSecret: 'test-secret-at-least-32-chars-long-12345',
-            wsTicketSecret: 'test-ws-secret-at-least-32-chars-12345',
+            jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
+            wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
             credentialVerifier: new LoginCredentialVerifier('local', 'dev-code'),
             userDirectory: new class ($userDirectoryFails) implements UserDirectoryInterface {
                 public function __construct(private readonly bool $fails)

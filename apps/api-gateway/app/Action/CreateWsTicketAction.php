@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Action;
 
-use Apps\ApiGateway\Grpc\AuthServiceClient;
-use Apps\ApiGateway\Grpc\UserServiceClient;
 use Contracts\Errors\ErrorCode;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
@@ -13,8 +11,8 @@ use RuntimeException;
 final class CreateWsTicketAction
 {
     public function __construct(
-        private readonly AuthServiceClient $authClient,
-        private readonly UserServiceClient $userClient
+        private readonly WsTicketClient $authClient,
+        private readonly PersonaLookup $userClient
     ) {
     }
 

@@ -6,20 +6,15 @@ namespace Apps\ApiGateway\Controller;
 
 use Apps\ApiGateway\Action\CreateWsTicketAction;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
-use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 
 final class AuthController
 {
-    private readonly CreateWsTicketAction $createWsTicketAction;
-
     public function __construct(
         private readonly AuthServiceClient $authClient,
-        private readonly UserServiceClient $userClient,
-        ?CreateWsTicketAction $createWsTicketAction = null
+        private readonly CreateWsTicketAction $createWsTicketAction
     ) {
-        $this->createWsTicketAction = $createWsTicketAction ?? new CreateWsTicketAction($authClient, $userClient);
     }
 
     public function login(array $body, array $headers): array

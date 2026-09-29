@@ -15,22 +15,16 @@ use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 
 final class AuthApplicationService
 {
-    private readonly JwtTokenCodec $jwtCodec;
-    private readonly WsTicketIssuer $wsTicketIssuer;
-
     public function __construct(
         private readonly AuthRepositoryInterface $authRepo,
-        string|JwtTokenCodec $jwtSecret,
-        string|WsTicketIssuer $wsTicketSecret,
+        private readonly JwtTokenCodec $jwtCodec,
+        private readonly WsTicketIssuer $wsTicketIssuer,
         private readonly CredentialVerifierInterface $credentialVerifier,
         private readonly UserDirectoryInterface $userDirectory,
         private readonly int $accessTokenTtl = 7200,      // 2 hours
         private readonly int $refreshTokenTtl = 2592000,   // 30 days
-        int $wsTicketTtl = 60,                            // 60 seconds per spec line 1504
         private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null
     ) {
-        $this->jwtCodec = is_string($jwtSecret) ? new JwtTokenCodec($jwtSecret) : $jwtSecret;
-        $this->wsTicketIssuer = is_string($wsTicketSecret) ? new WsTicketIssuer($wsTicketSecret, $wsTicketTtl) : $wsTicketSecret;
     }
 
     /**

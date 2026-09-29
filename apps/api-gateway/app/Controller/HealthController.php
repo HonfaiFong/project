@@ -12,33 +12,12 @@ use Throwable;
 
 final class HealthController
 {
-    /** @var array<string, HealthCheckClient> */
-    private readonly array $upstreamClients;
-
     /**
-     * Accepts either a named map of clients:
-     *   ['auth_service' => $authClient, 'user_service' => $userClient]
-     * or positional clients for backward compatibility:
-     *   ($authClient, $userClient)
-     *
-     * @param array<string, HealthCheckClient>|HealthCheckClient|null $clientsOrAuthClient
+     * @param array<string, HealthCheckClient> $upstreamClients
      */
     public function __construct(
-        array|HealthCheckClient|null $clientsOrAuthClient = null,
-        ?HealthCheckClient $userClient = null
+        private readonly array $upstreamClients = []
     ) {
-        if (is_array($clientsOrAuthClient)) {
-            $this->upstreamClients = $clientsOrAuthClient;
-        } else {
-            $clients = [];
-            if ($clientsOrAuthClient !== null) {
-                $clients['auth_service'] = $clientsOrAuthClient;
-            }
-            if ($userClient !== null) {
-                $clients['user_service'] = $userClient;
-            }
-            $this->upstreamClients = $clients;
-        }
     }
 
     public function check(): array

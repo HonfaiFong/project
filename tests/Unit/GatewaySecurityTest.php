@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use Apps\ApiGateway\Action\CreateWsTicketAction;
+use Apps\ApiGateway\Controller\AuthController;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\PersonaPresenter;
 use Contracts\Errors\ErrorCode;
 use Tests\TestCase;
-use Apps\ApiGateway\Controller\AuthController;
 
 final class GatewaySecurityTest extends TestCase
 {
@@ -30,10 +31,10 @@ final class GatewaySecurityTest extends TestCase
 
     public function testLoginRejectsMissingCredentialsBeforeCreatingUser(): void
     {
-        $controller = new AuthController(
-            new AuthServiceClient('127.0.0.1:1'),
-            new UserServiceClient('127.0.0.1:1')
-        );
+        $authClient = new AuthServiceClient('127.0.0.1:1');
+        $userClient = new UserServiceClient('127.0.0.1:1');
+        $action = new CreateWsTicketAction($authClient, $userClient);
+        $controller = new AuthController($authClient, $action);
 
         $response = $controller->login(['phone' => '+8613800000000'], []);
         $body = json_decode($response['body'], true);
@@ -43,10 +44,10 @@ final class GatewaySecurityTest extends TestCase
 
     public function testLogoutRejectsMissingAccessToken(): void
     {
-        $controller = new AuthController(
-            new AuthServiceClient('127.0.0.1:1'),
-            new UserServiceClient('127.0.0.1:1')
-        );
+        $authClient = new AuthServiceClient('127.0.0.1:1');
+        $userClient = new UserServiceClient('127.0.0.1:1');
+        $action = new CreateWsTicketAction($authClient, $userClient);
+        $controller = new AuthController($authClient, $action);
 
         $response = $controller->logout(['refresh_token' => 'refresh-token'], []);
         $body = json_decode($response['body'], true);

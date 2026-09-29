@@ -15,6 +15,8 @@ use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
 use Contracts\Gen\Auth\V1\DeviceInfo;
 use Contracts\Gen\Auth\V1\LoginRequest;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
+use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
+use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
 use Spiral\RoadRunner\GRPC\Context;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
@@ -150,11 +152,11 @@ final class AuthServiceTest extends TestCase
         };
         $this->authService = new AuthApplicationService(
             authRepo: $this->repo,
-            jwtSecret: 'test-secret-at-least-32-chars-long-12345',
-            wsTicketSecret: 'test-ws-secret-at-least-32-chars-12345',
-            accessTokenRevocationStore: $this->revocationStore,
+            jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
+            wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
             credentialVerifier: new LoginCredentialVerifier('local', 'dev-1234'),
-            userDirectory: $userDirectory
+            userDirectory: $userDirectory,
+            accessTokenRevocationStore: $this->revocationStore
         );
     }
 

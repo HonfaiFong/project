@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use Apps\ApiGateway\Action\CreateWsTicketAction;
-use Apps\ApiGateway\Grpc\AuthServiceClient;
-use Apps\ApiGateway\Grpc\UserServiceClient;
+use Apps\ApiGateway\Action\PersonaLookup;
+use Apps\ApiGateway\Action\WsTicketClient;
 use Contracts\Errors\ErrorCode;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
@@ -17,8 +17,8 @@ final class CreateWsTicketActionTest extends TestCase
     public function testRejectsMismatchedPersonaIds(): void
     {
         $action = new CreateWsTicketAction(
-            new AuthServiceClient('127.0.0.1:1'),
-            new UserServiceClient('127.0.0.1:1')
+            $this->createMock(WsTicketClient::class),
+            $this->createMock(PersonaLookup::class)
         );
 
         $this->expectException(RuntimeException::class);
@@ -32,8 +32,8 @@ final class CreateWsTicketActionTest extends TestCase
     public function testRejectsEmptyUserIdOrPersonaId(): void
     {
         $action = new CreateWsTicketAction(
-            new AuthServiceClient('127.0.0.1:1'),
-            new UserServiceClient('127.0.0.1:1')
+            $this->createMock(WsTicketClient::class),
+            $this->createMock(PersonaLookup::class)
         );
 
         $this->expectException(RuntimeException::class);
@@ -46,7 +46,7 @@ final class CreateWsTicketActionTest extends TestCase
 
     public function testRejectsPersonaNotOwnedByUser(): void
     {
-        $userClient = $this->createMock(UserServiceClient::class);
+        $userClient = $this->createMock(PersonaLookup::class);
         $userClient->method('getPersona')->willReturn([
             'persona' => [
                 'id'      => '30001',
@@ -56,7 +56,7 @@ final class CreateWsTicketActionTest extends TestCase
         ]);
 
         $action = new CreateWsTicketAction(
-            new AuthServiceClient('127.0.0.1:1'),
+            $this->createMock(WsTicketClient::class),
             $userClient
         );
 
@@ -72,7 +72,7 @@ final class CreateWsTicketActionTest extends TestCase
 
     public function testRejectsInactivePersona(): void
     {
-        $userClient = $this->createMock(UserServiceClient::class);
+        $userClient = $this->createMock(PersonaLookup::class);
         $userClient->method('getPersona')->willReturn([
             'persona' => [
                 'id'      => '30001',
@@ -82,7 +82,7 @@ final class CreateWsTicketActionTest extends TestCase
         ]);
 
         $action = new CreateWsTicketAction(
-            new AuthServiceClient('127.0.0.1:1'),
+            $this->createMock(WsTicketClient::class),
             $userClient
         );
 
@@ -98,7 +98,7 @@ final class CreateWsTicketActionTest extends TestCase
 
     public function testElevatesTraceContextAndIssuesTicket(): void
     {
-        $userClient = $this->createMock(UserServiceClient::class);
+        $userClient = $this->createMock(PersonaLookup::class);
         $userClient->method('getPersona')->willReturn([
             'persona' => [
                 'id'      => '30001',
@@ -107,7 +107,7 @@ final class CreateWsTicketActionTest extends TestCase
             ],
         ]);
 
-        $authClient = $this->createMock(AuthServiceClient::class);
+        $authClient = $this->createMock(WsTicketClient::class);
         $authClient->method('createWsTicket')->willReturn([
             'ticket'     => 'test-ticket-xyz',
             'expires_at' => '1700000060',

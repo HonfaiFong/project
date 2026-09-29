@@ -13,7 +13,7 @@ final class HealthControllerTest extends TestCase
 {
     public function testServesWhenNoUpstreamClientsAreWired(): void
     {
-        $controller = new HealthController(null, null);
+        $controller = new HealthController();
 
         $response = $controller->check();
         $body = json_decode($response['body'], true);
@@ -26,10 +26,9 @@ final class HealthControllerTest extends TestCase
 
     public function testDegradesTo503WhenUpstreamIsUnreachable(): void
     {
-        $controller = new HealthController(
-            new AuthServiceClient('127.0.0.1:1'),
-            null
-        );
+        $controller = new HealthController([
+            'auth_service' => new AuthServiceClient('127.0.0.1:1'),
+        ]);
 
         $response = $controller->check();
         $body = json_decode($response['body'], true);

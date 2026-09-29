@@ -15,6 +15,8 @@ use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
 use Services\AuthService\Infrastructure\Client\GrpcUserDirectoryClient;
 use Services\AuthService\Infrastructure\Repository\PdoAuthRepository;
+use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
+use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
@@ -96,13 +98,16 @@ if (!$credentialVerifier->isDevelopment() && !$credentialVerifier->hasProvider()
 $userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
 $userDirectory = new GrpcUserDirectoryClient($userServiceTarget);
 
+$jwtCodec = new JwtTokenCodec($jwtSecret);
+$wsTicketIssuer = new WsTicketIssuer($wsSecret, 60);
+
 $appService = new AuthApplicationService(
     authRepo: $authRepo,
-    jwtSecret: $jwtSecret,
-    wsTicketSecret: $wsSecret,
-    accessTokenRevocationStore: $accessTokenRevocationStore,
+    jwtCodec: $jwtCodec,
+    wsTicketIssuer: $wsTicketIssuer,
     credentialVerifier: $credentialVerifier,
-    userDirectory: $userDirectory
+    userDirectory: $userDirectory,
+    accessTokenRevocationStore: $accessTokenRevocationStore
 );
 $grpcService = new RoadRunnerAuthService($appService, $logger);
 $server = new Server(new Invoker());

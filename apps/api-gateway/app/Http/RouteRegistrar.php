@@ -24,7 +24,7 @@ final class RouteRegistrar
         $authClient = new AuthServiceClient(getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051');
         $userClient = new UserServiceClient(getenv('GRPC_USER_SERVICE') ?: 'user-service:50052');
         $createWsTicketAction = new CreateWsTicketAction($authClient, $userClient);
-        $authController = new AuthController($authClient, $userClient, $createWsTicketAction);
+        $authController = new AuthController($authClient, $createWsTicketAction);
         $userController = new UserController($userClient);
         $personaController = new PersonaController($userClient);
         $healthController = new HealthController([

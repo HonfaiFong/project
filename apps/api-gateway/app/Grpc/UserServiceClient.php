@@ -32,12 +32,13 @@ use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
 use RuntimeException;
 use const Grpc\STATUS_DEADLINE_EXCEEDED;
+use Apps\ApiGateway\Action\PersonaLookup;
 use const Grpc\STATUS_INVALID_ARGUMENT;
 use const Grpc\STATUS_NOT_FOUND;
 use const Grpc\STATUS_PERMISSION_DENIED;
 use const Grpc\STATUS_RESOURCE_EXHAUSTED;
 
-class UserServiceClient implements HealthCheckClient
+final class UserServiceClient implements HealthCheckClient, PersonaLookup
 {
     private ?UnaryGrpcClient $client = null;
 

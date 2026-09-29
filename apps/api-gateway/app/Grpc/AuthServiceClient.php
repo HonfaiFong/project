@@ -22,12 +22,13 @@ use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
 use RuntimeException;
+use Apps\ApiGateway\Action\WsTicketClient;
 use const Grpc\STATUS_DEADLINE_EXCEEDED;
 use const Grpc\STATUS_INVALID_ARGUMENT;
 use const Grpc\STATUS_RESOURCE_EXHAUSTED;
 use const Grpc\STATUS_UNAUTHENTICATED;
 
-class AuthServiceClient implements HealthCheckClient
+final class AuthServiceClient implements HealthCheckClient, WsTicketClient
 {
     private ?UnaryGrpcClient $client = null;
 
