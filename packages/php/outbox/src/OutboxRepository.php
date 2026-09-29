@@ -8,7 +8,7 @@ use PDO;
 use Packages\IdGenerator\Snowflake;
 use Throwable;
 
-final class OutboxRepository
+final class OutboxRepository implements EventOutboxInterface
 {
     public function __construct(
         private readonly PDO $pdo,

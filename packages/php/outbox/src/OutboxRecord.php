@@ -13,7 +13,7 @@ final readonly class OutboxRecord
         public string $eventType,
         public int $eventVersion,
         public array $payload,
-        public int $status = 0, // 0 = pending, 1 = published, 2 = failed
+        public int $status = 0, // 0 = pending, 1 = published, 2 = claimed (in-flight)
         public ?string $availableAt = null,
         public ?string $publishedAt = null,
         public ?string $createdAt = null,

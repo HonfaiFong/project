@@ -7,11 +7,11 @@ namespace Services\UserService\Application\Service;
 use Contracts\Errors\ErrorCode;
 use Contracts\Events\EventTypes;
 use Packages\IdGenerator\Snowflake;
-use Packages\Outbox\OutboxRepository;
-use PDOException;
+use Packages\Outbox\EventOutboxInterface;
 use RuntimeException;
 use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
+use Services\UserService\Domain\Exception\DuplicateUserException;
 use Services\UserService\Domain\Repository\PersonaRepositoryInterface;
 use Services\UserService\Domain\Repository\TransactionManagerInterface;
 use Services\UserService\Domain\Repository\UserRepositoryInterface;
@@ -24,8 +24,8 @@ final class UserApplicationService
         private readonly UserRepositoryInterface $userRepo,
         private readonly PersonaRepositoryInterface $personaRepo,
         private readonly Snowflake $snowflake,
-        private readonly ?TransactionManagerInterface $transactionManager = null,
-        private readonly ?OutboxRepository $outbox = null,
+        private readonly TransactionManagerInterface $transactionManager,
+        private readonly EventOutboxInterface $outbox,
     ) {
     }
 
@@ -74,13 +74,9 @@ final class UserApplicationService
                     return [$user, true];
                 });
                 [$user, $isNew] = $registration;
-            } catch (PDOException $e) {
+            } catch (DuplicateUserException $e) {
                 // A unique phone constraint is the serialization point when two
                 // registrations race before either transaction can read the row.
-                if (!$this->isUniqueConstraintViolation($e)) {
-                    throw $e;
-                }
-
                 $user = $this->userRepo->findByPhone($phone);
                 if (!$user) {
                     throw $e;
@@ -112,6 +108,33 @@ final class UserApplicationService
     public function batchGetUsers(array $userIds): array
     {
         return $this->userRepo->batchFindByIds($userIds);
+    }
+
+    public function updateUser(
+        string $userId,
+        ?string $phone = null,
+        ?string $email = null
+    ): User {
+        return $this->transaction(function () use ($userId, $phone, $email): User {
+            $user = $this->userRepo->findById($userId);
+            if (!$user) {
+                throw new RuntimeException('User not found', ErrorCode::USER_NOT_FOUND->value);
+            }
+
+            $updated = $this->userRepo->update($userId, $phone, $email);
+            if (!$updated) {
+                throw new RuntimeException('Failed to update user', ErrorCode::INTERNAL_SERVER_ERROR->value);
+            }
+
+            $this->recordEvent(
+                aggregateType: 'user',
+                aggregateId: $updated->id,
+                eventType: EventTypes::USER_UPDATED,
+                payload: $updated->toArray(),
+            );
+
+            return $updated;
+        });
     }
 
     public function createPersona(
@@ -210,10 +233,6 @@ final class UserApplicationService
      */
     private function transaction(callable $callback): mixed
     {
-        if ($this->transactionManager === null) {
-            return $callback();
-        }
-
         return $this->transactionManager->transaction($callback);
     }
 
@@ -226,10 +245,6 @@ final class UserApplicationService
         string $eventType,
         array $payload
     ): void {
-        if ($this->outbox === null) {
-            return;
-        }
-
         $this->outbox->recordEvent(
             eventId: (string)$this->snowflake->nextId(),
             aggregateType: $aggregateType,
@@ -238,11 +253,5 @@ final class UserApplicationService
             eventVersion: 1,
             payload: $payload,
         );
-    }
-
-    private function isUniqueConstraintViolation(PDOException $exception): bool
-    {
-        return $exception->getCode() === '23000'
-            || (isset($exception->errorInfo[1]) && (int)$exception->errorInfo[1] === 1062);
     }
 }

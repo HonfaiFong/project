@@ -5,14 +5,17 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use Packages\IdGenerator\Snowflake;
+use Packages\Outbox\NullEventOutbox;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
+use Services\UserService\Domain\Exception\DuplicateUserException;
 use Services\UserService\Domain\Repository\PersonaRepositoryInterface;
 use Services\UserService\Domain\Repository\UserRepositoryInterface;
+use Services\UserService\Infrastructure\Repository\PassThroughTransactionManager;
 use Tests\TestCase;
 
-final class InMemoryUserRepository implements UserRepositoryInterface
+class InMemoryUserRepository implements UserRepositoryInterface
 {
     /** @var array<string, User> */
     public array $users = [];
@@ -194,7 +197,9 @@ final class UserServiceTest extends TestCase
         $this->userService = new UserApplicationService(
             userRepo: $this->userRepo,
             personaRepo: $this->personaRepo,
-            snowflake: new Snowflake(1)
+            snowflake: new Snowflake(1),
+            transactionManager: new PassThroughTransactionManager(),
+            outbox: new NullEventOutbox(),
         );
     }
 
@@ -208,6 +213,75 @@ final class UserServiceTest extends TestCase
         $personas = $this->userService->listPersonas($res['user']->id);
         $this->assertNotEmpty($personas);
         $this->assertSame($res['user']->id, $personas[0]->userId);
+    }
+
+    public function testFindOrCreateHandlesConcurrentDuplicateUser(): void
+    {
+        $racingRepo = new class ($this->userRepo) extends InMemoryUserRepository {
+            private int $attempts = 0;
+
+            public function __construct(private readonly InMemoryUserRepository $parent)
+            {
+            }
+
+            public function findByPhone(string $phone): ?User
+            {
+                return $this->parent->findByPhone($phone);
+            }
+
+            public function create(
+                string $id,
+                ?string $phone,
+                ?string $email,
+                string $registerChannel = 'default',
+                int $riskLevel = 0
+            ): User {
+                $this->attempts++;
+                if ($this->attempts === 1) {
+                    // Simulate concurrent transaction winning the insert
+                    $this->parent->create('20002', $phone, $email);
+                    throw new DuplicateUserException('Duplicate user');
+                }
+                return $this->parent->create($id, $phone, $email);
+            }
+
+            public function updateLastLogin(string $id): void
+            {
+            }
+        };
+
+        $service = new UserApplicationService(
+            userRepo: $racingRepo,
+            personaRepo: $this->personaRepo,
+            snowflake: new Snowflake(1),
+            transactionManager: new PassThroughTransactionManager(),
+            outbox: new NullEventOutbox(),
+        );
+
+        $res = $service->findOrCreateUserByPhone('+19999999999');
+        $this->assertFalse($res['is_new_user']);
+        $this->assertSame('20002', $res['user']->id);
+    }
+
+    public function testUpdateUserSuccess(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+1234567890');
+        $userId = $res['user']->id;
+
+        $updated = $this->userService->updateUser($userId, '+19876543210', 'test@example.com');
+        $this->assertSame('+19876543210', $updated->phone);
+        $this->assertSame('test@example.com', $updated->email);
+
+        $fetched = $this->userService->getUser($userId);
+        $this->assertSame('+19876543210', $fetched->phone);
+        $this->assertSame('test@example.com', $fetched->email);
+    }
+
+    public function testUpdateUserNotFound(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('User not found');
+        $this->userService->updateUser('999999', '+10000000000');
     }
 
     public function testEnforcesPersonaOwnership(): void

@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Services\UserService\Infrastructure\Repository;
 
+use Contracts\Errors\ErrorCode;
 use PDO;
+use PDOException;
 use Services\UserService\Domain\Entity\User;
+use Services\UserService\Domain\Exception\DuplicateUserException;
 use Services\UserService\Domain\Repository\UserRepositoryInterface;
 
 final class PdoUserRepository implements UserRepositoryInterface
@@ -86,15 +89,26 @@ final class PdoUserRepository implements UserRepositoryInterface
             'INSERT INTO users (id, status, phone, email, register_channel, risk_level, created_at, updated_at)
              VALUES (:id, 1, :phone, :email, :register_channel, :risk_level, :created_at, :updated_at)'
         );
-        $stmt->execute([
-            'id'               => $id,
-            'phone'            => $phone,
-            'email'            => $email,
-            'register_channel' => $registerChannel,
-            'risk_level'       => $riskLevel,
-            'created_at'       => $now,
-            'updated_at'       => $now,
-        ]);
+        try {
+            $stmt->execute([
+                'id'               => $id,
+                'phone'            => $phone,
+                'email'            => $email,
+                'register_channel' => $registerChannel,
+                'risk_level'       => $riskLevel,
+                'created_at'       => $now,
+                'updated_at'       => $now,
+            ]);
+        } catch (PDOException $e) {
+            if ($this->isUniqueConstraintViolation($e)) {
+                throw new DuplicateUserException(
+                    "User already exists with phone: {$phone}",
+                    ErrorCode::USER_ALREADY_EXISTS->value,
+                    $e
+                );
+            }
+            throw $e;
+        }
 
         return new User(
             id: $id,
@@ -116,12 +130,23 @@ final class PdoUserRepository implements UserRepositoryInterface
              SET phone = COALESCE(:phone, phone), email = COALESCE(:email, email), updated_at = :now
              WHERE id = :id AND deleted_at IS NULL'
         );
-        $stmt->execute([
-            'phone' => $phone,
-            'email' => $email,
-            'now'   => $now,
-            'id'    => $id,
-        ]);
+        try {
+            $stmt->execute([
+                'phone' => $phone,
+                'email' => $email,
+                'now'   => $now,
+                'id'    => $id,
+            ]);
+        } catch (PDOException $e) {
+            if ($this->isUniqueConstraintViolation($e)) {
+                throw new DuplicateUserException(
+                    'User unique constraint violated',
+                    ErrorCode::USER_ALREADY_EXISTS->value,
+                    $e
+                );
+            }
+            throw $e;
+        }
 
         return $this->findById($id);
     }
@@ -147,5 +172,11 @@ final class PdoUserRepository implements UserRepositoryInterface
             createdAt: (string)$row['created_at'],
             updatedAt: (string)$row['updated_at'],
         );
+    }
+
+    private function isUniqueConstraintViolation(PDOException $exception): bool
+    {
+        return $exception->getCode() === '23000'
+            || (isset($exception->errorInfo[1]) && (int)$exception->errorInfo[1] === 1062);
     }
 }

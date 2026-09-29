@@ -87,8 +87,14 @@ final class UserGrpcService implements UserServiceInterface
 
     public function UpdateUser(ContextInterface $ctx, UpdateUserRequest $in): UpdateUserResponse
     {
-        return $this->call($ctx, 'UpdateUser', function (): UpdateUserResponse {
-            throw GRPCException::create('UpdateUser is not implemented', StatusCode::UNIMPLEMENTED);
+        return $this->call($ctx, 'UpdateUser', function () use ($in): UpdateUserResponse {
+            $user = $this->userService->updateUser(
+                userId: $this->requireId($in->getUserId(), 'user_id'),
+                phone: $in->hasPhone() ? $in->getPhone() : null,
+                email: $in->hasEmail() ? $in->getEmail() : null,
+            );
+
+            return (new UpdateUserResponse())->setUser($this->toUserProfile($user));
         });
     }
 
