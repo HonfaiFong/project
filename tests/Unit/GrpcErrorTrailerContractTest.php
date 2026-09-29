@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Auth\V1\LoginRequest;
+use Contracts\Gen\Auth\V1\LogoutRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\User\V1\GetUserRequest;
 use Contracts\Gen\User\V1\UpdateUserRequest;
@@ -141,15 +142,14 @@ final class GrpcErrorTrailerContractTest extends TestCase
 
     public function testAuthServiceDoesNotPublishInfrastructureExceptionCodeAsAppErrorCode(): void
     {
-        [$service, $ctx, $trailers] = $this->authFixture(databaseFailure: true);
+        [$service, $ctx, $trailers] = $this->authFixture(userDirectoryFails: true);
 
         try {
             // Valid credentials so the failure happens later, in the user directory lookup.
             $service->Login($ctx, new LoginRequest(['phone' => '+8613800000000', 'code' => 'dev-code']));
             $this->fail('Expected GRPCException bubbling up the database failure');
         } catch (GRPCException $e) {
-            // gRPC INTERNAL = 13: the auth service never surfaces the raw SQLSTATE to callers.
-            $this->assertSame(StatusCode::INTERNAL, $e->getCode());
+            $this->assertSame(ErrorCode::INTERNAL_SERVER_ERROR->message(), $e->getMessage());
             $this->assertStringNotContainsString('SQLSTATE', $e->getMessage());
         }
 
@@ -157,6 +157,48 @@ final class GrpcErrorTrailerContractTest extends TestCase
         $this->assertNull(
             $trailers->get(self::TRAILER_KEY, null),
             'PDO exception codes must never be published as x-app-error-code'
+        );
+    }
+
+    /**
+     * Regression guard: an unknown non-zero handler code is still a FAILURE. It must be rejected
+     * rather than falling through to the success response factory, which is what turned a
+     * database outage into "gRPC OK" with empty tokens.
+     *
+     * Logout is used deliberately: its response factory tolerates a minimal payload, so a
+     * fall-through surfaces as an unambiguous successful response instead of an unrelated
+     * protobuf type error that would mask the bug.
+     */
+    public function testUnknownNonZeroHandlerCodeFailsInsteadOfReturningSuccess(): void
+    {
+        // The auth repository throws PDOException(23000); AuthGrpcHandler normalises it into a
+        // handler result of ['code' => 23000], which is NOT a contract ErrorCode.
+        $ctx = $this->context();
+        $trailers = $this->trailers($ctx);
+        $service = new RoadRunnerAuthService(new AuthGrpcHandler(
+            $this->authService(failingAuthRepository: true),
+            $this->logger()
+        ));
+
+        try {
+            $response = $service->Logout($ctx, new LogoutRequest(['refresh_token' => 'whatever']));
+            $this->fail(sprintf(
+                'An unknown non-zero handler code must not be reported as gRPC OK (got success=%s)',
+                var_export($response->getSuccess(), true)
+            ));
+        } catch (GRPCException $e) {
+            $this->assertNotSame(
+                StatusCode::OK,
+                $e->getCode(),
+                'An unknown non-zero code must never surface as a successful RPC'
+            );
+            $this->assertSame(ErrorCode::INTERNAL_SERVER_ERROR->message(), $e->getMessage());
+            $this->assertStringNotContainsString('SQLSTATE', $e->getMessage());
+        }
+
+        $this->assertNull(
+            $trailers->get(self::TRAILER_KEY, null),
+            'An unmapped code is not a contract ErrorCode, so it must not be published'
         );
     }
 
@@ -207,21 +249,49 @@ final class GrpcErrorTrailerContractTest extends TestCase
      *
      * @return array{0: RoadRunnerAuthService, 1: ContextInterface, 2: ResponseTrailers}
      */
-    private function authFixture(bool $databaseFailure = false): array
+    private function authFixture(bool $userDirectoryFails = false): array
     {
-        $authService = new AuthApplicationService(
-            authRepo: new EmptyAuthRepository(),
+        $ctx = $this->context();
+        $trailers = $this->trailers($ctx);
+
+        return [
+            new RoadRunnerAuthService(new AuthGrpcHandler(
+                $this->authService(userDirectoryFails: $userDirectoryFails),
+                $this->logger()
+            )),
+            $ctx,
+            $trailers,
+        ];
+    }
+
+    /**
+     * @param bool $userDirectoryFails makes the credential check pass and the user lookup fail
+     * @param bool $failingAuthRepository makes the local token store fail
+     */
+    private function authService(
+        bool $userDirectoryFails = false,
+        bool $failingAuthRepository = false
+    ): AuthApplicationService {
+        return new AuthApplicationService(
+            authRepo: $failingAuthRepository
+                ? new class extends EmptyAuthRepository {
+                    public function findRefreshToken(string $tokenHash): ?RefreshToken
+                    {
+                        throw new PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062', 23000);
+                    }
+                }
+                : new EmptyAuthRepository(),
             jwtSecret: 'test-secret-at-least-32-chars-long-12345',
             wsTicketSecret: 'test-ws-secret-at-least-32-chars-12345',
             credentialVerifier: new LoginCredentialVerifier('local', 'dev-code'),
-            userDirectory: new class ($databaseFailure) implements UserDirectoryInterface {
-                public function __construct(private readonly bool $databaseFailure)
+            userDirectory: new class ($userDirectoryFails) implements UserDirectoryInterface {
+                public function __construct(private readonly bool $fails)
                 {
                 }
 
                 public function findOrCreateByPhone(string $phone): array
                 {
-                    if ($this->databaseFailure) {
+                    if ($this->fails) {
                         throw new PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062', 23000);
                     }
 
@@ -229,15 +299,6 @@ final class GrpcErrorTrailerContractTest extends TestCase
                 }
             },
         );
-
-        $ctx = $this->context();
-        $trailers = $this->trailers($ctx);
-
-        return [
-            new RoadRunnerAuthService(new AuthGrpcHandler($authService, $this->logger())),
-            $ctx,
-            $trailers,
-        ];
     }
 
     /**

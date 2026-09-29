@@ -135,11 +135,19 @@ final class RoadRunnerAuthService implements AuthServiceInterface
     ): object {
         try {
             $result = $this->handler->handle($method, $request, $this->metadata($ctx));
-            $error = $this->appErrorCode((int)($result['code'] ?? 0));
+            $code = (int)($result['code'] ?? ErrorCode::OK->value);
 
-            if ($error !== null) {
-                $this->attachAppErrorTrailer($ctx, $error->value);
-                $this->throwMappedError($error);
+            // "Is this a failure?" and "may this code be published?" are separate questions:
+            // a non-zero code that is not a contract ErrorCode (PDO 23000, library codes) is
+            // still a failure and must never fall through to the success response factory.
+            if ($code !== ErrorCode::OK->value) {
+                $error = $this->appErrorCode($code);
+
+                if ($error !== null) {
+                    $this->attachAppErrorTrailer($ctx, $error->value);
+                }
+
+                $this->throwMappedError($code, $error);
             }
 
             return $responseFactory($result);
@@ -176,8 +184,17 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         }
     }
 
-    private function throwMappedError(ErrorCode $error): never
+    private function throwMappedError(int $code, ?ErrorCode $error): never
     {
+        if ($error === null) {
+            // Unknown non-zero handler code: fail closed as an internal error instead of
+            // letting the caller treat the RPC as succeeded.
+            throw GRPCException::create(
+                ErrorCode::INTERNAL_SERVER_ERROR->message(),
+                $this->statusFor($code, null)
+            );
+        }
+
         throw GRPCException::create($error->message(), $this->statusFor($error->value, $error));
     }
 
