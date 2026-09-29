@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Packages\Logging;
 
 use Packages\Tracing\TraceContext;
+use Psr\Log\AbstractLogger;
+use Psr\Log\InvalidArgumentException;
+use Psr\Log\LogLevel;
 use Stringable;
 
-final class JsonLogger
+final class JsonLogger extends AbstractLogger
 {
     private const SENSITIVE_KEYS = [
         'password',
@@ -29,39 +32,32 @@ final class JsonLogger
     ) {
     }
 
-    public function debug(string|Stringable $message, array $context = []): void
+    public function log($level, string|Stringable $message, array $context = []): void
     {
-        $this->log('DEBUG', (string)$message, $context);
-    }
+        if (!in_array($level, [
+            LogLevel::EMERGENCY,
+            LogLevel::ALERT,
+            LogLevel::CRITICAL,
+            LogLevel::ERROR,
+            LogLevel::WARNING,
+            LogLevel::NOTICE,
+            LogLevel::INFO,
+            LogLevel::DEBUG,
+        ], true)) {
+            throw new InvalidArgumentException('Unsupported log level');
+        }
 
-    public function info(string|Stringable $message, array $context = []): void
-    {
-        $this->log('INFO', (string)$message, $context);
-    }
-
-    public function warning(string|Stringable $message, array $context = []): void
-    {
-        $this->log('WARN', (string)$message, $context);
-    }
-
-    public function error(string|Stringable $message, array $context = []): void
-    {
-        $this->log('ERROR', (string)$message, $context);
-    }
-
-    public function log(string $level, string $message, array $context = []): void
-    {
         $trace = TraceContext::current();
 
         $entry = [
             'timestamp'  => gmdate('Y-m-d\TH:i:s.v\Z'),
-            'level'      => strtoupper($level),
+            'level'      => strtoupper((string)$level),
             'service'    => $this->serviceName,
             'instance'   => $this->instanceId,
             'trace_id'   => $trace->traceId,
             'request_id' => $trace->requestId,
             'user_id'    => $trace->userId ?? '',
-            'message'    => $message,
+            'message'    => (string)$message,
             'context'    => $this->sanitizeContext($context),
         ];
 

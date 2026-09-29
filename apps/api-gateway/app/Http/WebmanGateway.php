@@ -7,7 +7,7 @@ namespace Apps\ApiGateway\Http;
 use Apps\ApiGateway\Middleware\TraceMiddleware;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
-use Packages\Logging\JsonLogger;
+use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
 use Throwable;
 use Webman\Http\Request;
@@ -15,7 +15,7 @@ use Webman\Http\Response;
 
 final class WebmanGateway
 {
-    public function __construct(private readonly JsonLogger $logger)
+    public function __construct(private readonly LoggerInterface $logger)
     {
     }
 

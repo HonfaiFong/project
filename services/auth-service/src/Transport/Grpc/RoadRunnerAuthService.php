@@ -18,7 +18,7 @@ use Contracts\Gen\Auth\V1\RefreshTokenResponse;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use Packages\GrpcCommon\ErrorStatusMapper;
-use Packages\Logging\JsonLogger;
+use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Spiral\RoadRunner\GRPC\ContextInterface;
@@ -31,7 +31,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
 {
     public function __construct(
         private readonly AuthApplicationService $authService,
-        private readonly JsonLogger $logger
+        private readonly LoggerInterface $logger
     ) {
     }
 

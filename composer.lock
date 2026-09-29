@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "d713ddf0c584d0f985c9a341fcf06be9",
+    "content-hash": "d51bb42b80cc8a706edb461e8e9aa37f",
     "packages": [
         {
             "name": "google/common-protos",

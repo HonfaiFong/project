@@ -27,7 +27,7 @@ use Contracts\Gen\User\V1\UpdateUserResponse;
 use Contracts\Gen\User\V1\UserProfile;
 use Contracts\Gen\User\V1\UserServiceInterface;
 use Packages\GrpcCommon\ErrorStatusMapper;
-use Packages\Logging\JsonLogger;
+use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Domain\Entity\Persona;
@@ -42,7 +42,7 @@ final class UserGrpcService implements UserServiceInterface
 {
     public function __construct(
         private readonly UserApplicationService $userService,
-        private readonly JsonLogger $logger,
+        private readonly LoggerInterface $logger,
     ) {
     }
 

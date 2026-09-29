@@ -2,13 +2,13 @@
 
 > **Status: Skeleton (Phase 1).** What is implemented today: `/health`, `/ws`
 > acceptance with ticket verification (base64url + HMAC-SHA256, single-use
-> nonce), in-memory connection registry, and PING/PONG heartbeat. Everything
+> nonce backed by Redis), in-memory connection registry, and PING/PONG heartbeat. Everything
 > marked ⏳ below is specified but **not implemented yet**.
 
 ## 1. Responsibility
 - WebSocket connection acceptance (`/ws`).
 - HMAC-SHA256 signature verification for short-lived WS Tickets
-  (base64url-encoded, single-use nonce enforced per gateway instance).
+  (base64url-encoded, single-use nonce enforced across gateway instances).
 - Connection registry and multi-device connection management.
 - Heartbeat handling: protocol `PING` → `PONG`, plus WS-level ping/pong.
 - **Strict rule: No direct business SQL queries.**
@@ -19,8 +19,8 @@
 
 ## 2. Owned Data
 - In-memory active connection registry (`user_id -> conn_id -> Client`).
-- ⏳ Presence state published to Redis (`presence:user:{user_id}`) — **not
-  implemented**; Redis is wired in compose but unused by this gateway today.
+- Redis stores consumed WS ticket nonces. Presence state publication
+  (`presence:user:{user_id}`) is ⏳ **not implemented**.
 
 ## 3. Endpoints & Protocol
 - `GET /ws?ticket=<token>` — ticket is created via
@@ -35,11 +35,12 @@
 
 ## 4. Dependencies
 - WS_TICKET_SECRET shared with auth-service (required, min 32 bytes).
-- Redis — ⏳ reserved for presence/push distribution, unused in the skeleton.
+- Redis is required for shared WS ticket replay protection. The gateway fails
+  closed if Redis is unavailable.
 
 ## 5. Local Run
 ```bash
 docker compose up -d realtime-gateway
 # Or directly:
-WS_TICKET_SECRET=<same-as-auth-service> go run gateways/realtime-gateway/cmd/gateway/main.go
+WS_TICKET_SECRET=<same-as-auth-service> REDIS_HOST=localhost:6379 go run gateways/realtime-gateway/cmd/gateway/main.go
 ```

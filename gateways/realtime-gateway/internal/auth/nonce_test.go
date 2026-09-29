@@ -1,36 +1,38 @@
 package auth
 
 import (
+	"context"
 	"testing"
 	"time"
 )
 
 func TestNonceStoreConsumeAllowsSingleUse(t *testing.T) {
-	store := NewNonceStore()
+	store := NewMemoryNonceStore()
 	expire := time.Now().Add(time.Minute)
+	ctx := context.Background()
 
-	if !store.Consume("nonce-1", expire) {
+	if ok, err := store.Consume(ctx, "nonce-1", expire); err != nil || !ok {
 		t.Fatal("expected first consume to succeed")
 	}
-	if store.Consume("nonce-1", expire) {
+	if ok, err := store.Consume(ctx, "nonce-1", expire); err != nil || ok {
 		t.Fatal("expected replay of nonce-1 to be rejected")
 	}
-	if !store.Consume("nonce-2", expire) {
+	if ok, err := store.Consume(ctx, "nonce-2", expire); err != nil || !ok {
 		t.Fatal("expected unrelated nonce to be accepted")
 	}
 }
 
 func TestNonceStoreRejectsEmptyNonce(t *testing.T) {
-	store := NewNonceStore()
-	if store.Consume("", time.Now().Add(time.Minute)) {
+	store := NewMemoryNonceStore()
+	if ok, err := store.Consume(context.Background(), "", time.Now().Add(time.Minute)); err != nil || ok {
 		t.Fatal("expected empty nonce to be rejected")
 	}
 }
 
 func TestNonceStoreGCDropsExpiredEntries(t *testing.T) {
-	store := NewNonceStore()
-	store.Consume("stale", time.Now().Add(-time.Second))
-	store.Consume("fresh", time.Now().Add(time.Minute))
+	store := NewMemoryNonceStore()
+	store.entries["stale"] = time.Now().Add(-time.Second)
+	store.entries["fresh"] = time.Now().Add(time.Minute)
 
 	store.GC()
 

@@ -1,7 +1,7 @@
 .PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
-GATEWAY_IMAGE     := project-realtime-gateway:latest
+GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
 
 all: test
 

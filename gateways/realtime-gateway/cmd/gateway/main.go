@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,19 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/redis/go-redis/v9"
 	"social-backend/gateways/realtime-gateway/internal/auth"
 	"social-backend/gateways/realtime-gateway/internal/connection"
 	"social-backend/packages/go/logging"
-	"social-backend/packages/go/protocol"
-	"social-backend/packages/go/tracing"
 )
-
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Configurable CORS
-	},
-}
 
 func main() {
 	port := os.Getenv("GATEWAY_PORT")
@@ -41,17 +34,18 @@ func main() {
 	hub := connection.NewHub()
 	go hub.Run()
 
-	// Single-use enforcement for WS ticket nonces. In-memory keeps the
-	// Phase 1 single-instance skeleton dependency-free; a multi-replica
-	// gateway must switch this to a shared store (e.g. Redis SETNX).
-	nonces := auth.NewNonceStore()
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			nonces.GC()
-		}
-	}()
+	redisAddr := os.Getenv("REDIS_HOST")
+	if redisAddr == "" {
+		log.Fatal("REDIS_HOST is required for shared WS ticket replay protection")
+	}
+	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
+	defer redisClient.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		log.Fatalf("Redis unavailable for WS ticket replay protection: %v", err)
+	}
+	cancel()
+	var nonces auth.NonceStore = auth.NewRedisNonceStore(redisClient)
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -61,57 +55,7 @@ func main() {
 		})
 	})
 
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		ticketStr := r.URL.Query().Get("ticket")
-		if ticketStr == "" {
-			http.Error(w, `{"code":1001005,"message":"missing ticket query parameter"}`, http.StatusUnauthorized)
-			return
-		}
-
-		ticket, err := auth.VerifyTicket(ticketStr, secret)
-		if err != nil {
-			logger.Warn("", "", "", "WS ticket verification failed", map[string]any{"error": err.Error()})
-			http.Error(w, fmt.Sprintf(`{"code":1001007,"message":"ticket verification failed: %s"}`, err.Error()), http.StatusUnauthorized)
-			return
-		}
-
-		// Reject replays: the same ticket may open a connection only once
-		// within its TTL.
-		if !nonces.Consume(ticket.Nonce, time.Unix(ticket.ExpireAt, 0)) {
-			logger.Warn("", "", ticket.UserID, "WS ticket replay rejected", map[string]any{"nonce": ticket.Nonce})
-			http.Error(w, `{"code":1001007,"message":"ticket already used"}`, http.StatusUnauthorized)
-			return
-		}
-
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			logger.Error("", "", ticket.UserID, "WebSocket upgrade error", map[string]any{"error": err.Error()})
-			return
-		}
-
-		connID := tracing.RandomHex(8)
-		client := connection.NewClient(hub, conn, ticket.UserID, ticket.PersonaID, ticket.DeviceID, connID)
-		hub.Register <- client
-
-		// Send AUTH_OK confirmation envelope
-		authOkResp, _ := json.Marshal(protocol.Envelope{
-			Version:     1,
-			RequestID:   tracing.GenerateUUIDv7(),
-			TimestampMs: time.Now().UnixMilli(),
-			Type:        protocol.EventAuthOK,
-		})
-		client.Send <- authOkResp
-
-		logger.Info("", "", ticket.UserID, "WebSocket client connected", map[string]any{
-			"user_id":    ticket.UserID,
-			"persona_id": ticket.PersonaID,
-			"device_id":  ticket.DeviceID,
-			"conn_id":    connID,
-		})
-
-		go client.WritePump()
-		go client.ReadPump()
-	})
+	http.Handle("/ws", newWSHandler(secret, nonces, hub, logger))
 
 	server := &http.Server{
 		Addr: ":" + port,

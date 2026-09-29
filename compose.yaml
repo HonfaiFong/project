@@ -250,7 +250,7 @@ services:
     build:
       context: .
       dockerfile: infra/docker/gateway/Dockerfile
-    image: project-realtime-gateway:latest
+    image: project-realtime-gateway:redis-nonce
     container_name: social-realtime-gateway
     restart: unless-stopped
     ports:

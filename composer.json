@@ -12,6 +12,7 @@
     "google/protobuf": "^4.0",
     "grpc/grpc": "^1.82",
     "php-amqplib/php-amqplib": "^3.7.4",
+    "psr/log": "^3.0",
     "spiral/roadrunner-grpc": "^3.0",
     "workerman/webman-framework": "^2.0",
     "workerman/workerman": "^5.0"
