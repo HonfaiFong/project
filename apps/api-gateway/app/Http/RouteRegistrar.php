@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Http;
 
+use Apps\ApiGateway\Action\CreateWsTicketAction;
 use Apps\ApiGateway\Controller\AuthController;
 use Apps\ApiGateway\Controller\HealthController;
 use Apps\ApiGateway\Controller\PersonaController;
@@ -22,10 +23,14 @@ final class RouteRegistrar
         $logger = new JsonLogger('api-gateway', getenv('SERVICE_INSTANCE_ID') ?: 'gw-01');
         $authClient = new AuthServiceClient(getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051');
         $userClient = new UserServiceClient(getenv('GRPC_USER_SERVICE') ?: 'user-service:50052');
-        $authController = new AuthController($authClient, $userClient);
+        $createWsTicketAction = new CreateWsTicketAction($authClient, $userClient);
+        $authController = new AuthController($authClient, $userClient, $createWsTicketAction);
         $userController = new UserController($userClient);
         $personaController = new PersonaController($userClient);
-        $healthController = new HealthController($authClient, $userClient);
+        $healthController = new HealthController([
+            'auth_service' => $authClient,
+            'user_service' => $userClient,
+        ]);
         $authMiddleware = new AuthMiddleware($authClient);
         $gateway = new WebmanGateway($logger);
 

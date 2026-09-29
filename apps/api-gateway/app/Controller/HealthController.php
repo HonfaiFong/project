@@ -4,18 +4,41 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Controller;
 
-use Apps\ApiGateway\Grpc\AuthServiceClient;
-use Apps\ApiGateway\Grpc\UserServiceClient;
+use Apps\ApiGateway\Grpc\HealthCheckClient;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Common\V1\HealthStatus;
+use Throwable;
 
 final class HealthController
 {
+    /** @var array<string, HealthCheckClient> */
+    private readonly array $upstreamClients;
+
+    /**
+     * Accepts either a named map of clients:
+     *   ['auth_service' => $authClient, 'user_service' => $userClient]
+     * or positional clients for backward compatibility:
+     *   ($authClient, $userClient)
+     *
+     * @param array<string, HealthCheckClient>|HealthCheckClient|null $clientsOrAuthClient
+     */
     public function __construct(
-        private readonly ?AuthServiceClient $authClient = null,
-        private readonly ?UserServiceClient $userClient = null
+        array|HealthCheckClient|null $clientsOrAuthClient = null,
+        ?HealthCheckClient $userClient = null
     ) {
+        if (is_array($clientsOrAuthClient)) {
+            $this->upstreamClients = $clientsOrAuthClient;
+        } else {
+            $clients = [];
+            if ($clientsOrAuthClient !== null) {
+                $clients['auth_service'] = $clientsOrAuthClient;
+            }
+            if ($userClient !== null) {
+                $clients['user_service'] = $userClient;
+            }
+            $this->upstreamClients = $clients;
+        }
     }
 
     public function check(): array
@@ -25,22 +48,13 @@ final class HealthController
         ];
         $healthy = true;
 
-        $clients = [
-            'auth_service' => $this->authClient,
-            'user_service' => $this->userClient,
-        ];
-
-        foreach ($clients as $name => $client) {
-            if ($client === null) {
-                continue;
-            }
-
+        foreach ($this->upstreamClients as $name => $client) {
             try {
                 $res = $client->checkHealth();
-                $status = ($res['status'] ?? 0) === HealthStatus::HEALTH_STATUS_SERVING
+                $status = $res['status'] === HealthStatus::HEALTH_STATUS_SERVING
                     ? 'SERVING'
                     : 'NOT_SERVING';
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 $status = 'DOWN: ' . $e->getMessage();
             }
 

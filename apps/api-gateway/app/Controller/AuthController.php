@@ -4,19 +4,22 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Controller;
 
+use Apps\ApiGateway\Action\CreateWsTicketAction;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
-use Packages\Tracing\TraceContext;
-use RuntimeException;
 
 final class AuthController
 {
+    private readonly CreateWsTicketAction $createWsTicketAction;
+
     public function __construct(
         private readonly AuthServiceClient $authClient,
-        private readonly UserServiceClient $userClient
+        private readonly UserServiceClient $userClient,
+        ?CreateWsTicketAction $createWsTicketAction = null
     ) {
+        $this->createWsTicketAction = $createWsTicketAction ?? new CreateWsTicketAction($authClient, $userClient);
     }
 
     public function login(array $body, array $headers): array
@@ -39,12 +42,7 @@ final class AuthController
         $device['platform'] = $device['platform'] ?? $headers['x-platform'] ?? 'unknown';
         $device['app_version'] = $device['app_version'] ?? $headers['x-app-version'] ?? '1.0.0';
 
-        try {
-            $authRes = $this->authClient->login($phone, $code, $device, $password !== '' ? $password : null);
-        } catch (RuntimeException $e) {
-            $code = $e->getCode() > 0 ? (int)$e->getCode() : ErrorCode::INTERNAL_SERVER_ERROR->value;
-            return ApiResponse::error($code, $e->getMessage());
-        }
+        $authRes = $this->authClient->login($phone, $code, $device, $password !== '' ? $password : null);
 
         $isNewUser = (bool)($authRes['is_new_user'] ?? false);
 
@@ -98,44 +96,7 @@ final class AuthController
 
     public function createWsTicket(array $body, array $authContext): array
     {
-        $userId = $authContext['user_id'] ?? '';
-        $deviceId = $authContext['device_id'] ?? '';
-        $requestedPersonaId = trim((string)($body['persona_id'] ?? ''));
-        $headerPersonaId = trim((string)($authContext['requested_persona_id'] ?? ''));
-
-        if ($requestedPersonaId !== '' && $headerPersonaId !== '' && $requestedPersonaId !== $headerPersonaId) {
-            return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'forbidden persona access');
-        }
-
-        $personaId = $requestedPersonaId !== '' ? $requestedPersonaId : $headerPersonaId;
-
-        if ($userId === '' || $personaId === '' || $personaId === '0') {
-            return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
-        }
-
-        $personaRes = $this->userClient->getPersona($personaId);
-        $persona = $personaRes['persona'] ?? null;
-        if (!is_array($persona) || (string)($persona['user_id'] ?? '') !== (string)$userId) {
-            return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'forbidden persona access');
-        }
-
-        if ((int)($persona['status'] ?? 0) !== 1) {
-            return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'persona is inactive');
-        }
-
-        // Only after ownership is verified against UserService, elevate into trusted TraceContext.
-        $currentTrace = TraceContext::current();
-        TraceContext::setCurrent(TraceContext::create(
-            requestId: $currentTrace->requestId,
-            traceId: $currentTrace->traceId,
-            userId: $userId,
-            personaId: $personaId,
-            deviceId: $deviceId ?: $currentTrace->deviceId,
-            appVersion: $currentTrace->appVersion,
-            traceparent: $currentTrace->traceparent
-        ));
-
-        $res = $this->authClient->createWsTicket($userId, $personaId, $deviceId);
+        $res = $this->createWsTicketAction->execute($body, $authContext);
 
         return ApiResponse::success([
             'ticket'     => $res['ticket'],

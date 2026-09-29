@@ -21,12 +21,15 @@ use Contracts\Gen\User\V1\GetUserResponse;
 use Contracts\Gen\User\V1\ListPersonasRequest;
 use Contracts\Gen\User\V1\ListPersonasResponse;
 use Contracts\Gen\User\V1\PersonaProfile;
-use Contracts\Gen\User\V1\UpdatePersonaRequest;
 use Contracts\Errors\ErrorCode;
+use Contracts\Gen\User\V1\UpdatePersonaRequest;
 use Contracts\Gen\User\V1\UpdatePersonaResponse;
+use Contracts\Gen\User\V1\UpdateUserRequest;
+use Contracts\Gen\User\V1\UpdateUserResponse;
 use Contracts\Gen\User\V1\UserProfile;
 use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\GrpcCallException;
+use Packages\GrpcCommon\UnaryGrpcClient;
 use RuntimeException;
 use const Grpc\STATUS_DEADLINE_EXCEEDED;
 use const Grpc\STATUS_INVALID_ARGUMENT;
@@ -34,7 +37,7 @@ use const Grpc\STATUS_NOT_FOUND;
 use const Grpc\STATUS_PERMISSION_DENIED;
 use const Grpc\STATUS_RESOURCE_EXHAUSTED;
 
-final class UserServiceClient
+class UserServiceClient implements HealthCheckClient
 {
     private ?UnaryGrpcClient $client = null;
 
@@ -72,6 +75,23 @@ final class UserServiceClient
         ]), BatchGetUsersResponse::class);
 
         return ['users' => array_map(fn (UserProfile $user): array => $this->user($user), iterator_to_array($response->getUsers()))];
+    }
+
+    public function updateUser(string $userId, ?string $phone = null, ?string $email = null): array
+    {
+        $fields = [
+            'user_id' => $userId,
+        ];
+        if ($phone !== null) {
+            $fields['phone'] = $phone;
+        }
+        if ($email !== null) {
+            $fields['email'] = $email;
+        }
+
+        $response = $this->call('/user.v1.UserService/UpdateUser', new UpdateUserRequest($fields), UpdateUserResponse::class);
+
+        return ['user' => $this->user($response->getUser())];
     }
 
     public function createPersona(string $userId, int $type, string $nickname, ?string $avatarKey, ?string $bio): array

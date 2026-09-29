@@ -37,10 +37,15 @@ final class WebmanGateway
                 'method'    => $request->method(),
             ]);
 
-            $code = $e->getCode() > 0
-                ? (int)$e->getCode()
-                : ErrorCode::INTERNAL_SERVER_ERROR->value;
-            $apiResponse = ApiResponse::error($code, $e->getMessage());
+            $errorCode = $e->getCode() > 0 ? ErrorCode::tryFrom((int)$e->getCode()) : null;
+            if ($errorCode !== null && $errorCode !== ErrorCode::OK) {
+                $apiResponse = ApiResponse::error($errorCode->value, $e->getMessage());
+            } else {
+                $apiResponse = ApiResponse::error(
+                    ErrorCode::INTERNAL_SERVER_ERROR->value,
+                    ErrorCode::INTERNAL_SERVER_ERROR->message()
+                );
+            }
         } finally {
             TraceContext::reset();
         }

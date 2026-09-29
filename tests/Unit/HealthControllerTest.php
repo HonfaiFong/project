@@ -39,4 +39,21 @@ final class HealthControllerTest extends TestCase
         $this->assertArrayHasKey('auth_service', $body['details']['services']);
         $this->assertNotSame('SERVING', $body['details']['services']['auth_service']);
     }
+
+    public function testReportsHealthyFromHealthCheckClientDouble(): void
+    {
+        $stubClient = new class implements \Apps\ApiGateway\Grpc\HealthCheckClient {
+            public function checkHealth(): array
+            {
+                return ['status' => \Contracts\Gen\Common\V1\HealthStatus::HEALTH_STATUS_SERVING, 'message' => 'ok'];
+            }
+        };
+
+        $controller = new HealthController(['custom_service' => $stubClient]);
+        $response = $controller->check();
+        $body = json_decode($response['body'], true);
+
+        $this->assertSame(200, $response['status']);
+        $this->assertSame('SERVING', $body['data']['services']['custom_service']);
+    }
 }

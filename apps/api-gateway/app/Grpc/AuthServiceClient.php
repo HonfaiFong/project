@@ -20,13 +20,14 @@ use Contracts\Gen\Common\V1\HealthCheckRequest;
 use Contracts\Gen\Common\V1\HealthCheckResponse;
 use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\GrpcCallException;
+use Packages\GrpcCommon\UnaryGrpcClient;
 use RuntimeException;
 use const Grpc\STATUS_DEADLINE_EXCEEDED;
 use const Grpc\STATUS_INVALID_ARGUMENT;
 use const Grpc\STATUS_RESOURCE_EXHAUSTED;
 use const Grpc\STATUS_UNAUTHENTICATED;
 
-final class AuthServiceClient
+class AuthServiceClient implements HealthCheckClient
 {
     private ?UnaryGrpcClient $client = null;
 
