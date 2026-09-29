@@ -197,7 +197,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             );
         }
 
-        throw GRPCException::create($error->message(), ErrorStatusMapper::for($error));
+        throw GRPCException::create($error->message(), ErrorStatusMapper::forFailure($error));
     }
 
     private function mapThrowable(Throwable $e): GRPCException
@@ -207,7 +207,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         }
 
         $error = $this->appErrorCode((int)$e->getCode());
-        $status = ErrorStatusMapper::for($error);
+        $status = ErrorStatusMapper::forFailure($error);
         $message = $error?->message() ?? ErrorCode::INTERNAL_SERVER_ERROR->message();
 
         return GRPCException::create($message, $status, $e);

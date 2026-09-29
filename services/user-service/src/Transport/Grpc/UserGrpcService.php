@@ -194,7 +194,7 @@ final class UserGrpcService implements UserServiceInterface
 
             throw GRPCException::create(
                 $this->publicErrorMessage($e),
-                ErrorStatusMapper::forCode((int)$e->getCode()),
+                ErrorStatusMapper::forExceptionCode((int)$e->getCode()),
                 $e,
             );
         } finally {
