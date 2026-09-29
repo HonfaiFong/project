@@ -70,9 +70,15 @@ final class OutboxRepository implements EventOutboxInterface
         try {
             $stmt = $this->pdo->prepare(
                 'SELECT id, event_id, aggregate_type, aggregate_id, event_type, event_version, payload, status, available_at, published_at, created_at
-                 FROM outbox_events
+                 FROM outbox_events AS candidate
                  WHERE status = 0 AND available_at <= :now
-                 ORDER BY id ASC
+                   AND NOT EXISTS (
+                     SELECT 1 FROM outbox_events AS earlier
+                     WHERE earlier.aggregate_type = candidate.aggregate_type
+                       AND earlier.aggregate_id = candidate.aggregate_id
+                       AND earlier.id < candidate.id AND earlier.status <> 1
+                   )
+                 ORDER BY candidate.id ASC
                  LIMIT :limit
                  FOR UPDATE SKIP LOCKED'
             );

@@ -1,6 +1,6 @@
-.PHONY: all bootstrap proto lint analyse phpstan test up infra-up app-up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
 
-PHP_RUNTIME_IMAGE := project-php-runtime:dev
+PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:latest
 
 all: test
@@ -28,10 +28,18 @@ test:
 	@go test -mod=mod ./...
 
 infra-up:
-	docker compose up -d mysql redis kafka
+	docker compose up -d mysql redis rabbitmq
+	$(MAKE) broker-init
+
+broker-init:
+	docker compose --profile init run --rm rabbitmq-init
+
+storage-up:
+	docker compose --profile storage up -d rustfs
+	docker compose --profile storage run --rm storage-init
 
 app-up:
-	docker compose up -d auth-service user-service api-gateway realtime-gateway
+	docker compose up -d auth-service user-service user-outbox-relay api-gateway realtime-gateway
 
 # 标准开发入口: 镜像校验/构建 -> 启动基础设施 -> 等待 MySQL 就绪 -> 迁移数据库 -> 启动应用服务
 up:
@@ -43,8 +51,9 @@ up:
 		echo ">>> $(GATEWAY_IMAGE) 不存在,先构建 realtime gateway..."; \
 		docker compose build realtime-gateway; \
 	fi
-	@echo ">>> 启动基础设施 (MySQL / Redis / Kafka)..."
-	docker compose up -d mysql redis kafka
+	@echo ">>> 启动基础设施 (MySQL / Redis / RabbitMQ)..."
+	docker compose up -d mysql redis rabbitmq
+	@$(MAKE) broker-init
 	@echo ">>> 等待 MySQL 就绪..."
 	@ready=0; \
 	for i in $$(seq 1 30); do \
@@ -61,7 +70,7 @@ up:
 	@echo ">>> 执行数据库基线与增量迁移..."
 	@$(MAKE) migrate
 	@echo ">>> 启动业务应用与网关服务..."
-	docker compose up -d auth-service user-service api-gateway realtime-gateway
+	docker compose up -d auth-service user-service user-outbox-relay api-gateway realtime-gateway
 
 down:
 	docker compose down

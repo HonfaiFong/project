@@ -1,0 +1,32 @@
+{
+  "exchanges": [
+    {"name":"domain.events","vhost":"/","type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}},
+    {"name":"jobs","vhost":"/","type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}},
+    {"name":"jobs.dead","vhost":"/","type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}
+  ],
+  "queues": [
+    {"name":"user.events","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"stream","x-max-age":"7D"}},
+    {"name":"feed.events","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"stream","x-max-age":"7D"}},
+    {"name":"search.events","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"stream","x-max-age":"7D"}},
+    {"name":"notification.events","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"stream","x-max-age":"7D"}},
+    {"name":"chat.events","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"stream","x-max-age":"7D"}},
+    {"name":"image.resize","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum","x-dead-letter-exchange":"jobs.dead","x-delivery-limit":5}},
+    {"name":"video.transcode","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum","x-dead-letter-exchange":"jobs.dead","x-delivery-limit":5}},
+    {"name":"push.send","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum","x-dead-letter-exchange":"jobs.dead","x-delivery-limit":5}},
+    {"name":"moderation.image.scan","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum","x-dead-letter-exchange":"jobs.dead","x-delivery-limit":5}},
+    {"name":"jobs.failed","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum"}}
+  ],
+  "bindings": [
+    {"source":"domain.events","vhost":"/","destination":"user.events","destination_type":"queue","routing_key":"user.#","arguments":{}},
+    {"source":"domain.events","vhost":"/","destination":"user.events","destination_type":"queue","routing_key":"persona.#","arguments":{}},
+    {"source":"domain.events","vhost":"/","destination":"feed.events","destination_type":"queue","routing_key":"post.#","arguments":{}},
+    {"source":"domain.events","vhost":"/","destination":"search.events","destination_type":"queue","routing_key":"post.#","arguments":{}},
+    {"source":"domain.events","vhost":"/","destination":"notification.events","destination_type":"queue","routing_key":"post.#","arguments":{}},
+    {"source":"domain.events","vhost":"/","destination":"chat.events","destination_type":"queue","routing_key":"message.#","arguments":{}},
+    {"source":"jobs","vhost":"/","destination":"image.resize","destination_type":"queue","routing_key":"image.resize","arguments":{}},
+    {"source":"jobs","vhost":"/","destination":"video.transcode","destination_type":"queue","routing_key":"video.transcode","arguments":{}},
+    {"source":"jobs","vhost":"/","destination":"push.send","destination_type":"queue","routing_key":"push.send","arguments":{}},
+    {"source":"jobs","vhost":"/","destination":"moderation.image.scan","destination_type":"queue","routing_key":"moderation.image.scan","arguments":{}},
+    {"source":"jobs.dead","vhost":"/","destination":"jobs.failed","destination_type":"queue","routing_key":"#","arguments":{}}
+  ]
+}

@@ -2,7 +2,7 @@
 
 ## 1. Responsibility
 - OpenSearch search queries for posts, personas, and topics.
-- Async index synchronization via Kafka events.
+- Async index synchronization via RabbitMQ Streams events.
 
 ## 2. Owned Data
 - OpenSearch indices.

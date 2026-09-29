@@ -31,6 +31,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         redis \
         zip \
         intl \
+        mbstring \
         opcache
 
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer

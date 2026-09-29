@@ -13,7 +13,7 @@
 - Heartbeat handling: protocol `PING` → `PONG`, plus WS-level ping/pong.
 - **Strict rule: No direct business SQL queries.**
 - ⏳ Protocol Envelope parsing beyond PING (MESSAGE_* / TYPING / ERROR types).
-- ⏳ Downstream message push from Kafka / business services.
+- ⏳ Downstream message push from RabbitMQ Streams / business services.
 - ⏳ Presence state publication.
 - ⏳ Connection drain and graceful shutdown (current shutdown just exits).
 

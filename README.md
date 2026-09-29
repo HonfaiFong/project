@@ -11,12 +11,12 @@
   - 实时连接 Gateway: `gateways/realtime-gateway` (Go 1.24 + WebSocket；当前 Skeleton 使用 JSON Envelope；Phase 3 切换 Protobuf Binary Envelope，仅负责连接管理、心跳、Ticket 鉴权、消息 Push，**禁止业务 SQL 耦合**)。
 - **内部核心微服务**:
   - 同步调用：全部基于 **gRPC**，携带 trace_id、request_id、user_id 与 deadline。
-  - 异步通信：全部基于 **Kafka**，领域事件统一使用 Transactional Outbox 投递与消费者幂等消费。
+  - 异步通信：基于 **RabbitMQ Streams（领域事件）和 Quorum Queues（任务）**；领域事件写入 Transactional Outbox，消费者按事件 ID 幂等处理。
 - **数据源与基础设施**:
   - 关系型业务最终事实数据源：MySQL 8.4 (分逻辑库，无跨库 JOIN)。
   - 高速缓存与即时状态：Redis 7.2 (统一 Key 规范，设置明确 TTL，禁止 `KEYS *`)。
-  - 消息引擎：Apache Kafka 3.8+ (KRaft 模式)。
-  - 媒体对象存储：MinIO (S3 兼容，客户端直传 Presigned URL，不经后端流式转发)。
+  - 消息引擎：RabbitMQ 4.1（Streams + Quorum Queues）。
+  - 媒体对象存储：RustFS（S3 兼容，客户端直传 Presigned URL，不经后端流式转发）。
 
 ```text
                    Client
@@ -91,7 +91,7 @@ make up
 curl http://127.0.0.1:8787/health
 ```
 
-> **启动与迁移顺序说明**：`make up` 封装了标准工程实践顺序：**编译检查 → 基础设施（MySQL/Redis/Kafka） → 自动探活 → 数据迁移（`make migrate`） → 启动业务服务（Auth/User/Gateway）**。开发与生产均杜绝“应用在迁移完成前启动导致缺列崩溃”的问题。
+> **启动与迁移顺序说明**：`make up` 依次启动 MySQL、Redis、RabbitMQ，导入 broker 拓扑，执行数据库迁移，再启动业务服务。对象存储按需运行 `make storage-up`。
 
 Snowflake Worker ID 说明：MVP 阶段 `compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 `pid % 32` 消散，在单容器小并发阶段可正常工作。注意：`pid % 32` 在数学上无法杜绝跨进程碰撞，在生产环境横向扩容（多 Pod × 多 RoadRunner Worker）前必须切换为基于 Redis `SET NX` 租约分发的动态 WorkerId Allocator（0-1023）并定时续期。
 
@@ -169,7 +169,9 @@ make e2e
 | :--- | :--- |
 | `make bootstrap` | 初始化依赖、生成 autoload 与配置 |
 | `make up` | 编排启动全流程（镜像检查 -> 基础设施 -> 数据迁移 -> 业务服务） |
-| `make infra-up` | 仅启动基础设施容器 (MySQL / Redis / Kafka) |
+| `make infra-up` | 启动 MySQL、Redis、RabbitMQ 并导入拓扑 |
+| `make broker-init` | 重新导入 RabbitMQ exchange、stream 和 quorum queue 拓扑 |
+| `make storage-up` | 启动 RustFS（storage profile） |
 | `make app-up` | 仅启动业务微服务与网关容器 |
 | `make down` | 停止并移除容器 |
 | `make lint` | 执行 PHP 语法校验与 Go vet |
@@ -192,15 +194,21 @@ make e2e
 | `50052` | gRPC | UserService (RPC) |
 | `3306` | MySQL | MySQL 8.4 数据库集群 |
 | `6379` | Redis | Redis 7.2 缓存与即时状态 |
-| `9092` | Kafka | Apache Kafka KRaft Broker |
-| `9000` | S3 API | MinIO 对象存储 API（需 `--profile storage`） |
-| `9001` | HTTP | MinIO 控制台 Console（需 `--profile storage`） |
+| `5672` | AMQP | RabbitMQ 任务与事件发布 |
+| `5552` | Stream | RabbitMQ Streams 原生协议 |
+| `15672` | HTTP | RabbitMQ Management |
+| `9000` | S3 API | RustFS 对象存储 API（需 `--profile storage`） |
+| `9001` | HTTP | RustFS 控制台（需 `--profile storage`） |
 
 ---
 
-## 11. Kafka Topics 规范
+## 11. RabbitMQ 事件与任务规范
 
-统一 Partition Key 与去重 Envelope：
+`domain.events` topic exchange 按事件类型路由到独立 stream：`user.events`、`feed.events`、`search.events`、`notification.events`、`chat.events`。每个 stream 保留 7 天；新消费者可从指定 offset 重放。当前每个 stream 为单分区，消费端需串行处理才能维持其中事件顺序。扩容为 Super Stream 时，publisher 必须用 aggregate ID 一致性分区，同一 aggregate 始终进入同一 partition；topic pattern 不负责 hash 分区。UserService 的 Outbox relay 已实现：publisher confirm 和 mandatory routing 成功后标记已发布，失败重试，事件 ID 用于消费端去重。其他服务的 relay 和消费端尚未实现。
+
+`jobs` topic exchange 将 `image.resize`、`video.transcode`、`push.send`、`moderation.image.scan` 路由到同名 Quorum Queue；超过 delivery limit 的任务进入 `jobs.failed`。publisher 应使用 confirms，consumer 应使用手动 ack 与幂等处理。
+
+事件类型与 aggregate key：
 - 用户领域: `user.registered.v1`, `user.updated.v1`, `persona.updated.v1` (Key: `user_id`)
 - 内容领域: `post.created.v1`, `post.approved.v1`, `post.deleted.v1`, `comment.created.v1` (Key: `post_id`)
 - 社交领域: `like.created.v1`, `follow.created.v1`

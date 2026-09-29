@@ -35,4 +35,4 @@
 ## 6. Dependencies
 - MySQL (`content_db`)
 - Redis (`counter:post:{post_id}`)
-- Kafka (Transactional Outbox events)
+- RabbitMQ Streams (Transactional Outbox events)

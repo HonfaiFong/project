@@ -33,45 +33,101 @@ services:
       timeout: 3s
       retries: 5
 
-  kafka:
-    image: apache/kafka:3.8.0
-    container_name: social-kafka
+  rabbitmq:
+    image: rabbitmq:4.1.6-management
+    container_name: social-rabbitmq
+    hostname: rabbitmq
     restart: unless-stopped
     ports:
-      - "9092:9092"
+      - "5672:5672"
+      - "5552:5552"
+      - "15672:15672"
     environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_NUM_PARTITIONS: 3
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
     volumes:
-      - kafka_data:/tmp/kraft-combined-logs
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./infra/docker/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
-  minio:
-    # MinIO withdrew their community images from Docker Hub; the official
-    # source is quay.io. Some environments now require authenticated pulls.
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
-    container_name: social-minio
+  rabbitmq-init:
+    image: curlimages/curl:8.16.0
+    profiles:
+      - init
+    environment:
+      RABBITMQ_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    volumes:
+      - ./infra/docker/rabbitmq/definitions.json:/definitions.json:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'curl --fail --show-error --silent --retry 10 --retry-delay 2 --user "$$RABBITMQ_USER:$$RABBITMQ_PASSWORD" -H "Content-Type: application/json" -X POST --data-binary @/definitions.json http://rabbitmq:15672/api/definitions'
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0-rc.6-glibc
+    container_name: social-rustfs
     restart: unless-stopped
     profiles:
       - storage
-    command: server /data --console-address ":9001"
+    depends_on:
+      rustfs-permissions:
+        condition: service_completed_successfully
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+      RUSTFS_VOLUMES: /data/rustfs{0...3}
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
     volumes:
-      - minio_data:/data
+      - rustfs_data_0:/data/rustfs0
+      - rustfs_data_1:/data/rustfs1
+      - rustfs_data_2:/data/rustfs2
+      - rustfs_data_3:/data/rustfs3
+    healthcheck:
+      test: ["CMD", "sh", "-ec", "curl -fsS http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  rustfs-permissions:
+    image: alpine:3.22
+    profiles:
+      - storage
+    command: ["sh", "-ec", "chown 10001:10001 /data0 /data1 /data2 /data3"]
+    volumes:
+      - rustfs_data_0:/data0
+      - rustfs_data_1:/data1
+      - rustfs_data_2:/data2
+      - rustfs_data_3:/data3
+
+  storage-init:
+    image: amazon/aws-cli:2.31.35
+    profiles:
+      - storage
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
+      AWS_DEFAULT_REGION: ${STORAGE_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-social-media}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket "$$STORAGE_BUCKET" >/dev/null 2>&1 || aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket "$$STORAGE_BUCKET"'
+    depends_on:
+      rustfs:
+        condition: service_healthy
 
   # 唯一的 PHP 运行时镜像;业务代码通过 bind mount 进容器,改代码无需重建。
   # 仅在 Dockerfile / PHP 版本 / 扩展 / RoadRunner 版本变化时:
@@ -82,10 +138,10 @@ services:
     build:
       context: .
       dockerfile: infra/docker/php/Dockerfile
-    image: project-php-runtime:dev
+    image: project-php-runtime:rabbitmq
 
   auth-service:
-    image: project-php-runtime:dev
+    image: project-php-runtime:rabbitmq
     container_name: social-auth-service
     restart: unless-stopped
     working_dir: /app
@@ -116,7 +172,7 @@ services:
         condition: service_healthy
 
   user-service:
-    image: project-php-runtime:dev
+    image: project-php-runtime:rabbitmq
     container_name: social-user-service
     restart: unless-stopped
     working_dir: /app
@@ -142,8 +198,32 @@ services:
       redis:
         condition: service_healthy
 
+  user-outbox-relay:
+    image: project-php-runtime:rabbitmq
+    container_name: social-user-outbox-relay
+    restart: unless-stopped
+    working_dir: /app
+    command: php services/user-service/bin/outbox-relay.php
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      USER_DB_NAME: user_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    volumes:
+      - .:/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
   api-gateway:
-    image: project-php-runtime:dev
+    image: project-php-runtime:rabbitmq
     container_name: social-api-gateway
     restart: unless-stopped
     working_dir: /app
@@ -186,5 +266,8 @@ services:
 volumes:
   mysql_data:
   redis_data:
-  kafka_data:
-  minio_data:
+  rabbitmq_data:
+  rustfs_data_0:
+  rustfs_data_1:
+  rustfs_data_2:
+  rustfs_data_3:
