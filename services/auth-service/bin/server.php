@@ -11,7 +11,9 @@ use Packages\Logging\JsonLogger;
 use Contracts\Gen\Auth\V1\AuthServiceInterface;
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Services\AuthService\Application\Service\AuthApplicationService;
+use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
+use Services\AuthService\Infrastructure\Client\GrpcUserDirectoryClient;
 use Services\AuthService\Infrastructure\Repository\PdoAuthRepository;
 use Services\AuthService\Transport\Grpc\AuthGrpcHandler;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
@@ -88,12 +90,17 @@ if (strlen($jwtSecret) < 32 || strlen($wsSecret) < 32) {
     throw new RuntimeException('JWT_SECRET and WS_TICKET_SECRET must each be at least 32 bytes');
 }
 $accessTokenRevocationStore = new RedisAccessTokenRevocationStore($redis);
+$credentialVerifier = LoginCredentialVerifier::fromEnvironment();
+$userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
+$userDirectory = new GrpcUserDirectoryClient($userServiceTarget);
 
 $appService = new AuthApplicationService(
     authRepo: $authRepo,
     jwtSecret: $jwtSecret,
     wsTicketSecret: $wsSecret,
-    accessTokenRevocationStore: $accessTokenRevocationStore
+    accessTokenRevocationStore: $accessTokenRevocationStore,
+    credentialVerifier: $credentialVerifier,
+    userDirectory: $userDirectory
 );
 $handler = new AuthGrpcHandler($appService, $logger);
 $grpcService = new RoadRunnerAuthService($handler);

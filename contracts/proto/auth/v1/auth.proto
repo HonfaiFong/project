@@ -18,8 +18,9 @@ message LoginRequest {
   string code = 2; // dev verification code or sms
   string password = 3;
   DeviceInfo device = 4;
-  uint64 user_id = 5;
-  bool is_new_user = 6;
+
+  reserved 5, 6;
+  reserved "user_id", "is_new_user";
 }
 
 message LoginResponse {

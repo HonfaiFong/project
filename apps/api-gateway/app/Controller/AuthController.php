@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Controller;
 
-use Apps\ApiGateway\Auth\LoginCredentialVerifier;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\ApiResponse;
@@ -16,13 +15,9 @@ final class AuthController
 {
     public function __construct(
         private readonly AuthServiceClient $authClient,
-        private readonly UserServiceClient $userClient,
-        ?LoginCredentialVerifier $credentialVerifier = null
+        private readonly UserServiceClient $userClient
     ) {
-        $this->credentialVerifier = $credentialVerifier ?? LoginCredentialVerifier::fromEnvironment();
     }
-
-    private readonly LoginCredentialVerifier $credentialVerifier;
 
     public function login(array $body, array $headers): array
     {
@@ -31,10 +26,10 @@ final class AuthController
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'phone is required');
         }
 
-        try {
-            $this->credentialVerifier->verify($phone, $body);
-        } catch (RuntimeException $e) {
-            return ApiResponse::error($e->getCode(), $e->getMessage());
+        $code = trim((string)($body['code'] ?? ''));
+        $password = (string)($body['password'] ?? '');
+        if ($code === '' && $password === '') {
+            return ApiResponse::error(ErrorCode::AUTH_INVALID_CREDENTIALS->value, ErrorCode::AUTH_INVALID_CREDENTIALS->message());
         }
 
         $device = (array)($body['device'] ?? []);
@@ -44,16 +39,17 @@ final class AuthController
         $device['platform'] = $device['platform'] ?? $headers['x-platform'] ?? 'unknown';
         $device['app_version'] = $device['app_version'] ?? $headers['x-app-version'] ?? '1.0.0';
 
-        // 1. Resolve user in UserService
-        $userRes = $this->userClient->findOrCreateByPhone($phone);
-        $user = $userRes['user'];
-        $isNewUser = (bool)($userRes['is_new_user'] ?? false);
+        try {
+            $authRes = $this->authClient->login($phone, $code, $device, $password !== '' ? $password : null);
+        } catch (RuntimeException $e) {
+            $code = $e->getCode() > 0 ? (int)$e->getCode() : ErrorCode::INTERNAL_SERVER_ERROR->value;
+            return ApiResponse::error($code, $e->getMessage());
+        }
 
-        // 2. Issue tokens in AuthService
-        $authRes = $this->authClient->loginWithUser((string)$user['id'], $device, $isNewUser);
+        $isNewUser = (bool)($authRes['is_new_user'] ?? false);
 
         return ApiResponse::success([
-            'user_id'                  => (string)$user['id'],
+            'user_id'                  => (string)$authRes['user_id'],
             'access_token'             => $authRes['access_token'],
             'refresh_token'            => $authRes['refresh_token'],
             'access_token_expires_at'  => $authRes['access_token_expires_at'],

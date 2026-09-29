@@ -6,6 +6,8 @@ namespace Services\AuthService\Application\Service;
 
 use Contracts\Errors\ErrorCode;
 use RuntimeException;
+use Services\AuthService\Domain\Auth\CredentialVerifierInterface;
+use Services\AuthService\Domain\Client\UserDirectoryInterface;
 use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
 
@@ -18,15 +20,55 @@ final class AuthApplicationService
         private readonly int $accessTokenTtl = 7200,      // 2 hours
         private readonly int $refreshTokenTtl = 2592000,   // 30 days
         private readonly int $wsTicketTtl = 60,            // 60 seconds per spec line 1504
-        private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null
+        private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null,
+        private readonly ?CredentialVerifierInterface $credentialVerifier = null,
+        private readonly ?UserDirectoryInterface $userDirectory = null
     ) {
     }
 
     /**
+     * Authenticates public credentials (phone + verification code/password),
+     * resolves or registers the user in UserService, and issues session tokens.
+     *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
      * @return array{user_id: string, access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int, is_new_user: bool}
      */
-    public function login(string $userId, array $deviceInfo, bool $isNewUser = false): array
+    public function login(
+        string $phone,
+        string $code,
+        array $deviceInfo,
+        ?string $password = null
+    ): array {
+        if ($this->credentialVerifier !== null) {
+            $this->credentialVerifier->verify($phone, [
+                'code'     => $code,
+                'password' => $password ?? '',
+            ]);
+        }
+
+        if ($this->userDirectory === null) {
+            throw new RuntimeException('User directory service unavailable', ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
+
+        $userRes = $this->userDirectory->findOrCreateByPhone($phone);
+        $userId = $userRes['user_id'];
+        $isNewUser = $userRes['is_new_user'];
+
+        if ($userId === '0' || $userId === '') {
+            throw new RuntimeException('Failed to resolve user', ErrorCode::USER_NOT_FOUND->value);
+        }
+
+        return $this->issueTokenForUser($userId, $deviceInfo, $isNewUser);
+    }
+
+    /**
+     * Issues access token and refresh token directly for an already authenticated user.
+     * Used internally by login() or for internal testing/migration.
+     *
+     * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
+     * @return array{user_id: string, access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int, is_new_user: bool}
+     */
+    public function issueTokenForUser(string $userId, array $deviceInfo, bool $isNewUser = false): array
     {
         $device = $this->authRepo->findOrCreateDevice(
             userId: $userId,

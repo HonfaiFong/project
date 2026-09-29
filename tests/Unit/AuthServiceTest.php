@@ -4,11 +4,16 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use Contracts\Errors\ErrorCode;
+use Packages\Logging\JsonLogger;
 use Services\AuthService\Application\Service\AuthApplicationService;
+use Services\AuthService\Domain\Client\UserDirectoryInterface;
 use Services\AuthService\Domain\Entity\Device;
 use Services\AuthService\Domain\Entity\RefreshToken;
 use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
+use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
+use Services\AuthService\Transport\Grpc\AuthGrpcHandler;
 use Tests\TestCase;
 
 final class InMemoryAuthRepository implements AuthRepositoryInterface
@@ -138,17 +143,28 @@ final class AuthServiceTest extends TestCase
         parent::setUp();
         $this->repo = new InMemoryAuthRepository();
         $this->revocationStore = new InMemoryAccessTokenRevocationStore();
+        $userDirectory = new class implements UserDirectoryInterface {
+            public function findOrCreateByPhone(string $phone): array
+            {
+                return [
+                    'user_id'     => '20001',
+                    'is_new_user' => false,
+                ];
+            }
+        };
         $this->authService = new AuthApplicationService(
             authRepo: $this->repo,
             jwtSecret: 'test-secret-at-least-32-chars-long-12345',
             wsTicketSecret: 'test-ws-secret-at-least-32-chars-12345',
-            accessTokenRevocationStore: $this->revocationStore
+            accessTokenRevocationStore: $this->revocationStore,
+            credentialVerifier: new LoginCredentialVerifier('local', 'dev-1234'),
+            userDirectory: $userDirectory
         );
     }
 
-    public function testLoginGeneratesTokensAndDevice(): void
+    public function testLoginAuthenticatesAndResolvesUser(): void
     {
-        $result = $this->authService->login('20001', [
+        $result = $this->authService->login('+8613800000000', 'dev-1234', [
             'device_uuid' => 'uuid-123',
             'platform'    => 'ios',
             'app_version' => '1.0.0',
@@ -164,9 +180,32 @@ final class AuthServiceTest extends TestCase
         $this->assertSame('20001', $verify['user_id']);
     }
 
+    public function testLoginRejectsInvalidCredentials(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->authService->login('+8613800000000', 'wrong-code', [
+            'device_uuid' => 'uuid-123',
+            'platform'    => 'ios',
+            'app_version' => '1.0.0',
+        ]);
+    }
+
+    public function testIssueTokenForUserDirectly(): void
+    {
+        $result = $this->authService->issueTokenForUser('20001', [
+            'device_uuid' => 'uuid-123',
+            'platform'    => 'ios',
+            'app_version' => '1.0.0',
+        ]);
+
+        $this->assertNotEmpty($result['access_token']);
+        $this->assertNotEmpty($result['refresh_token']);
+        $this->assertSame('20001', $result['user_id']);
+    }
+
     public function testRefreshTokenCanOnlyBeConsumedOnce(): void
     {
-        $login = $this->authService->login('20001', [
+        $login = $this->authService->issueTokenForUser('20001', [
             'device_uuid' => 'uuid-123',
             'platform'    => 'ios',
             'app_version' => '1.0.0',
@@ -186,7 +225,7 @@ final class AuthServiceTest extends TestCase
 
     public function testLogoutRevokesAccessTokenImmediately(): void
     {
-        $login = $this->authService->login('20001', [
+        $login = $this->authService->issueTokenForUser('20001', [
             'device_uuid' => 'uuid-123',
             'platform'    => 'ios',
             'app_version' => '1.0.0',
@@ -203,5 +242,36 @@ final class AuthServiceTest extends TestCase
 
         $this->assertNotEmpty($ticket['ticket']);
         $this->assertGreaterThan(time(), $ticket['expire_at']);
+    }
+
+    public function testGrpcHandlerLoginSuccess(): void
+    {
+        $handler = new AuthGrpcHandler($this->authService, new JsonLogger('test-auth'));
+        $response = $handler->handle('Login', [
+            'phone' => '+8613800000000',
+            'code'  => 'dev-1234',
+            'device'=> [
+                'device_uuid' => 'dev-uuid-test',
+                'platform'    => 'android',
+                'app_version' => '1.0.0',
+            ],
+        ]);
+
+        $this->assertSame(0, $response['code']);
+        $this->assertSame('20001', $response['user_id']);
+        $this->assertNotEmpty($response['access_token']);
+        $this->assertNotEmpty($response['refresh_token']);
+    }
+
+    public function testGrpcHandlerLoginFailsOnInvalidCode(): void
+    {
+        $handler = new AuthGrpcHandler($this->authService, new JsonLogger('test-auth'));
+        $response = $handler->handle('Login', [
+            'phone' => '+8613800000000',
+            'code'  => 'invalid-code',
+            'device'=> [],
+        ]);
+
+        $this->assertSame(ErrorCode::AUTH_INVALID_CREDENTIALS->value, $response['code']);
     }
 }

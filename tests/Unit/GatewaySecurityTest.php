@@ -58,8 +58,7 @@ final class GatewaySecurityTest extends TestCase
     {
         $controller = new AuthController(
             new AuthServiceClient('127.0.0.1:1'),
-            new UserServiceClient('127.0.0.1:1'),
-            new LoginCredentialVerifier('local', 'dev-only-code')
+            new UserServiceClient('127.0.0.1:1')
         );
 
         $response = $controller->login(['phone' => '+8613800000000'], []);
@@ -72,8 +71,7 @@ final class GatewaySecurityTest extends TestCase
     {
         $controller = new AuthController(
             new AuthServiceClient('127.0.0.1:1'),
-            new UserServiceClient('127.0.0.1:1'),
-            new LoginCredentialVerifier('local', 'dev-only-code')
+            new UserServiceClient('127.0.0.1:1')
         );
 
         $response = $controller->logout(['refresh_token' => 'refresh-token'], []);

@@ -66,11 +66,17 @@ final class AuthGrpcHandler
 
     private function login(array $req): array
     {
-        $userId = (string)($req['user_id'] ?? '');
+        $phone = trim((string)($req['phone'] ?? ''));
+        $code = trim((string)($req['code'] ?? ''));
+        $password = (string)($req['password'] ?? '');
         $device = (array)($req['device'] ?? []);
-        $isNewUser = (bool)($req['is_new_user'] ?? false);
 
-        $res = $this->authService->login($userId, $device, $isNewUser);
+        $res = $this->authService->login(
+            $phone,
+            $code,
+            $device,
+            $password !== '' ? $password : null
+        );
 
         return [
             'code'                     => 0,

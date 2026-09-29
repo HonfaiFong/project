@@ -31,14 +31,6 @@ class LoginRequest extends \Google\Protobuf\Internal\Message
      * Generated from protobuf field <code>.auth.v1.DeviceInfo device = 4;</code>
      */
     protected $device = null;
-    /**
-     * Generated from protobuf field <code>uint64 user_id = 5;</code>
-     */
-    protected $user_id = 0;
-    /**
-     * Generated from protobuf field <code>bool is_new_user = 6;</code>
-     */
-    protected $is_new_user = false;
 
     /**
      * Constructor.
@@ -51,8 +43,6 @@ class LoginRequest extends \Google\Protobuf\Internal\Message
      *           dev verification code or sms
      *     @type string $password
      *     @type \Contracts\Gen\Auth\V1\DeviceInfo $device
-     *     @type int|string $user_id
-     *     @type bool $is_new_user
      * }
      */
     public function __construct($data = NULL) {
@@ -158,50 +148,6 @@ class LoginRequest extends \Google\Protobuf\Internal\Message
     {
         GPBUtil::checkMessage($var, \Contracts\Gen\Auth\V1\DeviceInfo::class);
         $this->device = $var;
-
-        return $this;
-    }
-
-    /**
-     * Generated from protobuf field <code>uint64 user_id = 5;</code>
-     * @return int|string
-     */
-    public function getUserId()
-    {
-        return $this->user_id;
-    }
-
-    /**
-     * Generated from protobuf field <code>uint64 user_id = 5;</code>
-     * @param int|string $var
-     * @return $this
-     */
-    public function setUserId($var)
-    {
-        GPBUtil::checkUint64($var);
-        $this->user_id = $var;
-
-        return $this;
-    }
-
-    /**
-     * Generated from protobuf field <code>bool is_new_user = 6;</code>
-     * @return bool
-     */
-    public function getIsNewUser()
-    {
-        return $this->is_new_user;
-    }
-
-    /**
-     * Generated from protobuf field <code>bool is_new_user = 6;</code>
-     * @param bool $var
-     * @return $this
-     */
-    public function setIsNewUser($var)
-    {
-        GPBUtil::checkBool($var);
-        $this->is_new_user = $var;
 
         return $this;
     }

@@ -16,7 +16,7 @@ class Auth
         }
         $pool->internalAddGeneratedFile(
             '
-Ó
+Ï
 auth/v1/auth.protoauth.v1"\\
 
 DeviceInfo
@@ -24,14 +24,12 @@ DeviceInfo
 platform (	
 app_version (	
 
-push_token (	"ˆ
+push_token (	"„
 LoginRequest
 phone (	
 code (	
 password (	#
-device (2.auth.v1.DeviceInfo
-user_id (
-is_new_user ("¥
+device (2.auth.v1.DeviceInfoJJRuser_idRis_new_user"¥
 LoginResponse
 user_id (
 access_token (	

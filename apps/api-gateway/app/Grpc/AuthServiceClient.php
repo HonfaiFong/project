@@ -29,22 +29,13 @@ final class AuthServiceClient
     ) {
     }
 
-    public function login(string $phone, array $deviceInfo): array
+    public function login(string $phone, string $code, array $deviceInfo, ?string $password = null): array
     {
         $response = $this->call('/auth.v1.AuthService/Login', new LoginRequest([
-            'phone'  => $phone,
-            'device' => $this->device($deviceInfo),
-        ]), LoginResponse::class);
-
-        return $this->loginResponse($response);
-    }
-
-    public function loginWithUser(string $userId, array $deviceInfo, bool $isNewUser): array
-    {
-        $response = $this->call('/auth.v1.AuthService/Login', new LoginRequest([
-            'user_id'     => $userId,
-            'device'      => $this->device($deviceInfo),
-            'is_new_user' => $isNewUser,
+            'phone'    => $phone,
+            'code'     => $code,
+            'password' => $password ?? '',
+            'device'   => $this->device($deviceInfo),
         ]), LoginResponse::class);
 
         return $this->loginResponse($response);

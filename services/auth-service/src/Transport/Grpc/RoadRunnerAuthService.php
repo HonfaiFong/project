@@ -35,9 +35,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             $ctx,
             'Login',
             [
-                'user_id'     => (string)$in->getUserId(),
-                'device'      => $this->deviceInfo($in->getDevice()),
-                'is_new_user' => $in->getIsNewUser(),
+                'phone'    => $in->getPhone(),
+                'code'     => $in->getCode(),
+                'password' => $in->getPassword(),
+                'device'   => $this->deviceInfo($in->getDevice()),
             ],
             fn (array $result): LoginResponse => new LoginResponse([
                 'user_id'                  => $this->uint64($result['user_id'] ?? '0', 'user_id'),
