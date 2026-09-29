@@ -22,7 +22,9 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
         string $aggregateId,
         string $eventType,
         int $eventVersion,
-        array $payload
+        array $payload,
+        string $eventKey,
+        string $traceId
     ): string {
         $id = $this->snowflake ? $this->snowflake->nextId() : (string)(time() * 1000 + random_int(100, 999));
         $now = gmdate('Y-m-d H:i:s.v');
@@ -30,8 +32,8 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
 
         $stmt = $this->pdo->prepare(
             'INSERT INTO outbox_events 
-             (id, event_id, aggregate_type, aggregate_id, event_type, event_version, payload, status, available_at, created_at)
-             VALUES (:id, :event_id, :aggregate_type, :aggregate_id, :event_type, :event_version, :payload, 0, :available_at, :created_at)'
+             (id, event_id, aggregate_type, aggregate_id, event_key, trace_id, event_type, event_version, payload, status, available_at, created_at)
+             VALUES (:id, :event_id, :aggregate_type, :aggregate_id, :event_key, :trace_id, :event_type, :event_version, :payload, 0, :available_at, :created_at)'
         );
 
         $stmt->execute([
@@ -39,6 +41,8 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
             'event_id'       => $eventId,
             'aggregate_type' => $aggregateType,
             'aggregate_id'   => $aggregateId,
+            'event_key'      => $eventKey,
+            'trace_id'       => $traceId,
             'event_type'     => $eventType,
             'event_version'  => $eventVersion,
             'payload'        => $jsonPayload,
@@ -69,7 +73,7 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
         $this->pdo->beginTransaction();
         try {
             $stmt = $this->pdo->prepare(
-                'SELECT id, event_id, aggregate_type, aggregate_id, event_type, event_version, payload, status, available_at, published_at, created_at
+                'SELECT id, event_id, aggregate_type, aggregate_id, event_key, trace_id, event_type, event_version, payload, status, available_at, published_at, created_at
                  FROM outbox_events AS candidate
                  WHERE status = 0 AND available_at <= :now
                    AND NOT EXISTS (
@@ -96,6 +100,8 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
                     eventType: (string)$row['event_type'],
                     eventVersion: (int)$row['event_version'],
                     payload: json_decode((string)$row['payload'], true) ?: [],
+                    eventKey: (string)$row['event_key'],
+                    traceId: (string)$row['trace_id'],
                     status: 2,
                     availableAt: (string)$row['available_at'],
                     publishedAt: $row['published_at'] ? (string)$row['published_at'] : null,

@@ -8,6 +8,7 @@ use Contracts\Errors\ErrorCode;
 use Contracts\Events\EventTypes;
 use Packages\IdGenerator\Snowflake;
 use Packages\Outbox\EventOutboxInterface;
+use Packages\Tracing\TraceContext;
 use RuntimeException;
 use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
@@ -61,12 +62,14 @@ final class UserApplicationService
                     $this->recordEvent(
                         aggregateType: 'user',
                         aggregateId: $id,
+                        eventKey: $id,
                         eventType: EventTypes::USER_REGISTERED,
                         payload: $user->toArray() + ['persona_id' => $persona->id],
                     );
                     $this->recordEvent(
                         aggregateType: 'persona',
                         aggregateId: $persona->id,
+                        eventKey: $id,
                         eventType: EventTypes::PERSONA_UPDATED,
                         payload: $persona->toArray(),
                     );
@@ -135,6 +138,7 @@ final class UserApplicationService
             $this->recordEvent(
                 aggregateType: 'user',
                 aggregateId: $updated->id,
+                eventKey: $updated->id,
                 eventType: EventTypes::USER_UPDATED,
                 payload: $updated->toArray(),
             );
@@ -166,6 +170,7 @@ final class UserApplicationService
             $this->recordEvent(
                 aggregateType: 'persona',
                 aggregateId: $persona->id,
+                eventKey: $userId,
                 eventType: EventTypes::PERSONA_UPDATED,
                 payload: $persona->toArray(),
             );
@@ -216,6 +221,7 @@ final class UserApplicationService
             $this->recordEvent(
                 aggregateType: 'persona',
                 aggregateId: $updated->id,
+                eventKey: $userId,
                 eventType: EventTypes::PERSONA_UPDATED,
                 payload: $updated->toArray(),
             );
@@ -248,6 +254,7 @@ final class UserApplicationService
     private function recordEvent(
         string $aggregateType,
         string $aggregateId,
+        string $eventKey,
         string $eventType,
         array $payload
     ): void {
@@ -255,9 +262,11 @@ final class UserApplicationService
             eventId: (string)$this->snowflake->nextId(),
             aggregateType: $aggregateType,
             aggregateId: $aggregateId,
+            eventKey: $eventKey,
             eventType: $eventType,
             eventVersion: 1,
             payload: $payload,
+            traceId: TraceContext::current()->traceId,
         );
     }
 }

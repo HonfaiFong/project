@@ -222,6 +222,8 @@ final class UserServiceTest extends TestCase
         $this->assertCount(1, $userRegisteredEvents);
         $this->assertSame('user', $userRegisteredEvents[0]['aggregate_type']);
         $this->assertSame($res['user']->id, $userRegisteredEvents[0]['aggregate_id']);
+        $this->assertSame($res['user']->id, $userRegisteredEvents[0]['event_key']);
+        $this->assertNotSame('', $userRegisteredEvents[0]['trace_id']);
         $this->assertSame(EventTypes::USER_REGISTERED, $userRegisteredEvents[0]['event_type']);
         $this->assertSame($res['user']->id, $userRegisteredEvents[0]['payload']['id']);
         $this->assertSame('+1234567890', $userRegisteredEvents[0]['payload']['phone']);
@@ -230,6 +232,8 @@ final class UserServiceTest extends TestCase
         $this->assertCount(1, $personaUpdatedEvents);
         $this->assertSame('persona', $personaUpdatedEvents[0]['aggregate_type']);
         $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['aggregate_id']);
+        $this->assertSame($res['user']->id, $personaUpdatedEvents[0]['event_key']);
+        $this->assertSame($userRegisteredEvents[0]['trace_id'], $personaUpdatedEvents[0]['trace_id']);
         $this->assertSame(EventTypes::PERSONA_UPDATED, $personaUpdatedEvents[0]['event_type']);
         $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['payload']['id']);
     }
@@ -371,6 +375,7 @@ final class UserServiceTest extends TestCase
         $this->assertCount(2, $personaEvents);
         $lastEvent = end($personaEvents);
         $this->assertSame($personaId, $lastEvent['aggregate_id']);
+        $this->assertSame($userId, $lastEvent['event_key']);
         $this->assertSame('New Nickname', $lastEvent['payload']['nickname']);
     }
 }

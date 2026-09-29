@@ -7,6 +7,31 @@ on:
     branches: [ main, master ]
 
 jobs:
+  rabbitmq-contract:
+    name: RabbitMQ publisher contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo, pdo_mysql, pdo_sqlite, redis, bcmath, sockets, grpc
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist
+      - run: cp .env.example .env
+      - run: docker compose up -d rabbitmq
+      - run: docker compose run --rm rabbitmq-init
+      - name: Verify Stream routing and mandatory return
+        run: vendor/bin/phpunit tests/Integration/RabbitMqPublisherContractTest.php
+        env:
+          RABBITMQ_INTEGRATION: '1'
+          RABBITMQ_HOST: 127.0.0.1
+          RABBITMQ_PORT: '5672'
+          RABBITMQ_USER: social_app
+          RABBITMQ_PASSWORD: replace-with-random-local-rabbitmq-password
+      - if: always()
+        run: docker compose logs rabbitmq rabbitmq-init
+
   lint-and-test:
     name: Lint & Unit Tests
     runs-on: ubuntu-latest
@@ -21,7 +46,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_mysql, redis, bcmath, sockets, grpc
+          extensions: pdo, pdo_mysql, pdo_sqlite, redis, bcmath, sockets, grpc
           coverage: none
 
       - name: Setup Go
@@ -100,7 +125,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_mysql, redis, bcmath, sockets, grpc
+          extensions: pdo, pdo_mysql, pdo_sqlite, redis, bcmath, sockets, grpc
           coverage: none
 
       - name: Install Composer dependencies for E2E

@@ -208,12 +208,14 @@ make e2e
 
 `jobs` topic exchange 将 `image.resize`、`video.transcode`、`push.send`、`moderation.image.scan` 路由到同名 Quorum Queue；超过 delivery limit 的任务进入 `jobs.failed`。publisher 应使用 confirms，consumer 应使用手动 ack 与幂等处理。
 
-事件类型与 aggregate key：
+事件类型与分区 key：
 - 用户领域: `user.registered.v1`, `user.updated.v1`, `persona.updated.v1` (Key: `user_id`)
 - 内容领域: `post.created.v1`, `post.approved.v1`, `post.deleted.v1`, `comment.created.v1` (Key: `post_id`)
 - 社交领域: `like.created.v1`, `follow.created.v1`
 - 聊天领域: `conversation.created.v1`, `message.created.v1`, `message.delivered.v1`, `message.read.v1` (Key: `conversation_id`)
 - 审核与风控: `moderation.completed.v1`, `report.created.v1`
+
+Outbox 的 `aggregate_id` 标识事件所属实体；`event_key` 单独保存流分区和用户维度顺序键。用户与 Persona 事件都以 `user_id` 为 `event_key`。`trace_id` 在写入 Outbox 的请求事务中持久化，relay 发布时直接读取；迁移前的历史事件无法恢复原请求 trace，保留空值。
 
 ---
 

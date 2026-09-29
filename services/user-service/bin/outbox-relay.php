@@ -26,7 +26,7 @@ for (;;) {
             getenv('RABBITMQ_PASSWORD') ?: '',
         );
         $channel = $connection->channel();
-        $relay = new OutboxRelay(new OutboxRepository($pdo), new RabbitMqEventPublisher($channel));
+        $relay = new OutboxRelay(new OutboxRepository($pdo), new RabbitMqEventPublisher($channel, 'user-service'));
         for (;;) {
             if ($relay->runOnce() === 0) {
                 usleep(500_000);

@@ -15,6 +15,8 @@ interface EventOutboxInterface
         string $aggregateId,
         string $eventType,
         int $eventVersion,
-        array $payload
+        array $payload,
+        string $eventKey,
+        string $traceId
     ): string;
 }

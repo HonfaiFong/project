@@ -28,12 +28,13 @@ final class RabbitMqEventPublisherTest extends TestCase
                 );
                 $this->assertSame('user-service', $body['producer']);
                 $this->assertSame('user-1', $body['key']);
+                $this->assertSame('trace-1', $body['trace_id']);
                 $this->assertSame('2026-09-28T08:00:00Z', $body['occurred_at']);
                 return true;
             }), 'domain.events', 'user.registered.v1', true);
         $channel->expects($this->once())->method('wait_for_pending_acks_returns')->with(5.0);
 
-        (new RabbitMqEventPublisher($channel))->publish($this->event());
+        (new RabbitMqEventPublisher($channel, 'user-service'))->publish($this->event());
     }
 
     public function testNackFailsPublication(): void
@@ -49,7 +50,25 @@ final class RabbitMqEventPublisherTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('NACKed');
-        (new RabbitMqEventPublisher($channel))->publish($this->event());
+        (new RabbitMqEventPublisher($channel, 'user-service'))->publish($this->event());
+    }
+
+    public function testPersonaEventUsesPersistedUserKeyAndInjectedProducer(): void
+    {
+        $channel = $this->createMock(AMQPChannel::class);
+        $channel->expects($this->once())->method('basic_publish')
+            ->with($this->callback(function (AMQPMessage $message): bool {
+                $body = json_decode($message->getBody(), true, flags: JSON_THROW_ON_ERROR);
+                $this->assertSame('persona-1', $body['payload']['id']);
+                $this->assertSame('user-1', $body['key']);
+                $this->assertSame('other-service', $body['producer']);
+                return true;
+            }), 'domain.events', 'persona.updated.v1', true);
+
+        (new RabbitMqEventPublisher($channel, 'other-service'))->publish(new OutboxRecord(
+            'event-2', 'persona', 'persona-1', 'persona.updated.v1', 1,
+            ['id' => 'persona-1', 'user_id' => 'user-1'], 'user-1', 'trace-2',
+        ));
     }
 
     public function testMandatoryReturnFailsPublication(): void
@@ -65,11 +84,11 @@ final class RabbitMqEventPublisherTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('not routed');
-        (new RabbitMqEventPublisher($channel))->publish($this->event());
+        (new RabbitMqEventPublisher($channel, 'user-service'))->publish($this->event());
     }
 
     private function event(): OutboxRecord
     {
-        return new OutboxRecord('event-1', 'user', 'user-1', 'user.registered.v1', 1, ['id' => 'user-1'], createdAt: '2026-09-28 08:00:00.000');
+        return new OutboxRecord('event-1', 'user', 'user-1', 'user.registered.v1', 1, ['id' => 'user-1'], 'user-1', 'trace-1', createdAt: '2026-09-28 08:00:00.000');
     }
 }

@@ -13,6 +13,8 @@ final class RecordingEventOutbox implements EventOutboxInterface
      *     event_id: string,
      *     aggregate_type: string,
      *     aggregate_id: string,
+     *     event_key: string,
+     *     trace_id: string,
      *     event_type: string,
      *     event_version: int,
      *     payload: array<string, mixed>
@@ -29,12 +31,16 @@ final class RecordingEventOutbox implements EventOutboxInterface
         string $aggregateId,
         string $eventType,
         int $eventVersion,
-        array $payload
+        array $payload,
+        string $eventKey,
+        string $traceId
     ): string {
         $this->recordedEvents[] = [
             'event_id'       => $eventId,
             'aggregate_type' => $aggregateType,
             'aggregate_id'   => $aggregateId,
+            'event_key'      => $eventKey,
+            'trace_id'       => $traceId,
             'event_type'     => $eventType,
             'event_version'  => $eventVersion,
             'payload'        => $payload,
@@ -50,6 +56,8 @@ final class RecordingEventOutbox implements EventOutboxInterface
      *     event_id: string,
      *     aggregate_type: string,
      *     aggregate_id: string,
+     *     event_key: string,
+     *     trace_id: string,
      *     event_type: string,
      *     event_version: int,
      *     payload: array<string, mixed>

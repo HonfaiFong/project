@@ -37,6 +37,7 @@ final class UserOutboxTransactionTest extends TestCase
         $this->pdo->exec('CREATE TABLE outbox_events (
             id TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE,
             aggregate_type TEXT NOT NULL, aggregate_id TEXT NOT NULL,
+            event_key TEXT NOT NULL, trace_id TEXT NOT NULL,
             event_type TEXT NOT NULL, event_version INTEGER NOT NULL,
             payload TEXT NOT NULL, status INTEGER NOT NULL,
             available_at TEXT NOT NULL, created_at TEXT NOT NULL
@@ -60,7 +61,7 @@ final class UserOutboxTransactionTest extends TestCase
         $this->assertTrue($result['is_new_user']);
         $this->assertSame($userId, $this->pdo->query('SELECT id FROM users')->fetchColumn());
         $this->assertSame($userId, $this->pdo->query('SELECT user_id FROM personas')->fetchColumn());
-        $events = $this->pdo->query('SELECT aggregate_type, aggregate_id, event_type, payload FROM outbox_events')->fetchAll(PDO::FETCH_ASSOC);
+        $events = $this->pdo->query('SELECT aggregate_type, aggregate_id, event_key, trace_id, event_type, payload FROM outbox_events')->fetchAll(PDO::FETCH_ASSOC);
         $this->assertCount(2, $events);
         $eventsByType = array_column($events, null, 'event_type');
         $personaEvent = $eventsByType[EventTypes::PERSONA_UPDATED];
@@ -70,6 +71,10 @@ final class UserOutboxTransactionTest extends TestCase
         $this->assertSame($userId, json_decode($personaEvent['payload'], true, flags: JSON_THROW_ON_ERROR)['user_id']);
         $this->assertSame('user', $userEvent['aggregate_type']);
         $this->assertSame($userId, $userEvent['aggregate_id']);
+        $this->assertSame($userId, $userEvent['event_key']);
+        $this->assertSame($userId, $personaEvent['event_key']);
+        $this->assertNotSame('', $userEvent['trace_id']);
+        $this->assertSame($userEvent['trace_id'], $personaEvent['trace_id']);
         $this->assertSame($userId, json_decode($userEvent['payload'], true, flags: JSON_THROW_ON_ERROR)['id']);
     }
 

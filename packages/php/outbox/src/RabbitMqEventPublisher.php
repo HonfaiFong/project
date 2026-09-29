@@ -13,8 +13,10 @@ use RuntimeException;
 
 final class RabbitMqEventPublisher implements EventPublisher
 {
-    public function __construct(private readonly AMQPChannel $channel)
-    {
+    public function __construct(
+        private readonly AMQPChannel $channel,
+        private readonly string $producer,
+    ) {
         $this->channel->confirm_select();
         $this->channel->set_nack_handler(static function (AMQPMessage $message): never {
             throw new RuntimeException('RabbitMQ NACKed domain event publication');
@@ -33,9 +35,9 @@ final class RabbitMqEventPublisher implements EventPublisher
             occurredAt: $event->createdAt === null
                 ? gmdate('Y-m-d\TH:i:s\Z')
                 : (new DateTimeImmutable($event->createdAt, new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
-            traceId: '',
-            producer: 'user-service',
-            key: $event->aggregateId,
+            traceId: $event->traceId,
+            producer: $this->producer,
+            key: $event->eventKey,
             payload: $event->payload,
         ))->toJson();
 

@@ -62,7 +62,7 @@ final class FakeOutboxRelayStore implements OutboxRelayStore
 
     public function claimPending(int $limit = 50): array
     {
-        return [new OutboxRecord('event-1', 'user', 'user-1', 'user.registered.v1', 1, [], id: 'event-1')];
+        return [new OutboxRecord('event-1', 'user', 'user-1', 'user.registered.v1', 1, [], 'user-1', 'trace-1', id: 'event-1')];
     }
 
     public function markPublished(string $id): void { $this->published[] = $id; }
