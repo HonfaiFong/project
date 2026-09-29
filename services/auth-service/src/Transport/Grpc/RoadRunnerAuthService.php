@@ -147,9 +147,6 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         }
     }
 
-    /**
-     * @param array<string, mixed> $metadata
-     */
     private function throwMappedError(int $code, string $fallback): never
     {
         $error = ErrorCode::tryFrom($code);
@@ -174,6 +171,9 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         return GRPCException::create($message, $status, $e);
     }
 
+    /**
+     * @return 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16
+     */
     private function statusFor(int $code, ?ErrorCode $error): int
     {
         return match ($error) {

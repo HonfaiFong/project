@@ -12,8 +12,8 @@ final class GrpcClientContext
      * Build gRPC call options with trace headers and timeout deadline.
      *
      * @param int $timeoutMs Default deadline timeout in milliseconds (e.g. 150ms)
-     * @param array<string, array<string>> $customMetadata Extra metadata
-     * @return array{timeout: int, call_credentials?: mixed} Call options array compatible with gRPC PHP clients
+     * @param array<string, string|array<string>> $customMetadata Extra metadata
+     * @return array{timeout: int, metadata: array<string, array<string>>, call_credentials?: mixed} Call options array compatible with gRPC PHP clients
      */
     public static function createCallOptions(int $timeoutMs = 150, array $customMetadata = []): array
     {

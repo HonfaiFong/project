@@ -140,6 +140,11 @@ final class UserServiceClient
         ];
     }
 
+    /**
+     * @template T of Message
+     * @param class-string<T> $responseClass
+     * @return T
+     */
     private function call(string $method, Message $request, string $responseClass): Message
     {
         $client = $this->client ??= new UnaryGrpcClient(

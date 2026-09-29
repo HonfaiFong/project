@@ -8,7 +8,7 @@
 
 - **外部入口**:
   - HTTP REST BFF: `apps/api-gateway` (Webman 2.x / PHP 8.4, 负责鉴权入口、参数校验、gRPC Client 聚合，**禁止直接访问业务数据库**)。
-  - 实时连接 Gateway: `gateways/realtime-gateway` (Go 1.24 + WebSocket + Protobuf Envelope, 仅负责连接管理、心跳、Ticket 鉴权、消息 Push，**禁止业务 SQL 耦合**)。
+  - 实时连接 Gateway: `gateways/realtime-gateway` (Go 1.24 + WebSocket；当前 Skeleton 使用 JSON Envelope；Phase 3 切换 Protobuf Binary Envelope，仅负责连接管理、心跳、Ticket 鉴权、消息 Push，**禁止业务 SQL 耦合**)。
 - **内部核心微服务**:
   - 同步调用：全部基于 **gRPC**，携带 trace_id、request_id、user_id 与 deadline。
   - 异步通信：全部基于 **Kafka**，领域事件统一使用 Transactional Outbox 投递与消费者幂等消费。
@@ -46,7 +46,7 @@
 | 服务目录 | 服务名称 | 运行时 / 技术栈 | 职责与边界 |
 | :--- | :--- | :--- | :--- |
 | `apps/api-gateway` | API Gateway (BFF) | Webman / PHP 8.4 | 对外 HTTP API 入口、JWT 认证、gRPC 客户端聚合 (**Phase 1 已实现**) |
-| `gateways/realtime-gateway` | Realtime Gateway | Go 1.24 / WebSocket | 实时长连接维持、心跳、多端连接管理、下行 Push (**Skeleton**：连接/心跳/票据校验已实现，消息协议与 Presence 见其 README) |
+| `gateways/realtime-gateway` | Realtime Gateway | Go 1.24 / WebSocket | 实时长连接维持、心跳、多端连接管理、下行 Push (**Skeleton**：连接/心跳/票据校验已实现，当前使用 JSON Envelope，Phase 3 切换 Protobuf Binary Envelope；消息协议与 Presence 见其 README) |
 | `services/auth-service` | AuthService | RoadRunner / PHP 8.4 | 账号认证、Token 签发 / 轮转、设备管理、WS Ticket (**Phase 1 已实现**) |
 | `services/user-service` | UserService | RoadRunner / PHP 8.4 | 用户主体、Persona 分身管理 (**User != Persona**) (**Phase 1 已实现**) |
 | `services/content-service` | ContentService | RoadRunner / PHP 8.4 | 帖子、图文媒体元数据、一级与回复评论 (**骨架，未实现**) |
@@ -82,15 +82,18 @@
 #    （compose.yaml 对这三个变量做强校验，缺失会拒绝启动）
 cp .env.example .env
 
-# 2. 一键启动所有基础依赖与微服务容器
-docker compose up -d
+# 2. 一键启动所有基础依赖与微服务容器（首次启动会自动编译所需镜像）
+make up
 
-# 3. 检查服务健康状态
+# 3. 执行数据库基线与增量迁移
+make migrate
+
+# 4. 检查服务健康状态
 #    网关会对 auth/user 服务发起真实的 gRPC 健康探测；任一下游不可用返回 503
 curl http://127.0.0.1:8787/health
 ```
 
-Snowflake Worker ID 说明：`compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 pid 消散，无需人工干预。水平扩容同一服务的多副本时，必须为每个副本分配不同的 `WORKER_ID`（0-31）。
+Snowflake Worker ID 说明：MVP 阶段 `compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 `pid % 32` 消散，在单容器小并发阶段可正常工作。注意：`pid % 32` 在数学上无法杜绝跨进程碰撞，在生产环境横向扩容（多 Pod × 多 RoadRunner Worker）前必须切换为基于 Redis `SET NX` 租约分发的动态 WorkerId Allocator（0-1023）并定时续期。
 
 ---
 

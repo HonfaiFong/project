@@ -21,5 +21,3 @@ ALTER TABLE `chat_db`.`outbox_events`
 ALTER TABLE `message_db`.`outbox_events`
   ADD COLUMN `claimed_at` DATETIME(3) NULL AFTER `available_at`;
 
-INSERT INTO `meta`.`schema_migrations` (name, applied_at)
-VALUES ('0001_outbox_claimed_at.sql', NOW(3));

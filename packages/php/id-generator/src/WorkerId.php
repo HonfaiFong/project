@@ -17,9 +17,13 @@ use RuntimeException;
  * within one container disjoint, and the env-prefixed service slot keeps
  * services disjoint from each other.
  *
- * Horizontal replicas of the same service must be assigned distinct WORKER_ID
- * values explicitly (compose.yaml pins them today; a registry-based allocator
- * is the follow-up for real multi-replica deployments).
+ * IMPORTANT / PRODUCTION DEPLOYMENT NOTE:
+ * `pid % 32` is acceptable for Phase 1 single-instance local MVP (e.g. pool.num_workers=2).
+ * However, `pid % 32` cannot mathematically guarantee uniqueness across arbitrarily many
+ * processes or worker recycles if PIDs differ by multiples of 32.
+ * Before horizontal scaling in production (multi-Pod × multi-Worker), this must be
+ * replaced by a distributed Redis `SET NX` lease allocator (0-1023) with periodic
+ * heartbeat renewal and TTL expiration upon process exit.
  */
 final class WorkerId
 {

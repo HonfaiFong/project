@@ -26,8 +26,7 @@ final class WebmanGateway
     {
         $headers = $this->headers($request);
         $trace = TraceMiddleware::process($headers);
-        $body = $request->post();
-        $body = is_array($body) ? $body : [];
+        $body = (array)$request->post();
 
         try {
             $apiResponse = $handler($body, $headers);
@@ -46,7 +45,7 @@ final class WebmanGateway
             TraceContext::reset();
         }
 
-        if (!is_array($apiResponse) || !isset($apiResponse['status'], $apiResponse['headers'], $apiResponse['body'])) {
+        if (!isset($apiResponse['status'], $apiResponse['headers'], $apiResponse['body'])) {
             $apiResponse = ApiResponse::error(ErrorCode::INTERNAL_SERVER_ERROR->value, 'internal server error');
         }
 

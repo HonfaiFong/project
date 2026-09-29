@@ -112,6 +112,11 @@ final class AuthServiceClient
         ];
     }
 
+    /**
+     * @template T of Message
+     * @param class-string<T> $responseClass
+     * @return T
+     */
     private function call(string $method, Message $request, string $responseClass): Message
     {
         $client = $this->client ??= new UnaryGrpcClient(
@@ -132,9 +137,8 @@ final class AuthServiceClient
     }
 
     /** @return array<string, mixed> */
-    private function loginResponse(Message $response): array
+    private function loginResponse(LoginResponse $response): array
     {
-        /** @var LoginResponse $response */
         return [
             'user_id'                  => (string)$response->getUserId(),
             'access_token'             => $response->getAccessToken(),

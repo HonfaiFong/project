@@ -1,6 +1,7 @@
-# Code generation is driven by scripts/generate_proto.sh (protoc inside
-# infra/docker/proto, via `make proto`). This file keeps `buf generate`
-# usable for local one-off runs with the same plugins.
+# NOTE: buf.gen.yaml is not the canonical PHP gRPC generator.
+# Always use `make proto` for committed generated contracts (which invokes protoc
+# with protoc-gen-php-grpc for Spiral RoadRunner PHP gRPC service interfaces).
+# Buf CLI is used primarily for linting (`buf lint`) and breaking changes (`buf breaking`).
 version: v2
 plugins:
   - remote: buf.build/protocolbuffers/php

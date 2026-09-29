@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse test up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:dev
 GATEWAY_IMAGE     := project-realtime-gateway:latest
@@ -63,7 +63,9 @@ seed:
 	@echo "Seeding initial dev fixtures..."
 
 analyse:
-	vendor/bin/phpstan analyse --no-progress
+	vendor/bin/phpstan analyse --no-progress --memory-limit=512M
+
+phpstan: analyse
 
 e2e:
 	bash scripts/e2e_test.sh

@@ -27,6 +27,7 @@ for file in "$MIGRATION_DIR"/*.sql; do
 
   echo "Applying migration: $name"
   run_sql < "$file"
+  run_sql -e "INSERT INTO meta.schema_migrations (name, applied_at) VALUES ('$name', NOW(3)) ON DUPLICATE KEY UPDATE applied_at = NOW(3)"
   pending=$((pending + 1))
 done
 
