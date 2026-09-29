@@ -26,6 +26,7 @@ use Contracts\Gen\User\V1\UpdateUserRequest;
 use Contracts\Gen\User\V1\UpdateUserResponse;
 use Contracts\Gen\User\V1\UserProfile;
 use Contracts\Gen\User\V1\UserServiceInterface;
+use Packages\GrpcCommon\ErrorStatusMapper;
 use Packages\Logging\JsonLogger;
 use Packages\Tracing\TraceContext;
 use Services\UserService\Application\Service\UserApplicationService;
@@ -193,8 +194,7 @@ final class UserGrpcService implements UserServiceInterface
 
             throw GRPCException::create(
                 $this->publicErrorMessage($e),
-                // @phpstan-ignore argument.type (grpcStatus returns StatusCode constants; the stub's literal-union param can't be inferred through match)
-                $this->grpcStatus($e),
+                ErrorStatusMapper::forCode((int)$e->getCode()),
                 $e,
             );
         } finally {
@@ -286,24 +286,6 @@ final class UserGrpcService implements UserServiceInterface
             ->setStatus($persona->status)
             ->setCreatedAt($persona->createdAt ?? '')
             ->setUpdatedAt($persona->updatedAt ?? '');
-    }
-
-    private function grpcStatus(Throwable $exception): int
-    {
-        return match ((int)$exception->getCode()) {
-            ErrorCode::INVALID_ARGUMENT->value => StatusCode::INVALID_ARGUMENT,
-            ErrorCode::USER_NOT_FOUND->value,
-            ErrorCode::PERSONA_NOT_FOUND->value => StatusCode::NOT_FOUND,
-            ErrorCode::USER_ALREADY_EXISTS->value => StatusCode::ALREADY_EXISTS,
-            ErrorCode::PERSONA_FORBIDDEN->value,
-            ErrorCode::USER_BANNED->value => StatusCode::PERMISSION_DENIED,
-            ErrorCode::PERSONA_LIMIT_EXCEEDED->value,
-            ErrorCode::RATE_LIMIT_EXCEEDED->value => StatusCode::RESOURCE_EXHAUSTED,
-            ErrorCode::RPC_TIMEOUT->value => StatusCode::DEADLINE_EXCEEDED,
-            ErrorCode::IDEMPOTENCY_CONFLICT->value => StatusCode::ABORTED,
-            ErrorCode::SERVICE_UNAVAILABLE->value => StatusCode::UNAVAILABLE,
-            default => StatusCode::INTERNAL,
-        };
     }
 
     private function publicErrorMessage(Throwable $exception): string

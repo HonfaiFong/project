@@ -18,6 +18,7 @@ use Contracts\Gen\Auth\V1\RefreshTokenResponse;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use InvalidArgumentException;
+use Packages\GrpcCommon\ErrorStatusMapper;
 use Spiral\RoadRunner\GRPC\ContextInterface;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
 use Spiral\RoadRunner\GRPC\ResponseTrailers;
@@ -196,7 +197,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             );
         }
 
-        throw GRPCException::create($error->message(), $this->statusFor($error));
+        throw GRPCException::create($error->message(), ErrorStatusMapper::for($error));
     }
 
     private function mapThrowable(Throwable $e): GRPCException
@@ -206,50 +207,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         }
 
         $error = $this->appErrorCode((int)$e->getCode());
-        $status = $this->statusFor($error);
+        $status = ErrorStatusMapper::for($error);
         $message = $error?->message() ?? ErrorCode::INTERNAL_SERVER_ERROR->message();
 
         return GRPCException::create($message, $status, $e);
-    }
-
-    /**
-     * Business codes decide the transport status; absent or unmapped internal failures are
-     * always INTERNAL. Deriving this from the raw exception integer (the old `$code === 0`
-     * check) made INTERNAL_SERVER_ERROR(9001001) fall through to UNKNOWN(2), so the two
-     * internal-failure paths disagreed: a normalised PDO 23000 reported INTERNAL while a
-     * normalised RuntimeException(code=0) reported UNKNOWN.
-     *
-     * @return 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16
-     */
-    private function statusFor(?ErrorCode $error): int
-    {
-        return match ($error) {
-            ErrorCode::INVALID_ARGUMENT,
-            ErrorCode::AUTH_DEVICE_INVALID,
-            ErrorCode::AUTH_TICKET_EXPIRED => StatusCode::INVALID_ARGUMENT,
-            ErrorCode::AUTH_INVALID_CREDENTIALS,
-            ErrorCode::AUTH_TOKEN_EXPIRED,
-            ErrorCode::AUTH_TOKEN_INVALID,
-            ErrorCode::AUTH_TOKEN_REVOKED,
-            ErrorCode::AUTH_UNAUTHORIZED => StatusCode::UNAUTHENTICATED,
-            ErrorCode::PERSONA_FORBIDDEN,
-            ErrorCode::CHAT_FORBIDDEN_BY_PRIVACY,
-            ErrorCode::SOCIAL_USER_BLOCKED => StatusCode::PERMISSION_DENIED,
-            ErrorCode::USER_NOT_FOUND,
-            ErrorCode::PERSONA_NOT_FOUND,
-            ErrorCode::CONTENT_POST_NOT_FOUND,
-            ErrorCode::CONTENT_COMMENT_NOT_FOUND,
-            ErrorCode::CHAT_CONVERSATION_NOT_FOUND,
-            ErrorCode::MESSAGE_NOT_FOUND => StatusCode::NOT_FOUND,
-            ErrorCode::USER_ALREADY_EXISTS => StatusCode::ALREADY_EXISTS,
-            ErrorCode::IDEMPOTENCY_CONFLICT => StatusCode::ABORTED,
-            ErrorCode::RATE_LIMIT_EXCEEDED => StatusCode::RESOURCE_EXHAUSTED,
-            ErrorCode::RPC_TIMEOUT => StatusCode::DEADLINE_EXCEEDED,
-            ErrorCode::SERVICE_UNAVAILABLE => StatusCode::UNAVAILABLE,
-            // INTERNAL_SERVER_ERROR, an absent code (null) and every unmapped code are all
-            // "the service could not classify this failure", so they share INTERNAL.
-            default => StatusCode::INTERNAL,
-        };
     }
 
     /**
