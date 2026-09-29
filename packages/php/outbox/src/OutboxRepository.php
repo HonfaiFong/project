@@ -60,6 +60,8 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
      * flips the claimed rows to status=2 before committing, so concurrent
      * workers never receive the same row. Crashed workers leave rows claimed;
      * releaseStaleClaims() returns them to the queue.
+     * Earlier unpublished rows with the same broker event_key block the claim,
+     * even when their aggregate types and IDs differ.
      *
      * Statuses: 0 = pending, 1 = published, 2 = claimed (in-flight).
      *
@@ -78,8 +80,7 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
                  WHERE status = 0 AND available_at <= :now
                    AND NOT EXISTS (
                      SELECT 1 FROM outbox_events AS earlier
-                     WHERE earlier.aggregate_type = candidate.aggregate_type
-                       AND earlier.aggregate_id = candidate.aggregate_id
+                     WHERE earlier.event_key = candidate.event_key
                        AND earlier.id < candidate.id AND earlier.status <> 1
                    )
                  ORDER BY candidate.id ASC

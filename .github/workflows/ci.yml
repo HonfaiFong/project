@@ -52,7 +52,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.27'
 
       - name: Install Composer dependencies
         run: composer install --no-interaction --prefer-dist
@@ -86,6 +86,9 @@ jobs:
       - name: Run Tests
         run: make test
 
+      - name: Run Go Race Detector
+        run: go test -mod=mod -race ./gateways/realtime-gateway/...
+
   docker-build:
     name: Docker Build
     runs-on: ubuntu-latest
@@ -104,8 +107,7 @@ jobs:
           file: infra/docker/php/Dockerfile
           load: true
           tags: |
-            project-php-runtime:dev
-            project-php-runtime:ci
+            project-php-runtime:rabbitmq
           cache-from: type=gha,scope=php-runtime
           cache-to: type=gha,scope=php-runtime,mode=max
 
@@ -116,8 +118,7 @@ jobs:
           file: infra/docker/gateway/Dockerfile
           load: true
           tags: |
-            project-realtime-gateway:latest
-            project-realtime-gateway:ci
+            project-realtime-gateway:redis-nonce
           cache-from: type=gha,scope=realtime-gateway
           cache-to: type=gha,scope=realtime-gateway,mode=max
 

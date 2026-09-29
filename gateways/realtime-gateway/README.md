@@ -15,7 +15,8 @@
 - ⏳ Protocol Envelope parsing beyond PING (MESSAGE_* / TYPING / ERROR types).
 - ⏳ Downstream message push from RabbitMQ Streams / business services.
 - ⏳ Presence state publication.
-- ⏳ Connection drain and graceful shutdown (current shutdown just exits).
+- Graceful shutdown: readiness becomes NOT_SERVING, HTTP stops accepting,
+  WebSocket clients receive CloseGoingAway, and active pumps drain before exit.
 
 ## 2. Owned Data
 - In-memory active connection registry (`user_id -> conn_id -> Client`).
@@ -39,6 +40,13 @@
 - WS_TICKET_SECRET shared with auth-service (required, min 32 bytes).
 - Redis is required for shared WS ticket replay protection. The gateway fails
   closed if Redis is unavailable.
+- Set `REDIS_USERNAME` and `REDIS_PASSWORD` for authenticated Redis, and
+  `REDIS_TLS=true` when the Redis endpoint requires TLS.
+- Gorilla's same-origin WebSocket policy is enabled. Serve the web frontend
+  and WebSocket endpoint from the same host; native clients without Origin can
+  connect. Inbound WebSocket messages are limited to 64 KiB.
+- A full outbound queue disconnects the client for resynchronization, except
+  for `TYPING` events, which may be dropped.
 
 ## 5. Local Run
 ```bash

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/redis/go-redis/v9"
@@ -33,10 +34,20 @@ func TestReadinessFollowsRedis(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			newReadinessHandler(readinessPinger{tc.err}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+			newReadinessHandler(readinessPinger{tc.err}, &atomic.Bool{}).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
 			if response.Code != tc.want {
 				t.Fatalf("status = %d, want %d", response.Code, tc.want)
 			}
 		})
+	}
+}
+
+func TestReadinessStopsDuringDrain(t *testing.T) {
+	var draining atomic.Bool
+	draining.Store(true)
+	response := httptest.NewRecorder()
+	newReadinessHandler(readinessPinger{}, &draining).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", response.Code)
 	}
 }

@@ -24,17 +24,19 @@ type wsHandler struct {
 
 func newWSHandler(secret string, nonces auth.NonceStore, hub *connection.Hub, logger *logging.Logger) http.Handler {
 	return &wsHandler{
-		secret: secret,
-		nonces: nonces,
-		hub:    hub,
-		logger: logger,
-		upgrader: websocket.Upgrader{CheckOrigin: func(r *http.Request) bool {
-			return true // TODO: restrict to configured web origins before public deployment.
-		}},
+		secret:   secret,
+		nonces:   nonces,
+		hub:      hub,
+		logger:   logger,
+		upgrader: websocket.Upgrader{HandshakeTimeout: 5 * time.Second},
 	}
 }
 
 func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h.hub.IsDraining() {
+		http.Error(w, "gateway shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	ticket, ok := h.consumeTicket(w, r)
 	if !ok {
 		return
@@ -59,8 +61,11 @@ func (h *wsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 		return
 	}
-	h.hub.Register <- client
-	client.Send <- authOkResp
+	if !h.hub.Register(client) {
+		_ = conn.Close()
+		return
+	}
+	h.hub.SendToClient(client, authOkResp)
 
 	h.logger.Info("", "", ticket.UserID, "WebSocket client connected", map[string]any{
 		"user_id":    ticket.UserID,

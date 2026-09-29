@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -18,62 +22,99 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	port := os.Getenv("GATEWAY_PORT")
 	if port == "" {
 		port = "8080"
 	}
 	secret := os.Getenv("WS_TICKET_SECRET")
-	if secret == "" {
-		log.Fatal("WS_TICKET_SECRET env is required (minimum 32 bytes, shared with auth-service)")
-	}
 	if len(secret) < 32 {
-		log.Fatal("WS_TICKET_SECRET must be at least 32 bytes")
+		return errors.New("WS_TICKET_SECRET must be at least 32 bytes")
+	}
+	redisAddr := os.Getenv("REDIS_HOST")
+	if redisAddr == "" {
+		return errors.New("REDIS_HOST is required for shared WS ticket replay protection")
+	}
+	redisTLS, err := strconv.ParseBool(envDefault("REDIS_TLS", "false"))
+	if err != nil {
+		return fmt.Errorf("invalid REDIS_TLS: %w", err)
+	}
+	redisOptions := &redis.Options{
+		Addr:     redisAddr,
+		Username: os.Getenv("REDIS_USERNAME"),
+		Password: os.Getenv("REDIS_PASSWORD"),
+	}
+	if redisTLS {
+		redisOptions.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	redisClient := redis.NewClient(redisOptions)
+	defer redisClient.Close()
+	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err = redisClient.Ping(pingCtx).Err()
+	cancel()
+	if err != nil {
+		return fmt.Errorf("Redis unavailable for WS ticket replay protection: %w", err)
 	}
 
 	logger := logging.NewLogger("realtime-gateway", "gw-01")
 	hub := connection.NewHub()
-	go hub.Run()
-
-	redisAddr := os.Getenv("REDIS_HOST")
-	if redisAddr == "" {
-		log.Fatal("REDIS_HOST is required for shared WS ticket replay protection")
-	}
-	redisClient := redis.NewClient(&redis.Options{Addr: redisAddr})
-	defer redisClient.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := redisClient.Ping(ctx).Err(); err != nil {
-		log.Fatalf("Redis unavailable for WS ticket replay protection: %v", err)
-	}
-	cancel()
-	var nonces auth.NonceStore = auth.NewRedisNonceStore(redisClient)
-
-	http.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
+	var draining atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":  "SERVING",
-			"service": "realtime-gateway",
-		})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "SERVING", "service": "realtime-gateway"})
 	})
-	readiness := newReadinessHandler(redisClient)
-	http.Handle("/ready", readiness)
-	http.Handle("/health", readiness)
-
-	http.Handle("/ws", newWSHandler(secret, nonces, hub, logger))
-
+	readiness := newReadinessHandler(redisClient, &draining)
+	mux.Handle("/ready", readiness)
+	mux.Handle("/health", readiness)
+	var nonces auth.NonceStore = auth.NewRedisNonceStore(redisClient)
+	mux.Handle("/ws", newWSHandler(secret, nonces, hub, logger))
 	server := &http.Server{
-		Addr: ":" + port,
+		Addr:              ":" + port,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- server.ListenAndServe() }()
+	logger.Info("", "", "", fmt.Sprintf("Realtime Gateway listening on :%s", port), nil)
 
-	go func() {
-		logger.Info("", "", "", fmt.Sprintf("Realtime Gateway listening on :%s", port), nil)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Gateway listen error: %v", err)
-		}
-	}()
-
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
-
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	var serveErr error
+	select {
+	case <-signalCtx.Done():
+	case serveErr = <-serverErr:
+	}
+	if errors.Is(serveErr, http.ErrServerClosed) {
+		serveErr = nil
+	}
 	logger.Info("", "", "", "Shutting down Realtime Gateway...", nil)
+	draining.Store(true)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		_ = server.Close()
+		serveErr = errors.Join(serveErr, fmt.Errorf("HTTP shutdown: %w", err))
+	}
+	if err := hub.Drain(shutdownCtx); err != nil {
+		serveErr = errors.Join(serveErr, fmt.Errorf("WebSocket drain: %w", err))
+	}
+	if serveErr != nil {
+		return fmt.Errorf("Gateway listen error: %w", serveErr)
+	}
+	return nil
+}
+
+func envDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }
