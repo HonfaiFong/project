@@ -196,7 +196,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             );
         }
 
-        throw GRPCException::create($error->message(), $this->statusFor($error->value, $error));
+        throw GRPCException::create($error->message(), $this->statusFor($error));
     }
 
     private function mapThrowable(Throwable $e): GRPCException
@@ -206,16 +206,22 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         }
 
         $error = $this->appErrorCode((int)$e->getCode());
-        $status = $this->statusFor((int)$e->getCode(), $error);
+        $status = $this->statusFor($error);
         $message = $error?->message() ?? ErrorCode::INTERNAL_SERVER_ERROR->message();
 
         return GRPCException::create($message, $status, $e);
     }
 
     /**
+     * Business codes decide the transport status; absent or unmapped internal failures are
+     * always INTERNAL. Deriving this from the raw exception integer (the old `$code === 0`
+     * check) made INTERNAL_SERVER_ERROR(9001001) fall through to UNKNOWN(2), so the two
+     * internal-failure paths disagreed: a normalised PDO 23000 reported INTERNAL while a
+     * normalised RuntimeException(code=0) reported UNKNOWN.
+     *
      * @return 0|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16
      */
-    private function statusFor(int $code, ?ErrorCode $error): int
+    private function statusFor(?ErrorCode $error): int
     {
         return match ($error) {
             ErrorCode::INVALID_ARGUMENT,
@@ -240,7 +246,9 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             ErrorCode::RATE_LIMIT_EXCEEDED => StatusCode::RESOURCE_EXHAUSTED,
             ErrorCode::RPC_TIMEOUT => StatusCode::DEADLINE_EXCEEDED,
             ErrorCode::SERVICE_UNAVAILABLE => StatusCode::UNAVAILABLE,
-            default => $code === 0 ? StatusCode::INTERNAL : StatusCode::UNKNOWN,
+            // INTERNAL_SERVER_ERROR, an absent code (null) and every unmapped code are all
+            // "the service could not classify this failure", so they share INTERNAL.
+            default => StatusCode::INTERNAL,
         };
     }
 
