@@ -4,29 +4,27 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Middleware;
 
+use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Contracts\Errors\ErrorCode;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
+use Webman\Http\Request;
+use Webman\Http\Response;
+use Webman\MiddlewareInterface;
 
-final class AuthMiddleware
+final class AuthMiddleware implements MiddlewareInterface
 {
     public function __construct(private readonly AuthServiceClient $authClient)
     {
     }
 
-    /**
-     * @param array<string, string> $headers
-     * @return array{user_id: string, device_id: string, requested_persona_id: ?string}
-     */
-    public function authenticate(array $headers): array
+    public function process(Request $request, callable $handler): Response
     {
-        $normalized = [];
-        foreach ($headers as $k => $v) {
-            $normalized[strtolower((string)$k)] = (string)$v;
+        if (!$request instanceof GatewayRequest) {
+            throw new \LogicException('GatewayRequest is required');
         }
-
-        $authHeader = $normalized['authorization'] ?? '';
+        $authHeader = (string)$request->header('authorization', '');
         if (!str_starts_with($authHeader, 'Bearer ')) {
             throw new RuntimeException('Missing or invalid Authorization header', ErrorCode::AUTH_UNAUTHORIZED->value);
         }
@@ -40,7 +38,7 @@ final class AuthMiddleware
 
         $userId = (string)($res['user_id'] ?? '');
         $deviceId = (string)($res['device_id'] ?? '');
-        $requestedPersonaId = $normalized['x-persona-id'] ?? null;
+        $requestedPersonaId = $request->header('x-persona-id');
 
         // Update TraceContext with authenticated user info.
         // SECURITY NOTE:
@@ -60,10 +58,11 @@ final class AuthMiddleware
         );
         TraceContext::setCurrent($updated);
 
-        return [
+        $request->authContext = [
             'user_id'              => $userId,
             'device_id'            => $deviceId,
             'requested_persona_id' => $requestedPersonaId,
         ];
+        return $handler($request);
     }
 }

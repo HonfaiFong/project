@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Apps\ApiGateway\Controller;
 
 use Apps\ApiGateway\Grpc\UserServiceClient;
+use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Response\ApiResponse;
 use Apps\ApiGateway\Response\PersonaPresenter;
 use Contracts\Errors\ErrorCode;
+use Webman\Http\Response;
 
 final class PersonaController
 {
@@ -15,9 +17,9 @@ final class PersonaController
     {
     }
 
-    public function list(array $authContext): array
+    public function list(GatewayRequest $request): Response
     {
-        $userId = $authContext['user_id'] ?? '';
+        $userId = $request->authContext['user_id'];
         if ($userId === '') {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
@@ -28,9 +30,10 @@ final class PersonaController
         ]);
     }
 
-    public function create(array $body, array $authContext): array
+    public function create(GatewayRequest $request): Response
     {
-        $userId = $authContext['user_id'] ?? '';
+        $body = (array)$request->post();
+        $userId = $request->authContext['user_id'];
         if ($userId === '') {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
@@ -49,7 +52,7 @@ final class PersonaController
         return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []), 201);
     }
 
-    public function get(string $personaId): array
+    public function get(GatewayRequest $request, string $personaId): Response
     {
         if ($personaId === '') {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'persona_id is required');
@@ -59,9 +62,10 @@ final class PersonaController
         return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []));
     }
 
-    public function update(string $personaId, array $body, array $authContext): array
+    public function update(GatewayRequest $request, string $personaId): Response
     {
-        $userId = $authContext['user_id'] ?? '';
+        $body = (array)$request->post();
+        $userId = $request->authContext['user_id'];
         if ($userId === '') {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }

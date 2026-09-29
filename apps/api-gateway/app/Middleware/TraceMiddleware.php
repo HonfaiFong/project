@@ -4,35 +4,33 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Middleware;
 
+use Apps\ApiGateway\Http\GatewayRequest;
 use Packages\Tracing\TraceContext;
+use Webman\Http\Request;
+use Webman\Http\Response;
+use Webman\MiddlewareInterface;
 
-final class TraceMiddleware
+final class TraceMiddleware implements MiddlewareInterface
 {
-    /**
-     * @param array<string, string> $headers
-     */
-    public static function process(array $headers): TraceContext
+    public function process(Request $request, callable $handler): Response
     {
-        $normalized = [];
-        foreach ($headers as $k => $v) {
-            $normalized[strtolower((string)$k)] = (string)$v;
+        if (!$request instanceof GatewayRequest) {
+            throw new \LogicException('GatewayRequest is required');
         }
-
-        $requestId = $normalized['x-request-id'] ?? null;
-        $traceId = $normalized['x-trace-id'] ?? null;
-        $deviceId = $normalized['x-device-id'] ?? null;
-        $appVersion = $normalized['x-app-version'] ?? null;
-        $traceparent = $normalized['traceparent'] ?? null;
-
         $ctx = TraceContext::create(
-            requestId: $requestId,
-            traceId: $traceId,
-            deviceId: $deviceId,
-            appVersion: $appVersion,
-            traceparent: $traceparent
+            requestId: $request->header('x-request-id'),
+            traceId: $request->header('x-trace-id'),
+            deviceId: $request->header('x-device-id'),
+            appVersion: $request->header('x-app-version'),
+            traceparent: $request->header('traceparent')
         );
 
+        $request->traceContext = $ctx;
         TraceContext::setCurrent($ctx);
-        return $ctx;
+        try {
+            return $handler($request);
+        } finally {
+            TraceContext::reset();
+        }
     }
 }

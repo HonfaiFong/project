@@ -16,9 +16,9 @@ final class HealthControllerTest extends TestCase
         $controller = new HealthController();
 
         $response = $controller->check();
-        $body = json_decode($response['body'], true);
+        $body = json_decode($response->rawBody(), true);
 
-        $this->assertSame(200, $response['status']);
+        $this->assertSame(200, $response->getStatusCode());
         $this->assertSame(0, $body['code']);
         $this->assertSame('SERVING', $body['data']['status']);
         $this->assertSame('SERVING', $body['data']['services']['api_gateway']);
@@ -31,9 +31,9 @@ final class HealthControllerTest extends TestCase
         ]);
 
         $response = $controller->check();
-        $body = json_decode($response['body'], true);
+        $body = json_decode($response->rawBody(), true);
 
-        $this->assertSame(503, $response['status']);
+        $this->assertSame(503, $response->getStatusCode());
         $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, $body['code']);
         $this->assertArrayHasKey('auth_service', $body['details']['services']);
         $this->assertNotSame('SERVING', $body['details']['services']['auth_service']);
@@ -50,9 +50,9 @@ final class HealthControllerTest extends TestCase
 
         $controller = new HealthController(['custom_service' => $stubClient]);
         $response = $controller->check();
-        $body = json_decode($response['body'], true);
+        $body = json_decode($response->rawBody(), true);
 
-        $this->assertSame(200, $response['status']);
+        $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('SERVING', $body['data']['services']['custom_service']);
     }
 }

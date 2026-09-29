@@ -9,6 +9,7 @@ use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Common\V1\HealthStatus;
 use Throwable;
+use Webman\Http\Response;
 
 final class HealthController
 {
@@ -20,7 +21,7 @@ final class HealthController
     ) {
     }
 
-    public function check(): array
+    public function check(): Response
     {
         $services = [
             'api_gateway' => 'SERVING',

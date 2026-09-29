@@ -6,8 +6,10 @@ namespace Apps\ApiGateway\Controller;
 
 use Apps\ApiGateway\Action\CreateWsTicketAction;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
+use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
+use Webman\Http\Response;
 
 final class AuthController
 {
@@ -17,8 +19,9 @@ final class AuthController
     ) {
     }
 
-    public function login(array $body, array $headers): array
+    public function login(GatewayRequest $request): Response
     {
+        $body = (array)$request->post();
         $phone = trim((string)($body['phone'] ?? ''));
         if ($phone === '') {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'phone is required');
@@ -32,10 +35,10 @@ final class AuthController
 
         $device = (array)($body['device'] ?? []);
         if (empty($device['device_uuid'])) {
-            $device['device_uuid'] = $headers['x-device-id'] ?? 'device-' . bin2hex(random_bytes(8));
+            $device['device_uuid'] = $request->header('x-device-id') ?: 'device-' . bin2hex(random_bytes(8));
         }
-        $device['platform'] = $device['platform'] ?? $headers['x-platform'] ?? 'unknown';
-        $device['app_version'] = $device['app_version'] ?? $headers['x-app-version'] ?? '1.0.0';
+        $device['platform'] = $device['platform'] ?? $request->header('x-platform', 'unknown');
+        $device['app_version'] = $device['app_version'] ?? $request->header('x-app-version', '1.0.0');
 
         $authRes = $this->authClient->login($phone, $code, $device, $password !== '' ? $password : null);
 
@@ -51,8 +54,9 @@ final class AuthController
         ], $isNewUser ? 201 : 200);
     }
 
-    public function refresh(array $body): array
+    public function refresh(GatewayRequest $request): Response
     {
+        $body = (array)$request->post();
         $refreshToken = (string)($body['refresh_token'] ?? '');
         if ($refreshToken === '') {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'refresh_token is required');
@@ -69,18 +73,15 @@ final class AuthController
         ]);
     }
 
-    /**
-     * @param array<string, mixed> $body
-     * @param array<string, string> $headers
-     */
-    public function logout(array $body, array $headers = []): array
+    public function logout(GatewayRequest $request): Response
     {
+        $body = (array)$request->post();
         $refreshToken = (string)($body['refresh_token'] ?? '');
         if ($refreshToken === '') {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'refresh_token is required');
         }
 
-        $accessToken = self::bearerToken($headers);
+        $accessToken = self::bearerToken((string)$request->header('authorization', ''));
         if ($accessToken === null) {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
@@ -89,9 +90,9 @@ final class AuthController
         return ApiResponse::success(['success' => true]);
     }
 
-    public function createWsTicket(array $body, array $authContext): array
+    public function createWsTicket(GatewayRequest $request): Response
     {
-        $res = $this->createWsTicketAction->execute($body, $authContext);
+        $res = $this->createWsTicketAction->execute((array)$request->post(), $request->authContext);
 
         return ApiResponse::success([
             'ticket'     => $res['ticket'],
@@ -99,12 +100,9 @@ final class AuthController
         ]);
     }
 
-    /**
-     * @param array<string, string> $headers
-     */
-    private static function bearerToken(array $headers): ?string
+    private static function bearerToken(string $authorization): ?string
     {
-        $authorization = trim((string)($headers['authorization'] ?? ''));
+        $authorization = trim($authorization);
         if (!str_starts_with($authorization, 'Bearer ')) {
             return null;
         }

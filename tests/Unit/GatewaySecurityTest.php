@@ -8,6 +8,7 @@ use Apps\ApiGateway\Action\CreateWsTicketAction;
 use Apps\ApiGateway\Controller\AuthController;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
+use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Response\PersonaPresenter;
 use Contracts\Errors\ErrorCode;
 use Tests\TestCase;
@@ -36,8 +37,9 @@ final class GatewaySecurityTest extends TestCase
         $action = new CreateWsTicketAction($authClient, $userClient);
         $controller = new AuthController($authClient, $action);
 
-        $response = $controller->login(['phone' => '+8613800000000'], []);
-        $body = json_decode($response['body'], true);
+        $request = new GatewayRequest("POST /api/v1/auth/login HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\r\n" . json_encode(['phone' => '+8613800000000']));
+        $response = $controller->login($request);
+        $body = json_decode($response->rawBody(), true);
 
         $this->assertSame(ErrorCode::AUTH_INVALID_CREDENTIALS->value, $body['code']);
     }
@@ -49,8 +51,9 @@ final class GatewaySecurityTest extends TestCase
         $action = new CreateWsTicketAction($authClient, $userClient);
         $controller = new AuthController($authClient, $action);
 
-        $response = $controller->logout(['refresh_token' => 'refresh-token'], []);
-        $body = json_decode($response['body'], true);
+        $request = new GatewayRequest("POST /api/v1/auth/logout HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\r\n" . json_encode(['refresh_token' => 'refresh-token']));
+        $response = $controller->logout($request);
+        $body = json_decode($response->rawBody(), true);
 
         $this->assertSame(ErrorCode::AUTH_UNAUTHORIZED->value, $body['code']);
     }

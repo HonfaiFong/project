@@ -43,6 +43,11 @@ or resolve a user.
 ## 6. Local Run
 ```bash
 docker compose up -d api-gateway
-# Or directly:
-php apps/api-gateway/start.php
+# Or directly on Linux/WSL:
+php apps/api-gateway/start.php start
 ```
+
+The HTTP listener and worker count are configured in `config/process.php` via
+`HTTP_PORT` and `WEBMAN_WORKERS`. Routes are declared in `config/route.php`;
+request tracing is global middleware, while token verification applies only to
+the protected route group. Auth and User remain independent gRPC services.
