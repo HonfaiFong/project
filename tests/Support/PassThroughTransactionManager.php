@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Services\UserService\Infrastructure\Repository;
+namespace Tests\Support;
 
 use Services\UserService\Domain\Repository\TransactionManagerInterface;
 

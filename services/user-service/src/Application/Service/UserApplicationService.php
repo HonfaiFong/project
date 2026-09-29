@@ -78,8 +78,14 @@ final class UserApplicationService
                 // A unique phone constraint is the serialization point when two
                 // registrations race before either transaction can read the row.
                 $user = $this->userRepo->findByPhone($phone);
-                if (!$user) {
-                    throw $e;
+                if ($user !== null) {
+                    $isNew = false;
+                } else {
+                    throw new RuntimeException(
+                        ErrorCode::INTERNAL_SERVER_ERROR->message(),
+                        ErrorCode::INTERNAL_SERVER_ERROR->value,
+                        $e
+                    );
                 }
             }
         }

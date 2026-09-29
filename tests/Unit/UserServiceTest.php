@@ -4,15 +4,17 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use Contracts\Errors\ErrorCode;
+use Contracts\Events\EventTypes;
 use Packages\IdGenerator\Snowflake;
-use Packages\Outbox\NullEventOutbox;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
 use Services\UserService\Domain\Exception\DuplicateUserException;
 use Services\UserService\Domain\Repository\PersonaRepositoryInterface;
 use Services\UserService\Domain\Repository\UserRepositoryInterface;
-use Services\UserService\Infrastructure\Repository\PassThroughTransactionManager;
+use Tests\Support\PassThroughTransactionManager;
+use Tests\Support\RecordingEventOutbox;
 use Tests\TestCase;
 
 class InMemoryUserRepository implements UserRepositoryInterface
@@ -188,18 +190,20 @@ final class UserServiceTest extends TestCase
 {
     private InMemoryUserRepository $userRepo;
     private InMemoryPersonaRepository $personaRepo;
+    private RecordingEventOutbox $outbox;
     private UserApplicationService $userService;
 
     protected function setUp(): void
     {
         $this->userRepo = new InMemoryUserRepository();
         $this->personaRepo = new InMemoryPersonaRepository();
+        $this->outbox = new RecordingEventOutbox();
         $this->userService = new UserApplicationService(
             userRepo: $this->userRepo,
             personaRepo: $this->personaRepo,
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
-            outbox: new NullEventOutbox(),
+            outbox: $this->outbox,
         );
     }
 
@@ -213,6 +217,17 @@ final class UserServiceTest extends TestCase
         $personas = $this->userService->listPersonas($res['user']->id);
         $this->assertNotEmpty($personas);
         $this->assertSame($res['user']->id, $personas[0]->userId);
+
+        $userRegisteredEvents = $this->outbox->findByEventType(EventTypes::USER_REGISTERED);
+        $this->assertCount(1, $userRegisteredEvents);
+        $this->assertSame('user', $userRegisteredEvents[0]['aggregate_type']);
+        $this->assertSame($res['user']->id, $userRegisteredEvents[0]['aggregate_id']);
+        $this->assertSame('+1234567890', $userRegisteredEvents[0]['payload']['phone']);
+
+        $personaUpdatedEvents = $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED);
+        $this->assertCount(1, $personaUpdatedEvents);
+        $this->assertSame('persona', $personaUpdatedEvents[0]['aggregate_type']);
+        $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['aggregate_id']);
     }
 
     public function testFindOrCreateHandlesConcurrentDuplicateUser(): void
@@ -255,12 +270,42 @@ final class UserServiceTest extends TestCase
             personaRepo: $this->personaRepo,
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
-            outbox: new NullEventOutbox(),
+            outbox: new RecordingEventOutbox(),
         );
 
         $res = $service->findOrCreateUserByPhone('+19999999999');
         $this->assertFalse($res['is_new_user']);
         $this->assertSame('20002', $res['user']->id);
+    }
+
+    public function testFindOrCreateThrowsInternalServerErrorWhenDuplicateIsNotPhoneCollision(): void
+    {
+        $nonPhoneDuplicateRepo = new class extends InMemoryUserRepository {
+            public function create(
+                string $id,
+                ?string $phone,
+                ?string $email,
+                string $registerChannel = 'default',
+                int $riskLevel = 0
+            ): User {
+                // Simulates Snowflake ID collision or other DB 1062 where user is NOT found by phone
+                throw new DuplicateUserException('Duplicate key on PRIMARY', ErrorCode::USER_ALREADY_EXISTS->value);
+            }
+        };
+
+        $service = new UserApplicationService(
+            userRepo: $nonPhoneDuplicateRepo,
+            personaRepo: $this->personaRepo,
+            snowflake: new Snowflake(1),
+            transactionManager: new PassThroughTransactionManager(),
+            outbox: new RecordingEventOutbox(),
+        );
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(ErrorCode::INTERNAL_SERVER_ERROR->value);
+        $this->expectExceptionMessage(ErrorCode::INTERNAL_SERVER_ERROR->message());
+
+        $service->findOrCreateUserByPhone('+18888888888');
     }
 
     public function testUpdateUserSuccess(): void
@@ -275,6 +320,13 @@ final class UserServiceTest extends TestCase
         $fetched = $this->userService->getUser($userId);
         $this->assertSame('+19876543210', $fetched->phone);
         $this->assertSame('test@example.com', $fetched->email);
+
+        $userUpdatedEvents = $this->outbox->findByEventType(EventTypes::USER_UPDATED);
+        $this->assertCount(1, $userUpdatedEvents);
+        $this->assertSame('user', $userUpdatedEvents[0]['aggregate_type']);
+        $this->assertSame($userId, $userUpdatedEvents[0]['aggregate_id']);
+        $this->assertSame('+19876543210', $userUpdatedEvents[0]['payload']['phone']);
+        $this->assertSame('test@example.com', $userUpdatedEvents[0]['payload']['email']);
     }
 
     public function testUpdateUserNotFound(): void
@@ -296,5 +348,23 @@ final class UserServiceTest extends TestCase
         }
 
         $this->assertTrue($failed, 'Expected exception on forbidden persona modification');
+    }
+
+    public function testUpdatePersonaRecordsOutboxEvent(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+1234567890');
+        $userId = $res['user']->id;
+        $personas = $this->userService->listPersonas($userId);
+        $personaId = $personas[0]->id;
+
+        $updatedPersona = $this->userService->updatePersona($personaId, $userId, 'New Nickname', 'new_avatar.jpg', 'New Bio');
+        $this->assertSame('New Nickname', $updatedPersona->nickname);
+
+        $personaEvents = $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED);
+        // 1 from auto-created default persona + 1 from updatePersona
+        $this->assertCount(2, $personaEvents);
+        $lastEvent = end($personaEvents);
+        $this->assertSame($personaId, $lastEvent['aggregate_id']);
+        $this->assertSame('New Nickname', $lastEvent['payload']['nickname']);
     }
 }
