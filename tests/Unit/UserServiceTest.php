@@ -222,12 +222,16 @@ final class UserServiceTest extends TestCase
         $this->assertCount(1, $userRegisteredEvents);
         $this->assertSame('user', $userRegisteredEvents[0]['aggregate_type']);
         $this->assertSame($res['user']->id, $userRegisteredEvents[0]['aggregate_id']);
+        $this->assertSame(EventTypes::USER_REGISTERED, $userRegisteredEvents[0]['event_type']);
+        $this->assertSame($res['user']->id, $userRegisteredEvents[0]['payload']['id']);
         $this->assertSame('+1234567890', $userRegisteredEvents[0]['payload']['phone']);
 
         $personaUpdatedEvents = $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED);
         $this->assertCount(1, $personaUpdatedEvents);
         $this->assertSame('persona', $personaUpdatedEvents[0]['aggregate_type']);
         $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['aggregate_id']);
+        $this->assertSame(EventTypes::PERSONA_UPDATED, $personaUpdatedEvents[0]['event_type']);
+        $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['payload']['id']);
     }
 
     public function testFindOrCreateHandlesConcurrentDuplicateUser(): void
@@ -325,6 +329,8 @@ final class UserServiceTest extends TestCase
         $this->assertCount(1, $userUpdatedEvents);
         $this->assertSame('user', $userUpdatedEvents[0]['aggregate_type']);
         $this->assertSame($userId, $userUpdatedEvents[0]['aggregate_id']);
+        $this->assertSame(EventTypes::USER_UPDATED, $userUpdatedEvents[0]['event_type']);
+        $this->assertSame($userId, $userUpdatedEvents[0]['payload']['id']);
         $this->assertSame('+19876543210', $userUpdatedEvents[0]['payload']['phone']);
         $this->assertSame('test@example.com', $userUpdatedEvents[0]['payload']['email']);
     }
