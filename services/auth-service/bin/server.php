@@ -91,6 +91,9 @@ if (strlen($jwtSecret) < 32 || strlen($wsSecret) < 32) {
 }
 $accessTokenRevocationStore = new RedisAccessTokenRevocationStore($redis);
 $credentialVerifier = LoginCredentialVerifier::fromEnvironment();
+if (!$credentialVerifier->isDevelopment() && !$credentialVerifier->hasProvider()) {
+    $logger->warning('AuthService running in production mode without configured Credential Provider. Real logins will fail until providers are registered.');
+}
 $userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
 $userDirectory = new GrpcUserDirectoryClient($userServiceTarget);
 

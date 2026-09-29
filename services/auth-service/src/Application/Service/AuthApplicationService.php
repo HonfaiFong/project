@@ -17,12 +17,12 @@ final class AuthApplicationService
         private readonly AuthRepositoryInterface $authRepo,
         private readonly string $jwtSecret,
         private readonly string $wsTicketSecret,
+        private readonly CredentialVerifierInterface $credentialVerifier,
+        private readonly UserDirectoryInterface $userDirectory,
         private readonly int $accessTokenTtl = 7200,      // 2 hours
         private readonly int $refreshTokenTtl = 2592000,   // 30 days
         private readonly int $wsTicketTtl = 60,            // 60 seconds per spec line 1504
-        private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null,
-        private readonly ?CredentialVerifierInterface $credentialVerifier = null,
-        private readonly ?UserDirectoryInterface $userDirectory = null
+        private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null
     ) {
     }
 
@@ -39,16 +39,10 @@ final class AuthApplicationService
         array $deviceInfo,
         ?string $password = null
     ): array {
-        if ($this->credentialVerifier !== null) {
-            $this->credentialVerifier->verify($phone, [
-                'code'     => $code,
-                'password' => $password ?? '',
-            ]);
-        }
-
-        if ($this->userDirectory === null) {
-            throw new RuntimeException('User directory service unavailable', ErrorCode::SERVICE_UNAVAILABLE->value);
-        }
+        $this->credentialVerifier->verify($phone, [
+            'code'     => $code,
+            'password' => $password ?? '',
+        ]);
 
         $userRes = $this->userDirectory->findOrCreateByPhone($phone);
         $userId = $userRes['user_id'];
@@ -63,12 +57,12 @@ final class AuthApplicationService
 
     /**
      * Issues access token and refresh token directly for an already authenticated user.
-     * Used internally by login() or for internal testing/migration.
+     * Used internally by login().
      *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
      * @return array{user_id: string, access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int, is_new_user: bool}
      */
-    public function issueTokenForUser(string $userId, array $deviceInfo, bool $isNewUser = false): array
+    private function issueTokenForUser(string $userId, array $deviceInfo, bool $isNewUser = false): array
     {
         $device = $this->authRepo->findOrCreateDevice(
             userId: $userId,

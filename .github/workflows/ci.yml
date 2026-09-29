@@ -35,7 +35,12 @@ jobs:
       - name: Verify generated Proto contracts
         run: |
           make proto
-          test -z "$(git status --porcelain -- contracts/gen)"
+          if [ -n "$(git status --porcelain -- contracts/gen)" ]; then
+            echo "Generated proto files are stale:"
+            git status --short -- contracts/gen
+            git diff -- contracts/gen
+            exit 1
+          fi
 
       - name: Setup Buf
         uses: bufbuild/buf-setup-action@v1

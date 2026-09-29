@@ -4,18 +4,10 @@ declare(strict_types=1);
 
 namespace Packages\GrpcCommon;
 
-use Contracts\Errors\ErrorCode;
 use Google\Protobuf\Internal\Message;
 use Grpc\BaseStub;
 use Grpc\ChannelCredentials;
-use const Grpc\STATUS_DEADLINE_EXCEEDED;
-use const Grpc\STATUS_INVALID_ARGUMENT;
-use const Grpc\STATUS_NOT_FOUND;
 use const Grpc\STATUS_OK;
-use const Grpc\STATUS_PERMISSION_DENIED;
-use const Grpc\STATUS_RESOURCE_EXHAUSTED;
-use const Grpc\STATUS_UNAUTHENTICATED;
-use RuntimeException;
 
 class UnaryGrpcClient extends BaseStub
 {
@@ -55,20 +47,31 @@ class UnaryGrpcClient extends BaseStub
         [$response, $status] = $call->wait();
         if ($status->code !== STATUS_OK || !$response instanceof $responseClass) {
             $message = (string)($status->details ?? 'gRPC request failed');
-            $code = match ($status->code) {
-                STATUS_DEADLINE_EXCEEDED => ErrorCode::RPC_TIMEOUT->value,
-                STATUS_UNAUTHENTICATED => ($message === ErrorCode::AUTH_INVALID_CREDENTIALS->message()
-                    ? ErrorCode::AUTH_INVALID_CREDENTIALS->value
-                    : ErrorCode::AUTH_UNAUTHORIZED->value),
-                STATUS_INVALID_ARGUMENT => ErrorCode::INVALID_ARGUMENT->value,
-                STATUS_NOT_FOUND => ErrorCode::USER_NOT_FOUND->value,
-                STATUS_PERMISSION_DENIED => ErrorCode::PERSONA_FORBIDDEN->value,
-                STATUS_RESOURCE_EXHAUSTED => ErrorCode::RATE_LIMIT_EXCEEDED->value,
-                default => ErrorCode::SERVICE_UNAVAILABLE->value,
-            };
-            throw new RuntimeException($message, $code);
+            $appErrorCode = $this->extractAppErrorCode($status->metadata ?? []);
+            throw new GrpcCallException($status->code, $appErrorCode, $message);
         }
 
         return $response;
+    }
+
+    /**
+     * @param mixed $metadata
+     */
+    private function extractAppErrorCode(mixed $metadata): ?int
+    {
+        if (!is_array($metadata)) {
+            return null;
+        }
+
+        foreach ($metadata as $key => $values) {
+            if (strtolower((string)$key) === 'x-app-error-code') {
+                $val = is_array($values) ? ($values[0] ?? null) : $values;
+                if ($val !== null && is_numeric($val)) {
+                    return (int)$val;
+                }
+            }
+        }
+
+        return null;
     }
 }

@@ -70,6 +70,11 @@ class LoginCredentialVerifier implements CredentialVerifierInterface
         return in_array($this->environment, ['local', 'development', 'dev', 'testing'], true);
     }
 
+    public function hasProvider(): bool
+    {
+        return is_callable($this->provider);
+    }
+
     private function invalidCredentials(): RuntimeException
     {
         return new RuntimeException(

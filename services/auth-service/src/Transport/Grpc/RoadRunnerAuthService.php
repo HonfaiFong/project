@@ -20,6 +20,7 @@ use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use InvalidArgumentException;
 use Spiral\RoadRunner\GRPC\ContextInterface;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
+use Spiral\RoadRunner\GRPC\ResponseTrailers;
 use Spiral\RoadRunner\GRPC\StatusCode;
 use Throwable;
 
@@ -137,6 +138,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             $code = (int)($result['code'] ?? 0);
 
             if ($code !== 0) {
+                $this->attachAppErrorTrailer($ctx, $code);
                 $this->throwMappedError($code, (string)($result['message'] ?? 'RPC failed'));
             }
 
@@ -144,7 +146,23 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         } catch (GRPCException $e) {
             throw $e;
         } catch (Throwable $e) {
+            $code = (int)$e->getCode();
+            if ($code > 0) {
+                $this->attachAppErrorTrailer($ctx, $code);
+            }
             throw $this->mapThrowable($e);
+        }
+    }
+
+    private function attachAppErrorTrailer(ContextInterface $ctx, int $code): void
+    {
+        if ($code <= 0) {
+            return;
+        }
+
+        $trailers = $ctx->getValue(ResponseTrailers::class);
+        if ($trailers instanceof ResponseTrailers) {
+            $trailers->set('x-app-error-code', (string)$code);
         }
     }
 

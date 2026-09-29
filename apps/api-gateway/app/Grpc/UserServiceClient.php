@@ -22,9 +22,17 @@ use Contracts\Gen\User\V1\ListPersonasRequest;
 use Contracts\Gen\User\V1\ListPersonasResponse;
 use Contracts\Gen\User\V1\PersonaProfile;
 use Contracts\Gen\User\V1\UpdatePersonaRequest;
+use Contracts\Errors\ErrorCode;
 use Contracts\Gen\User\V1\UpdatePersonaResponse;
 use Contracts\Gen\User\V1\UserProfile;
 use Google\Protobuf\Internal\Message;
+use Packages\GrpcCommon\GrpcCallException;
+use RuntimeException;
+use const Grpc\STATUS_DEADLINE_EXCEEDED;
+use const Grpc\STATUS_INVALID_ARGUMENT;
+use const Grpc\STATUS_NOT_FOUND;
+use const Grpc\STATUS_PERMISSION_DENIED;
+use const Grpc\STATUS_RESOURCE_EXHAUSTED;
 
 final class UserServiceClient
 {
@@ -151,7 +159,29 @@ final class UserServiceClient
             $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052')
         );
 
-        return $client->call($method, $request, $responseClass, $this->timeoutMs);
+        try {
+            return $client->call($method, $request, $responseClass, $this->timeoutMs);
+        } catch (GrpcCallException $e) {
+            throw $this->mapGrpcCallException($e);
+        }
+    }
+
+    private function mapGrpcCallException(GrpcCallException $e): RuntimeException
+    {
+        if ($e->appErrorCode !== null) {
+            return new RuntimeException($e->getMessage(), $e->appErrorCode, $e);
+        }
+
+        $code = match ($e->grpcStatus) {
+            STATUS_DEADLINE_EXCEEDED => ErrorCode::RPC_TIMEOUT->value,
+            STATUS_NOT_FOUND => ErrorCode::USER_NOT_FOUND->value,
+            STATUS_PERMISSION_DENIED => ErrorCode::PERSONA_FORBIDDEN->value,
+            STATUS_INVALID_ARGUMENT => ErrorCode::INVALID_ARGUMENT->value,
+            STATUS_RESOURCE_EXHAUSTED => ErrorCode::RATE_LIMIT_EXCEEDED->value,
+            default => ErrorCode::SERVICE_UNAVAILABLE->value,
+        };
+
+        return new RuntimeException($e->getMessage(), $code, $e);
     }
 
     /** @return array<string, mixed> */

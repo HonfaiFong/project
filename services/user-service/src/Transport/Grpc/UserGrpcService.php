@@ -33,6 +33,7 @@ use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
 use Spiral\RoadRunner\GRPC\ContextInterface;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
+use Spiral\RoadRunner\GRPC\ResponseTrailers;
 use Spiral\RoadRunner\GRPC\StatusCode;
 use Throwable;
 
@@ -175,12 +176,21 @@ final class UserGrpcService implements UserServiceInterface
         try {
             return $operation();
         } catch (GRPCException $e) {
+            $code = (int)$e->getCode();
+            if ($code > 0) {
+                $this->attachAppErrorTrailer($ctx, $code);
+            }
             throw $e;
         } catch (Throwable $e) {
             $this->logger->error("Error in {$method}: " . $e->getMessage(), [
                 'exception' => $e::class,
                 'error_code' => $e->getCode(),
             ]);
+
+            $code = (int)$e->getCode();
+            if ($code > 0) {
+                $this->attachAppErrorTrailer($ctx, $code);
+            }
 
             throw GRPCException::create(
                 $this->publicErrorMessage($e),
@@ -190,6 +200,18 @@ final class UserGrpcService implements UserServiceInterface
             );
         } finally {
             TraceContext::reset();
+        }
+    }
+
+    private function attachAppErrorTrailer(ContextInterface $ctx, int $code): void
+    {
+        if ($code <= 0) {
+            return;
+        }
+
+        $trailers = $ctx->getValue(ResponseTrailers::class);
+        if ($trailers instanceof ResponseTrailers) {
+            $trailers->set('x-app-error-code', (string)$code);
         }
     }
 

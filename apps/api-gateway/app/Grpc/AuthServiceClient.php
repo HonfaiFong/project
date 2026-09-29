@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Grpc;
 
+use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Auth\V1\CreateWsTicketRequest;
 use Contracts\Gen\Auth\V1\CreateWsTicketResponse;
 use Contracts\Gen\Auth\V1\DeviceInfo;
@@ -18,6 +19,12 @@ use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use Contracts\Gen\Common\V1\HealthCheckRequest;
 use Contracts\Gen\Common\V1\HealthCheckResponse;
 use Google\Protobuf\Internal\Message;
+use Packages\GrpcCommon\GrpcCallException;
+use RuntimeException;
+use const Grpc\STATUS_DEADLINE_EXCEEDED;
+use const Grpc\STATUS_INVALID_ARGUMENT;
+use const Grpc\STATUS_RESOURCE_EXHAUSTED;
+use const Grpc\STATUS_UNAUTHENTICATED;
 
 final class AuthServiceClient
 {
@@ -25,7 +32,7 @@ final class AuthServiceClient
 
     public function __construct(
         private readonly ?string $target = null,
-        private readonly int $timeoutMs = 150
+        private readonly int $timeoutMs = 300
     ) {
     }
 
@@ -114,7 +121,30 @@ final class AuthServiceClient
             $this->target ?: (getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051')
         );
 
-        return $client->call($method, $request, $responseClass, $this->timeoutMs);
+        try {
+            return $client->call($method, $request, $responseClass, $this->timeoutMs);
+        } catch (GrpcCallException $e) {
+            throw $this->mapGrpcCallException($e);
+        }
+    }
+
+    private function mapGrpcCallException(GrpcCallException $e): RuntimeException
+    {
+        if ($e->appErrorCode !== null) {
+            return new RuntimeException($e->getMessage(), $e->appErrorCode, $e);
+        }
+
+        $code = match ($e->grpcStatus) {
+            STATUS_DEADLINE_EXCEEDED => ErrorCode::RPC_TIMEOUT->value,
+            STATUS_UNAUTHENTICATED => ($e->getMessage() === ErrorCode::AUTH_INVALID_CREDENTIALS->message()
+                ? ErrorCode::AUTH_INVALID_CREDENTIALS->value
+                : ErrorCode::AUTH_UNAUTHORIZED->value),
+            STATUS_INVALID_ARGUMENT => ErrorCode::INVALID_ARGUMENT->value,
+            STATUS_RESOURCE_EXHAUSTED => ErrorCode::RATE_LIMIT_EXCEEDED->value,
+            default => ErrorCode::SERVICE_UNAVAILABLE->value,
+        };
+
+        return new RuntimeException($e->getMessage(), $code, $e);
     }
 
     private function device(array $deviceInfo): DeviceInfo

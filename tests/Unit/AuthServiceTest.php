@@ -190,22 +190,9 @@ final class AuthServiceTest extends TestCase
         ]);
     }
 
-    public function testIssueTokenForUserDirectly(): void
-    {
-        $result = $this->authService->issueTokenForUser('20001', [
-            'device_uuid' => 'uuid-123',
-            'platform'    => 'ios',
-            'app_version' => '1.0.0',
-        ]);
-
-        $this->assertNotEmpty($result['access_token']);
-        $this->assertNotEmpty($result['refresh_token']);
-        $this->assertSame('20001', $result['user_id']);
-    }
-
     public function testRefreshTokenCanOnlyBeConsumedOnce(): void
     {
-        $login = $this->authService->issueTokenForUser('20001', [
+        $login = $this->authService->login('+8613800000000', 'dev-1234', [
             'device_uuid' => 'uuid-123',
             'platform'    => 'ios',
             'app_version' => '1.0.0',
@@ -225,7 +212,7 @@ final class AuthServiceTest extends TestCase
 
     public function testLogoutRevokesAccessTokenImmediately(): void
     {
-        $login = $this->authService->issueTokenForUser('20001', [
+        $login = $this->authService->login('+8613800000000', 'dev-1234', [
             'device_uuid' => 'uuid-123',
             'platform'    => 'ios',
             'app_version' => '1.0.0',
