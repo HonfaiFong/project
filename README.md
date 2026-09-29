@@ -82,18 +82,16 @@
 #    （compose.yaml 对这三个变量做强校验，缺失会拒绝启动）
 cp .env.example .env
 
-# 2. 一键启动所有基础依赖与微服务容器（首次启动会自动编译所需镜像）
+# 2. 一键启动全流程
+#    （make up 内部严格执行安全生命周期：镜像编译 -> 基础设施就绪 -> 自动探活 -> 执行数据迁移 -> 业务与网关服务启动）
 make up
 
-# 3. 执行数据库基线与增量迁移
-make migrate
-
-# 4. 检查服务健康状态
+# 3. 检查服务健康状态
 #    网关会对 auth/user 服务发起真实的 gRPC 健康探测；任一下游不可用返回 503
 curl http://127.0.0.1:8787/health
 ```
 
-> **启动与迁移顺序说明**：本地开发环境下基线 SQL（`01-databases.sql`）会在 MySQL 首次初始化时由挂载目录自动载入；在 CI 与生产编排中，严格遵循：**基础设施就绪（MySQL/Redis） → 执行迁移（`make migrate`） → 启动业务容器（Auth/User/Gateway） → 等待健康就绪（`/health` SERVING） → 接收流量 / 执行 E2E**，确保服务不会因为缺失数据列或新表而在初始化时崩溃。
+> **启动与迁移顺序说明**：`make up` 封装了标准工程实践顺序：**编译检查 → 基础设施（MySQL/Redis/Kafka） → 自动探活 → 数据迁移（`make migrate`） → 启动业务服务（Auth/User/Gateway）**。开发与生产均杜绝“应用在迁移完成前启动导致缺列崩溃”的问题。
 
 Snowflake Worker ID 说明：MVP 阶段 `compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 `pid % 32` 消散，在单容器小并发阶段可正常工作。注意：`pid % 32` 在数学上无法杜绝跨进程碰撞，在生产环境横向扩容（多 Pod × 多 RoadRunner Worker）前必须切换为基于 Redis `SET NX` 租约分发的动态 WorkerId Allocator（0-1023）并定时续期。
 
@@ -170,7 +168,9 @@ make e2e
 | 命令 | 说明 |
 | :--- | :--- |
 | `make bootstrap` | 初始化依赖、生成 autoload 与配置 |
-| `make up` | 启动全部 Docker 容器 |
+| `make up` | 编排启动全流程（镜像检查 -> 基础设施 -> 数据迁移 -> 业务服务） |
+| `make infra-up` | 仅启动基础设施容器 (MySQL / Redis / Kafka) |
+| `make app-up` | 仅启动业务微服务与网关容器 |
 | `make down` | 停止并移除容器 |
 | `make lint` | 执行 PHP 语法校验与 Go vet |
 | `make analyse` | 执行 PHPStan 静态分析 |

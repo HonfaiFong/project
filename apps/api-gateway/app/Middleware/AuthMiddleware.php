@@ -17,7 +17,7 @@ final class AuthMiddleware
 
     /**
      * @param array<string, string> $headers
-     * @return array{user_id: string, device_id: string, requested_persona_id: ?string, persona_id?: ?string}
+     * @return array{user_id: string, device_id: string, requested_persona_id: ?string}
      */
     public function authenticate(array $headers): array
     {
@@ -64,7 +64,6 @@ final class AuthMiddleware
             'user_id'              => $userId,
             'device_id'            => $deviceId,
             'requested_persona_id' => $requestedPersonaId,
-            'persona_id'           => $requestedPersonaId,
         ];
     }
 }

@@ -110,13 +110,20 @@ jobs:
       - name: Wait for MySQL to become healthy
         run: |
           echo "Waiting for MySQL to become healthy..."
+          ready=0
           for i in {1..30}; do
-            if docker compose exec -T mysql mysqladmin ping -h localhost -u root -preplace-with-random-local-mysql-password --silent >/dev/null 2>&1; then
+            if docker compose exec -T mysql sh -c 'mysqladmin ping -h localhost -uroot -p"$MYSQL_ROOT_PASSWORD" --silent'; then
+              ready=1
               echo "MySQL is healthy!"
               break
             fi
             sleep 2
           done
+
+          if [ "$ready" -ne 1 ]; then
+            echo "MySQL failed to become healthy within timeout!"
+            exit 1
+          fi
 
       - name: Run database migrations
         run: make migrate

@@ -105,7 +105,7 @@ final class AuthController
         $userId = $authContext['user_id'] ?? '';
         $deviceId = $authContext['device_id'] ?? '';
         $requestedPersonaId = trim((string)($body['persona_id'] ?? ''));
-        $headerPersonaId = trim((string)($authContext['requested_persona_id'] ?? $authContext['persona_id'] ?? ''));
+        $headerPersonaId = trim((string)($authContext['requested_persona_id'] ?? ''));
 
         if ($requestedPersonaId !== '' && $headerPersonaId !== '' && $requestedPersonaId !== $headerPersonaId) {
             return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'forbidden persona access');

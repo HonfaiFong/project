@@ -4,6 +4,21 @@ declare(strict_types=1);
 
 namespace Packages\Tracing;
 
+/**
+ * Request tracing context holding correlation identifiers and trusted user context.
+ *
+ * ARCHITECTURAL CONCURRENCY NOTE / TECHNICAL DEBT:
+ * Currently `private static ?self $current = null` stores the active context. This is
+ * safe under the current synchronous process-per-worker model (Workerman single-event-loop
+ * worker / RoadRunner worker), where each request cleans up via `TraceContext::reset()`
+ * in a `finally` block before processing the next request.
+ *
+ * TODO (CRITICAL before enabling Webman Coroutine / Fibers / Async concurrency):
+ * When coroutine/fiber concurrency is enabled, `static $current` is shared across concurrent
+ * requests in the same process worker, causing trace context crosstalk when a coroutine yields.
+ * Before enabling coroutines, this static property MUST be migrated to Coroutine-Local
+ * / Fiber-Local storage (e.g. Swow/Swoole Coroutine::getContext() or Fiber-scoped context).
+ */
 final class TraceContext
 {
     private static ?self $current = null;

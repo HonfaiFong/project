@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test up infra-up app-up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:dev
 GATEWAY_IMAGE     := project-realtime-gateway:latest
@@ -27,7 +27,13 @@ test:
 	@echo "Running Go Tests..."
 	@go test -mod=mod ./...
 
-# 日常开发入口:镜像缺失时才构建,日常改代码不触发任何 build
+infra-up:
+	docker compose up -d mysql redis kafka
+
+app-up:
+	docker compose up -d auth-service user-service api-gateway realtime-gateway
+
+# 标准开发入口: 镜像校验/构建 -> 启动基础设施 -> 等待 MySQL 就绪 -> 迁移数据库 -> 启动应用服务
 up:
 	@if ! docker image inspect $(PHP_RUNTIME_IMAGE) >/dev/null 2>&1; then \
 		echo ">>> $(PHP_RUNTIME_IMAGE) 不存在,先构建 PHP runtime..."; \
@@ -37,14 +43,30 @@ up:
 		echo ">>> $(GATEWAY_IMAGE) 不存在,先构建 realtime gateway..."; \
 		docker compose build realtime-gateway; \
 	fi
-	docker compose up -d
+	@echo ">>> 启动基础设施 (MySQL / Redis / Kafka)..."
+	docker compose up -d mysql redis kafka
+	@echo ">>> 等待 MySQL 就绪..."
+	@ready=0; \
+	for i in $$(seq 1 30); do \
+		if docker compose exec -T mysql sh -c 'mysqladmin ping -h localhost -uroot -p"$$MYSQL_ROOT_PASSWORD" --silent' >/dev/null 2>&1; then \
+			ready=1; \
+			break; \
+		fi; \
+		sleep 1; \
+	done; \
+	if [ "$$ready" -ne 1 ]; then \
+		echo ">>> 错误: MySQL 等待超时未就绪"; \
+		exit 1; \
+	fi
+	@echo ">>> 执行数据库基线与增量迁移..."
+	@$(MAKE) migrate
+	@echo ">>> 启动业务应用与网关服务..."
+	docker compose up -d auth-service user-service api-gateway realtime-gateway
 
 down:
 	docker compose down
 
-restart:
-	docker compose down
-	docker compose up -d
+restart: down up
 
 # 仅当 PHP 版本 / 扩展 / RoadRunner / Dockerfile 变化时才需要
 build-runtime:
