@@ -223,11 +223,4 @@ final class PdoAuthRepository implements AuthRepositoryInterface
         $stmt->execute(['now' => $now, 'hash' => $tokenHash]);
         return $stmt->rowCount() > 0;
     }
-
-    public function revokeUserTokens(string $userId): void
-    {
-        $now = gmdate('Y-m-d H:i:s.v');
-        $stmt = $this->pdo->prepare('UPDATE refresh_tokens SET revoked_at = :now WHERE user_id = :user_id AND revoked_at IS NULL');
-        $stmt->execute(['now' => $now, 'user_id' => $userId]);
-    }
 }

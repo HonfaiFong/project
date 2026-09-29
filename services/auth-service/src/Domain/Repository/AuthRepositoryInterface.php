@@ -37,6 +37,4 @@ interface AuthRepositoryInterface
     public function findRefreshToken(string $tokenHash): ?RefreshToken;
 
     public function revokeRefreshToken(string $tokenHash): bool;
-
-    public function revokeUserTokens(string $userId): void;
 }

@@ -12,8 +12,13 @@ use Services\AuthService\Domain\Entity\Device;
 use Services\AuthService\Domain\Entity\RefreshToken;
 use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
+use Contracts\Gen\Auth\V1\DeviceInfo;
+use Contracts\Gen\Auth\V1\LoginRequest;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
-use Services\AuthService\Transport\Grpc\AuthGrpcHandler;
+use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
+use Spiral\RoadRunner\GRPC\Context;
+use Spiral\RoadRunner\GRPC\Exception\GRPCException;
+use Spiral\RoadRunner\GRPC\StatusCode;
 use Tests\TestCase;
 
 final class InMemoryAuthRepository implements AuthRepositoryInterface
@@ -95,15 +100,6 @@ final class InMemoryAuthRepository implements AuthRepositoryInterface
             return true;
         }
         return false;
-    }
-
-    public function revokeUserTokens(string $userId): void
-    {
-        foreach ($this->tokens as $hash => $tok) {
-            if ($tok->userId === $userId) {
-                unset($this->tokens[$hash]);
-            }
-        }
     }
 }
 
@@ -231,34 +227,34 @@ final class AuthServiceTest extends TestCase
         $this->assertGreaterThan(time(), $ticket['expire_at']);
     }
 
-    public function testGrpcHandlerLoginSuccess(): void
+    public function testRoadRunnerAuthServiceLoginSuccess(): void
     {
-        $handler = new AuthGrpcHandler($this->authService, new JsonLogger('test-auth'));
-        $response = $handler->handle('Login', [
+        $service = new RoadRunnerAuthService($this->authService, new JsonLogger('test-auth'));
+        $ctx = new Context(['metadata' => []]);
+        $response = $service->Login($ctx, new LoginRequest([
             'phone' => '+8613800000000',
             'code'  => 'dev-1234',
-            'device'=> [
+            'device'=> new DeviceInfo([
                 'device_uuid' => 'dev-uuid-test',
                 'platform'    => 'android',
                 'app_version' => '1.0.0',
-            ],
-        ]);
+            ]),
+        ]));
 
-        $this->assertSame(0, $response['code']);
-        $this->assertSame('20001', $response['user_id']);
-        $this->assertNotEmpty($response['access_token']);
-        $this->assertNotEmpty($response['refresh_token']);
+        $this->assertSame('20001', (string)$response->getUserId());
+        $this->assertNotEmpty($response->getAccessToken());
+        $this->assertNotEmpty($response->getRefreshToken());
     }
 
-    public function testGrpcHandlerLoginFailsOnInvalidCode(): void
+    public function testRoadRunnerAuthServiceLoginFailsOnInvalidCode(): void
     {
-        $handler = new AuthGrpcHandler($this->authService, new JsonLogger('test-auth'));
-        $response = $handler->handle('Login', [
+        $service = new RoadRunnerAuthService($this->authService, new JsonLogger('test-auth'));
+        $ctx = new Context(['metadata' => []]);
+        $this->expectException(GRPCException::class);
+        $this->expectExceptionCode(StatusCode::UNAUTHENTICATED);
+        $service->Login($ctx, new LoginRequest([
             'phone' => '+8613800000000',
             'code'  => 'invalid-code',
-            'device'=> [],
-        ]);
-
-        $this->assertSame(ErrorCode::AUTH_INVALID_CREDENTIALS->value, $response['code']);
+        ]));
     }
 }

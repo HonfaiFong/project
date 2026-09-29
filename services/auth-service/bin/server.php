@@ -15,7 +15,6 @@ use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
 use Services\AuthService\Infrastructure\Client\GrpcUserDirectoryClient;
 use Services\AuthService\Infrastructure\Repository\PdoAuthRepository;
-use Services\AuthService\Transport\Grpc\AuthGrpcHandler;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
@@ -105,8 +104,7 @@ $appService = new AuthApplicationService(
     credentialVerifier: $credentialVerifier,
     userDirectory: $userDirectory
 );
-$handler = new AuthGrpcHandler($appService, $logger);
-$grpcService = new RoadRunnerAuthService($handler);
+$grpcService = new RoadRunnerAuthService($appService, $logger);
 $server = new Server(new Invoker());
 $server->registerService(AuthServiceInterface::class, $grpcService);
 $server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService());

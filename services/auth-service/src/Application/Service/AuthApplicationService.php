@@ -10,20 +10,27 @@ use Services\AuthService\Domain\Auth\CredentialVerifierInterface;
 use Services\AuthService\Domain\Client\UserDirectoryInterface;
 use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
+use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
+use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 
 final class AuthApplicationService
 {
+    private readonly JwtTokenCodec $jwtCodec;
+    private readonly WsTicketIssuer $wsTicketIssuer;
+
     public function __construct(
         private readonly AuthRepositoryInterface $authRepo,
-        private readonly string $jwtSecret,
-        private readonly string $wsTicketSecret,
+        string|JwtTokenCodec $jwtSecret,
+        string|WsTicketIssuer $wsTicketSecret,
         private readonly CredentialVerifierInterface $credentialVerifier,
         private readonly UserDirectoryInterface $userDirectory,
         private readonly int $accessTokenTtl = 7200,      // 2 hours
         private readonly int $refreshTokenTtl = 2592000,   // 30 days
-        private readonly int $wsTicketTtl = 60,            // 60 seconds per spec line 1504
+        int $wsTicketTtl = 60,                            // 60 seconds per spec line 1504
         private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null
     ) {
+        $this->jwtCodec = is_string($jwtSecret) ? new JwtTokenCodec($jwtSecret) : $jwtSecret;
+        $this->wsTicketIssuer = is_string($wsTicketSecret) ? new WsTicketIssuer($wsTicketSecret, $wsTicketTtl) : $wsTicketSecret;
     }
 
     /**
@@ -77,7 +84,7 @@ final class AuthApplicationService
         $accessExpiresAt = $now + $this->accessTokenTtl;
         $refreshExpiresAt = $now + $this->refreshTokenTtl;
 
-        $accessToken = $this->generateJwt([
+        $accessToken = $this->jwtCodec->encode([
             'sub'       => $userId,
             'device_id' => $device->id,
             'iat'       => $now,
@@ -129,7 +136,7 @@ final class AuthApplicationService
             throw new RuntimeException('Token invalid or expired', ErrorCode::AUTH_TOKEN_EXPIRED->value);
         }
 
-        $accessToken = $this->generateJwt([
+        $accessToken = $this->jwtCodec->encode([
             'sub'       => $record->userId,
             'device_id' => $record->deviceId,
             'iat'       => $now,
@@ -159,7 +166,7 @@ final class AuthApplicationService
         if ($this->accessTokenRevocationStore !== null && $rawAccessToken !== null && $rawAccessToken !== '') {
             $payload = null;
             try {
-                $payload = $this->verifyJwt($rawAccessToken);
+                $payload = $this->jwtCodec->decode($rawAccessToken);
             } catch (\Throwable) {
                 // An invalid access token cannot be used for authentication and needs no blacklist entry.
             }
@@ -187,7 +194,7 @@ final class AuthApplicationService
     public function verifyToken(string $token): array
     {
         try {
-            $payload = $this->verifyJwt($token);
+            $payload = $this->jwtCodec->decode($token);
 
             if ($this->accessTokenRevocationStore?->isRevoked(
                 hash('sha256', $token),
@@ -209,65 +216,6 @@ final class AuthApplicationService
 
     public function createWsTicket(string $userId, string $personaId, string $deviceId): array
     {
-        $expireAt = time() + $this->wsTicketTtl;
-        $nonce = bin2hex(random_bytes(8));
-
-        // Format: user_id:persona_id:device_id:nonce:expire_at:signature
-        $signData = sprintf('%s:%s:%s:%s:%d', $userId, $personaId, $deviceId, $nonce, $expireAt);
-        $signature = hash_hmac('sha256', $signData, $this->wsTicketSecret);
-
-        // base64url (RFC 4648 §5, unpadded): the ticket travels in the
-        // `GET /ws?ticket=` query string, where standard base64's `+/=`
-        // characters get mangled by URL query decoding.
-        $ticket = $this->base64UrlEncode(sprintf('%s:%s', $signData, $signature));
-
-        return [
-            'ticket'    => $ticket,
-            'expire_at' => $expireAt,
-        ];
-    }
-
-    private function generateJwt(array $payload): string
-    {
-        $header = ['alg' => 'HS256', 'typ' => 'JWT'];
-        $b64Header = $this->base64UrlEncode((string)json_encode($header));
-        $b64Payload = $this->base64UrlEncode((string)json_encode($payload));
-
-        $signature = hash_hmac('sha256', "{$b64Header}.{$b64Payload}", $this->jwtSecret, true);
-        $b64Sig = $this->base64UrlEncode($signature);
-
-        return "{$b64Header}.{$b64Payload}.{$b64Sig}";
-    }
-
-    private function verifyJwt(string $jwt): array
-    {
-        $parts = explode('.', $jwt);
-        if (count($parts) !== 3) {
-            throw new RuntimeException('Malformed JWT');
-        }
-
-        [$b64Header, $b64Payload, $b64Sig] = $parts;
-        $expectedSig = hash_hmac('sha256', "{$b64Header}.{$b64Payload}", $this->jwtSecret, true);
-
-        if (!hash_equals($expectedSig, $this->base64UrlDecode($b64Sig))) {
-            throw new RuntimeException('Invalid signature');
-        }
-
-        $payload = json_decode($this->base64UrlDecode($b64Payload), true);
-        if (!is_array($payload) || !isset($payload['exp']) || $payload['exp'] < time()) {
-            throw new RuntimeException('Token expired or payload invalid');
-        }
-
-        return $payload;
-    }
-
-    private function base64UrlEncode(string $data): string
-    {
-        return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
-    }
-
-    private function base64UrlDecode(string $data): string
-    {
-        return (string)base64_decode(strtr($data, '-_', '+/'));
+        return $this->wsTicketIssuer->issue($userId, $personaId, $deviceId);
     }
 }

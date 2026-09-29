@@ -22,14 +22,15 @@ use Services\AuthService\Domain\Client\UserDirectoryInterface;
 use Services\AuthService\Domain\Entity\Device;
 use Services\AuthService\Domain\Entity\RefreshToken;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
+use Packages\Outbox\NullEventOutbox;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
-use Services\AuthService\Transport\Grpc\AuthGrpcHandler;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
 use Services\UserService\Domain\Repository\PersonaRepositoryInterface;
 use Services\UserService\Domain\Repository\UserRepositoryInterface;
+use Services\UserService\Infrastructure\Repository\PassThroughTransactionManager;
 use Services\UserService\Transport\Grpc\UserGrpcService;
 use Spiral\RoadRunner\GRPC\Context;
 use Spiral\RoadRunner\GRPC\ContextInterface;
@@ -69,15 +70,46 @@ final class GrpcErrorTrailerContractTest extends TestCase
         );
     }
 
-    public function testUnimplementedGrpcExceptionDoesNotPublishGrpcStatusAsAppErrorCode(): void
+    public function testTransportGrpcExceptionDoesNotPublishGrpcStatusAsAppErrorCode(): void
+    {
+        $userRepo = new class extends EmptyUserRepository {
+            public function findById(string $id): ?User
+            {
+                throw GRPCException::create('Transport status exception', StatusCode::UNIMPLEMENTED);
+            }
+        };
+
+        $appService = new UserApplicationService(
+            userRepo: $userRepo,
+            personaRepo: new EmptyPersonaRepository(),
+            snowflake: new Snowflake(1),
+            transactionManager: new PassThroughTransactionManager(),
+            outbox: new NullEventOutbox(),
+        );
+
+        $ctx = $this->context();
+        $trailers = $this->trailers($ctx);
+        $service = new UserGrpcService($appService, $this->logger());
+
+        try {
+            $service->GetUser($ctx, new GetUserRequest(['user_id' => '1001']));
+            $this->fail('Expected GRPCException for UNIMPLEMENTED call');
+        } catch (GRPCException $e) {
+            $this->assertSame(StatusCode::UNIMPLEMENTED, $e->getCode());
+        }
+
+        $this->assertNull($trailers->get(self::TRAILER_KEY, null));
+    }
+
+    public function testUpdateUserInvalidIdThrowsInvalidArgumentWithoutTrailer(): void
     {
         [$service, $ctx, $trailers] = $this->userServiceFixture();
 
         try {
             $service->UpdateUser($ctx, new UpdateUserRequest());
-            $this->fail('Expected GRPCException for the unimplemented UpdateUser call');
+            $this->fail('Expected GRPCException for empty user_id');
         } catch (GRPCException $e) {
-            $this->assertSame(StatusCode::UNIMPLEMENTED, $e->getCode());
+            $this->assertSame(StatusCode::INVALID_ARGUMENT, $e->getCode());
         }
 
         $this->assertNull($trailers->get(self::TRAILER_KEY, null));
@@ -171,14 +203,13 @@ final class GrpcErrorTrailerContractTest extends TestCase
      */
     public function testUnknownNonZeroHandlerCodeFailsInsteadOfReturningSuccess(): void
     {
-        // The auth repository throws PDOException(23000); AuthGrpcHandler normalises it into a
-        // handler result of ['code' => 23000], which is NOT a contract ErrorCode.
+        // The auth repository throws PDOException(23000), which is NOT a contract ErrorCode.
         $ctx = $this->context();
         $trailers = $this->trailers($ctx);
-        $service = new RoadRunnerAuthService(new AuthGrpcHandler(
+        $service = new RoadRunnerAuthService(
             $this->authService(failingAuthRepository: true),
             $this->logger()
-        ));
+        );
 
         try {
             $response = $service->Logout($ctx, new LogoutRequest(['refresh_token' => 'whatever']));
@@ -232,7 +263,9 @@ final class GrpcErrorTrailerContractTest extends TestCase
         $appService = new UserApplicationService(
             userRepo: $userRepo,
             personaRepo: new EmptyPersonaRepository(),
-            snowflake: new Snowflake(1)
+            snowflake: new Snowflake(1),
+            transactionManager: new PassThroughTransactionManager(),
+            outbox: new NullEventOutbox(),
         );
 
         $ctx = $this->context();
@@ -242,7 +275,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
     }
 
     /**
-     * Drives the real AuthGrpcHandler + RoadRunnerAuthService pair over doubles, so the trailer
+     * Drives RoadRunnerAuthService directly over doubles, so the trailer
      * contract is asserted against the production error-mapping chain.
      *
      * @return array{0: RoadRunnerAuthService, 1: ContextInterface, 2: ResponseTrailers}
@@ -253,10 +286,10 @@ final class GrpcErrorTrailerContractTest extends TestCase
         $trailers = $this->trailers($ctx);
 
         return [
-            new RoadRunnerAuthService(new AuthGrpcHandler(
+            new RoadRunnerAuthService(
                 $this->authService(userDirectoryFails: $userDirectoryFails),
                 $this->logger()
-            )),
+            ),
             $ctx,
             $trailers,
         ];
@@ -475,10 +508,6 @@ class EmptyAuthRepository implements AuthRepositoryInterface
     public function revokeRefreshToken(string $tokenHash): bool
     {
         return false;
-    }
-
-    public function revokeUserTokens(string $userId): void
-    {
     }
 }
 

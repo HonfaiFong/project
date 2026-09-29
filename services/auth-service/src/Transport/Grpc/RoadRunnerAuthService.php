@@ -17,8 +17,10 @@ use Contracts\Gen\Auth\V1\RefreshTokenRequest;
 use Contracts\Gen\Auth\V1\RefreshTokenResponse;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
-use InvalidArgumentException;
 use Packages\GrpcCommon\ErrorStatusMapper;
+use Packages\Logging\JsonLogger;
+use Packages\Tracing\TraceContext;
+use Services\AuthService\Application\Service\AuthApplicationService;
 use Spiral\RoadRunner\GRPC\ContextInterface;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
 use Spiral\RoadRunner\GRPC\ResponseTrailers;
@@ -27,140 +29,151 @@ use Throwable;
 
 final class RoadRunnerAuthService implements AuthServiceInterface
 {
-    public function __construct(private readonly AuthGrpcHandler $handler)
-    {
+    public function __construct(
+        private readonly AuthApplicationService $authService,
+        private readonly JsonLogger $logger
+    ) {
     }
 
     public function Login(ContextInterface $ctx, LoginRequest $in): LoginResponse
     {
-        return $this->execute(
-            $ctx,
-            'Login',
-            [
-                'phone'    => $in->getPhone(),
-                'code'     => $in->getCode(),
-                'password' => $in->getPassword(),
-                'device'   => $this->deviceInfo($in->getDevice()),
-            ],
-            fn (array $result): LoginResponse => new LoginResponse([
-                'user_id'                  => $this->uint64($result['user_id'] ?? '0', 'user_id'),
-                'access_token'             => (string)($result['access_token'] ?? ''),
-                'refresh_token'            => (string)($result['refresh_token'] ?? ''),
-                'access_token_expires_at'  => (string)($result['access_token_expires_at'] ?? ''),
-                'refresh_token_expires_at' => (string)($result['refresh_token_expires_at'] ?? ''),
-                'is_new_user'              => (bool)($result['is_new_user'] ?? false),
-            ])
-        );
+        return $this->call($ctx, 'Login', function () use ($in): LoginResponse {
+            $phone = trim($in->getPhone());
+            $code = trim($in->getCode());
+            $password = $in->getPassword();
+            $device = $this->deviceInfo($in->getDevice());
+
+            $result = $this->authService->login(
+                $phone,
+                $code,
+                $device,
+                $password !== '' ? $password : null
+            );
+
+            return new LoginResponse([
+                'user_id'                  => $this->uint64($result['user_id'], 'user_id'),
+                'access_token'             => $result['access_token'],
+                'refresh_token'            => $result['refresh_token'],
+                'access_token_expires_at'  => (string)$result['access_token_expires_at'],
+                'refresh_token_expires_at' => (string)$result['refresh_token_expires_at'],
+                'is_new_user'              => $result['is_new_user'],
+            ]);
+        });
     }
 
     public function RefreshToken(ContextInterface $ctx, RefreshTokenRequest $in): RefreshTokenResponse
     {
-        return $this->execute(
-            $ctx,
-            'RefreshToken',
-            [
-                'refresh_token' => $in->getRefreshToken(),
-                'device'        => $this->deviceInfo($in->getDevice()),
-            ],
-            static fn (array $result): RefreshTokenResponse => new RefreshTokenResponse([
+        return $this->call($ctx, 'RefreshToken', function () use ($in): RefreshTokenResponse {
+            $refreshToken = $in->getRefreshToken();
+            $device = $this->deviceInfo($in->getDevice());
+
+            $result = $this->authService->refreshToken($refreshToken, $device);
+
+            return new RefreshTokenResponse([
                 'access_token'             => (string)$result['access_token'],
                 'refresh_token'            => (string)$result['refresh_token'],
                 'access_token_expires_at'  => (string)$result['access_token_expires_at'],
                 'refresh_token_expires_at' => (string)$result['refresh_token_expires_at'],
-            ])
-        );
+            ]);
+        });
     }
 
     public function Logout(ContextInterface $ctx, LogoutRequest $in): LogoutResponse
     {
-        return $this->execute(
-            $ctx,
-            'Logout',
-            [
-                'refresh_token' => $in->getRefreshToken(),
-                'access_token'  => $in->getAccessToken(),
-            ],
-            static fn (array $result): LogoutResponse => new LogoutResponse([
-                'success' => (bool)($result['success'] ?? false),
-            ])
-        );
+        return $this->call($ctx, 'Logout', function () use ($in): LogoutResponse {
+            $refreshToken = $in->getRefreshToken();
+            $accessToken = $in->getAccessToken();
+
+            $success = $this->authService->logout(
+                $refreshToken,
+                $accessToken !== '' ? $accessToken : null
+            );
+
+            return new LogoutResponse([
+                'success' => (bool)$success,
+            ]);
+        });
     }
 
     public function VerifyToken(ContextInterface $ctx, VerifyTokenRequest $in): VerifyTokenResponse
     {
-        return $this->execute(
-            $ctx,
-            'VerifyToken',
-            ['access_token' => $in->getAccessToken()],
-            function (array $result): VerifyTokenResponse {
-                $response = [
-                    'valid' => (bool)($result['valid'] ?? false),
-                ];
+        return $this->call($ctx, 'VerifyToken', function () use ($in): VerifyTokenResponse {
+            $accessToken = $in->getAccessToken();
+            $result = $this->authService->verifyToken($accessToken);
 
-                if ($response['valid']) {
-                    $response['user_id'] = $this->uint64($result['user_id'] ?? '0', 'user_id');
-                    $response['device_id'] = $this->uint64($result['device_id'] ?? '0', 'device_id');
-                }
+            $response = [
+                'valid' => $result['valid'],
+            ];
 
-                return new VerifyTokenResponse($response);
+            if ($response['valid']) {
+                $response['user_id'] = $this->uint64($result['user_id'] ?? '0', 'user_id');
+                $response['device_id'] = $this->uint64($result['device_id'] ?? '0', 'device_id');
             }
-        );
+
+            return new VerifyTokenResponse($response);
+        });
     }
 
     public function CreateWsTicket(ContextInterface $ctx, CreateWsTicketRequest $in): CreateWsTicketResponse
     {
-        return $this->execute(
-            $ctx,
-            'CreateWsTicket',
-            [
-                'user_id'    => (string)$in->getUserId(),
-                'persona_id' => (string)$in->getPersonaId(),
-                'device_id'  => $in->getDeviceId(),
-            ],
-            static fn (array $result): CreateWsTicketResponse => new CreateWsTicketResponse([
+        return $this->call($ctx, 'CreateWsTicket', function () use ($in): CreateWsTicketResponse {
+            $userId = (string)$in->getUserId();
+            $personaId = (string)$in->getPersonaId();
+            $deviceId = $in->getDeviceId();
+
+            $result = $this->authService->createWsTicket($userId, $personaId, $deviceId);
+
+            return new CreateWsTicketResponse([
                 'ticket'     => (string)$result['ticket'],
-                'expires_at' => (string)$result['expires_at'],
-            ])
-        );
+                'expires_at' => (string)$result['expire_at'],
+            ]);
+        });
     }
 
     /**
-     * @param array<string, mixed> $request
-     * @param callable(array<string, mixed>): object $responseFactory
+     * @template T
+     * @param callable(): T $operation
+     * @return T
      */
-    private function execute(
-        ContextInterface $ctx,
-        string $method,
-        array $request,
-        callable $responseFactory
-    ): object {
+    private function call(ContextInterface $ctx, string $method, callable $operation): mixed
+    {
+        $trace = TraceContext::create(
+            requestId: $this->metadataValue($ctx, 'x-request-id'),
+            traceId: $this->metadataValue($ctx, 'x-trace-id'),
+            userId: $this->metadataValue($ctx, 'x-user-id'),
+            personaId: $this->metadataValue($ctx, 'x-persona-id'),
+            deviceId: $this->metadataValue($ctx, 'x-device-id'),
+            appVersion: $this->metadataValue($ctx, 'x-app-version'),
+            traceparent: $this->metadataValue($ctx, 'traceparent'),
+        );
+        TraceContext::setCurrent($trace);
+        $this->logger->info("Handling Auth gRPC call: {$method}", ['method' => $method]);
+
         try {
-            $result = $this->handler->handle($method, $request, $this->metadata($ctx));
-            $code = (int)($result['code'] ?? ErrorCode::OK->value);
-
-            // "Is this a failure?" and "may this code be published?" are separate questions:
-            // a non-zero code that is not a contract ErrorCode (PDO 23000, library codes) is
-            // still a failure and must never fall through to the success response factory.
-            if ($code !== ErrorCode::OK->value) {
-                $error = $this->appErrorCode($code);
-
-                if ($error !== null) {
-                    $this->attachAppErrorTrailer($ctx, $error->value);
-                }
-
-                $this->throwMappedError($error);
-            }
-
-            return $responseFactory($result);
+            return $operation();
         } catch (GRPCException $e) {
+            // GRPCException::getCode() is the gRPC transport status (e.g. INVALID_ARGUMENT = 3),
+            // never a business ErrorCode, so it must not be propagated as x-app-error-code.
+            // The gateway client maps the transport status via its own fallback table.
             throw $e;
         } catch (Throwable $e) {
+            $this->logger->error("Error in {$method}: " . $e->getMessage(), [
+                'exception' => $e::class,
+                'error_code' => $e->getCode(),
+            ]);
+
             $error = $this->appErrorCode((int)$e->getCode());
             if ($error !== null) {
                 $this->attachAppErrorTrailer($ctx, $error->value);
             }
 
-            throw $this->mapThrowable($e);
+            throw GRPCException::create(
+                $this->publicErrorMessage($e),
+                ErrorStatusMapper::forExceptionCode((int)$e->getCode()),
+                $e,
+            );
+        } finally {
+            TraceContext::reset();
         }
     }
 
@@ -185,64 +198,25 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         }
     }
 
-    private function throwMappedError(?ErrorCode $error): never
+    private function publicErrorMessage(Throwable $exception): string
     {
-        if ($error === null) {
-            // Unknown non-zero handler code: this is a fault inside this service, not an
-            // unclassifiable one, so report INTERNAL rather than UNKNOWN and fail closed
-            // instead of letting the caller treat the RPC as succeeded.
-            throw GRPCException::create(
-                ErrorCode::INTERNAL_SERVER_ERROR->message(),
-                StatusCode::INTERNAL
-            );
-        }
+        $error = $this->appErrorCode((int)$exception->getCode());
 
-        throw GRPCException::create($error->message(), ErrorStatusMapper::forFailure($error));
+        return $error !== null ? $exception->getMessage() : ErrorCode::INTERNAL_SERVER_ERROR->message();
     }
 
-    private function mapThrowable(Throwable $e): GRPCException
-    {
-        if ($e instanceof InvalidArgumentException) {
-            return GRPCException::create('invalid request arguments', StatusCode::INVALID_ARGUMENT, $e);
-        }
-
-        $error = $this->appErrorCode((int)$e->getCode());
-        $status = ErrorStatusMapper::forFailure($error);
-        $message = $error?->message() ?? ErrorCode::INTERNAL_SERVER_ERROR->message();
-
-        return GRPCException::create($message, $status, $e);
-    }
-
-    /**
-     * RoadRunner passes incoming gRPC metadata as arrays of strings in the
-     * context values. Keep scalar values compatible with local test contexts.
-     *
-     * @return array<string, array<int, string>>
-     */
-    private function metadata(ContextInterface $ctx): array
+    private function metadataValue(ContextInterface $ctx, string $key): ?string
     {
         $values = $ctx->getValues();
-        $rawMetadata = $values['metadata'] ?? $values['grpc.metadata'] ?? $values;
-
-        if (!is_array($rawMetadata)) {
-            return [];
+        $value = $values[$key] ?? null;
+        if ($value === null && is_array($values['metadata'] ?? null)) {
+            $value = $values['metadata'][$key] ?? null;
+        }
+        if (is_array($value)) {
+            $value = $value[0] ?? null;
         }
 
-        $metadata = [];
-        foreach ($rawMetadata as $key => $value) {
-            $normalizedKey = strtolower((string)$key);
-
-            if (is_array($value)) {
-                $metadata[$normalizedKey] = array_values(array_filter(
-                    array_map(static fn (mixed $item): ?string => is_scalar($item) ? (string)$item : null, $value),
-                    static fn (?string $item): bool => $item !== null
-                ));
-            } elseif (is_scalar($value)) {
-                $metadata[$normalizedKey] = [(string)$value];
-            }
-        }
-
-        return $metadata;
+        return is_scalar($value) && (string)$value !== '' ? (string)$value : null;
     }
 
     /**
@@ -264,11 +238,11 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         $value = ltrim($value, '0') ?: '0';
 
         if (!ctype_digit($value)) {
-            throw new InvalidArgumentException("{$field} must be a uint64");
+            throw GRPCException::create("{$field} must be a uint64", StatusCode::INVALID_ARGUMENT);
         }
 
         if (strlen($value) > 20 || (strlen($value) === 20 && strcmp($value, '18446744073709551615') > 0)) {
-            throw new InvalidArgumentException("{$field} must be a uint64");
+            throw GRPCException::create("{$field} must be a uint64", StatusCode::INVALID_ARGUMENT);
         }
 
         return $value;
