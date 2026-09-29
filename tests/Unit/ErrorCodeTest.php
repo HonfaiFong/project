@@ -27,6 +27,8 @@ final class ErrorCodeTest extends TestCase
     {
         $this->assertSame(200, ErrorCode::OK->httpStatus());
         $this->assertSame(401, ErrorCode::AUTH_UNAUTHORIZED->httpStatus());
+        $this->assertSame(401, ErrorCode::AUTH_INVALID_CREDENTIALS->httpStatus());
+        $this->assertSame(403, ErrorCode::PERSONA_FORBIDDEN->httpStatus());
         $this->assertSame(404, ErrorCode::USER_NOT_FOUND->httpStatus());
         $this->assertSame(409, ErrorCode::USER_ALREADY_EXISTS->httpStatus());
         $this->assertSame(429, ErrorCode::RATE_LIMIT_EXCEEDED->httpStatus());

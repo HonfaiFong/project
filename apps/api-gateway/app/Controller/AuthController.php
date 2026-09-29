@@ -9,6 +9,7 @@ use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
+use Packages\Tracing\TraceContext;
 use RuntimeException;
 
 final class AuthController
@@ -104,13 +105,13 @@ final class AuthController
         $userId = $authContext['user_id'] ?? '';
         $deviceId = $authContext['device_id'] ?? '';
         $requestedPersonaId = trim((string)($body['persona_id'] ?? ''));
-        $contextPersonaId = trim((string)($authContext['persona_id'] ?? ''));
+        $headerPersonaId = trim((string)($authContext['requested_persona_id'] ?? $authContext['persona_id'] ?? ''));
 
-        if ($requestedPersonaId !== '' && $contextPersonaId !== '' && $requestedPersonaId !== $contextPersonaId) {
+        if ($requestedPersonaId !== '' && $headerPersonaId !== '' && $requestedPersonaId !== $headerPersonaId) {
             return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'forbidden persona access');
         }
 
-        $personaId = $requestedPersonaId !== '' ? $requestedPersonaId : $contextPersonaId;
+        $personaId = $requestedPersonaId !== '' ? $requestedPersonaId : $headerPersonaId;
 
         if ($userId === '' || $personaId === '' || $personaId === '0') {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
@@ -125,6 +126,18 @@ final class AuthController
         if ((int)($persona['status'] ?? 0) !== 1) {
             return ApiResponse::error(ErrorCode::PERSONA_FORBIDDEN->value, 'persona is inactive');
         }
+
+        // Only after ownership is verified against UserService, elevate into trusted TraceContext.
+        $currentTrace = TraceContext::current();
+        TraceContext::setCurrent(TraceContext::create(
+            requestId: $currentTrace->requestId,
+            traceId: $currentTrace->traceId,
+            userId: $userId,
+            personaId: $personaId,
+            deviceId: $deviceId ?: $currentTrace->deviceId,
+            appVersion: $currentTrace->appVersion,
+            traceparent: $currentTrace->traceparent
+        ));
 
         $res = $this->authClient->createWsTicket($userId, $personaId, $deviceId);
 

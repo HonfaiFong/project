@@ -95,20 +95,42 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_mysql, redis, bcmath, sockets
+          extensions: pdo, pdo_mysql, redis, bcmath, sockets, grpc
           coverage: none
+
+      - name: Install Composer dependencies for E2E
+        run: composer install --no-interaction --prefer-dist
 
       - name: Prepare environment configuration
         run: cp .env.example .env
 
-      - name: Start services
+      - name: Start infrastructure
+        run: docker compose up -d mysql redis
+
+      - name: Wait for MySQL to become healthy
+        run: |
+          echo "Waiting for MySQL to become healthy..."
+          for i in {1..30}; do
+            if docker compose exec -T mysql mysqladmin ping -h localhost -u root -preplace-with-random-local-mysql-password --silent >/dev/null 2>&1; then
+              echo "MySQL is healthy!"
+              break
+            fi
+            sleep 2
+          done
+
+      - name: Run database migrations
+        run: make migrate
+
+      - name: Start application services
         run: docker compose up -d
 
       - name: Wait for services to be ready
         run: |
           echo "Waiting for API Gateway /health to report SERVING..."
+          ready=0
           for i in {1..40}; do
-            if curl -s http://127.0.0.1:8787/health | grep -q '"status":"SERVING"'; then
+            if curl -fsS http://127.0.0.1:8787/health 2>/dev/null | grep -q '"status":"SERVING"'; then
+              ready=1
               echo "Services are ready and SERVING!"
               break
             fi
@@ -116,8 +138,10 @@ jobs:
             sleep 2
           done
 
-      - name: Run database migrations
-        run: make migrate
+          if [ "$ready" -ne 1 ]; then
+            echo "Services failed to become ready within timeout!"
+            exit 1
+          fi
 
       - name: Run End-to-End Tests
         run: make e2e

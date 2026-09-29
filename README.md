@@ -93,6 +93,8 @@ make migrate
 curl http://127.0.0.1:8787/health
 ```
 
+> **启动与迁移顺序说明**：本地开发环境下基线 SQL（`01-databases.sql`）会在 MySQL 首次初始化时由挂载目录自动载入；在 CI 与生产编排中，严格遵循：**基础设施就绪（MySQL/Redis） → 执行迁移（`make migrate`） → 启动业务容器（Auth/User/Gateway） → 等待健康就绪（`/health` SERVING） → 接收流量 / 执行 E2E**，确保服务不会因为缺失数据列或新表而在初始化时崩溃。
+
 Snowflake Worker ID 说明：MVP 阶段 `compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 `pid % 32` 消散，在单容器小并发阶段可正常工作。注意：`pid % 32` 在数学上无法杜绝跨进程碰撞，在生产环境横向扩容（多 Pod × 多 RoadRunner Worker）前必须切换为基于 Redis `SET NX` 租约分发的动态 WorkerId Allocator（0-1023）并定时续期。
 
 ---
