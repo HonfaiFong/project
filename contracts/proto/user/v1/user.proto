@@ -21,6 +21,7 @@ message UserProfile {
 
 message FindOrCreateByPhoneRequest {
   string phone = 1;
+  string register_channel = 2;
 }
 
 message FindOrCreateByPhoneResponse {

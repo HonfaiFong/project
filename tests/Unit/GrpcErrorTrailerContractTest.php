@@ -322,7 +322,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
                 {
                 }
 
-                public function findOrCreateByPhone(string $phone): array
+                public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
                 {
                     if ($this->fails) {
                         throw new PDOException('SQLSTATE[23000]: Integrity constraint violation: 1062', 23000);
@@ -512,4 +512,3 @@ class EmptyAuthRepository implements AuthRepositoryInterface
         return false;
     }
 }
-

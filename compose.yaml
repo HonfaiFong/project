@@ -148,6 +148,7 @@ services:
       - "50051:50051"
     environment:
       - SERVICE_NAME=auth-service
+      - APP_ENV=${APP_ENV:-local}
       # Snowflake service slot (0-31). Replicas of this service must use
       # distinct values; WorkerId::resolve() spreads rr worker processes
       # within the slot automatically.
@@ -161,6 +162,25 @@ services:
       - REDIS_PORT=6379
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env}
       - WS_TICKET_SECRET=${WS_TICKET_SECRET:?Set WS_TICKET_SECRET in .env}
+      - ENABLE_WECHAT_LOGIN=${ENABLE_WECHAT_LOGIN:-false}
+      - ENABLE_QQ_LOGIN=${ENABLE_QQ_LOGIN:-false}
+      - WECHAT_APP_ID=${WECHAT_APP_ID:-}
+      - WECHAT_APP_SECRET=${WECHAT_APP_SECRET:-}
+      - WECHAT_IDENTITY_NAMESPACE=${WECHAT_IDENTITY_NAMESPACE:-wechat-main}
+      - QQ_APP_ID=${QQ_APP_ID:-}
+      - QQ_APP_KEY=${QQ_APP_KEY:-}
+      - QQ_REDIRECT_URI=${QQ_REDIRECT_URI:-}
+      - QQ_IDENTITY_NAMESPACE=${QQ_IDENTITY_NAMESPACE:-qq-main}
+      - SOCIAL_BIND_TOKEN_TTL=${SOCIAL_BIND_TOKEN_TTL:-600}
+      - SOCIAL_HTTP_CONNECT_TIMEOUT_MS=${SOCIAL_HTTP_CONNECT_TIMEOUT_MS:-1000}
+      - SOCIAL_HTTP_TIMEOUT_MS=${SOCIAL_HTTP_TIMEOUT_MS:-3000}
+      - PHONE_DEFAULT_REGION=${PHONE_DEFAULT_REGION:-CN}
+      - SMS_PROVIDER=${SMS_PROVIDER:-}
+      - SMS_CODE_TTL=${SMS_CODE_TTL:-300}
+      - SMS_RESEND_INTERVAL=${SMS_RESEND_INTERVAL:-60}
+      - SMS_VERIFY_MAX_ATTEMPTS=${SMS_VERIFY_MAX_ATTEMPTS:-5}
+      - SMS_CODE_PEPPER=${SMS_CODE_PEPPER:-}
+      - DEV_SMS_CODE=${DEV_SMS_CODE:-123456}
     volumes:
       - .:/app
     depends_on:

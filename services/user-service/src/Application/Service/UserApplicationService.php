@@ -7,6 +7,7 @@ namespace Services\UserService\Application\Service;
 use Contracts\Errors\ErrorCode;
 use Contracts\Events\EventTypes;
 use Packages\IdGenerator\Snowflake;
+use Packages\Phone\PhoneNormalizer;
 use Packages\Outbox\EventOutboxInterface;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
@@ -27,18 +28,21 @@ final class UserApplicationService
         private readonly Snowflake $snowflake,
         private readonly TransactionManagerInterface $transactionManager,
         private readonly EventOutboxInterface $outbox,
+        private readonly ?PhoneNormalizer $phoneNormalizer = null,
     ) {
     }
 
-    public function findOrCreateUserByPhone(string $phone): array
+    public function findOrCreateUserByPhone(string $phone, string $registerChannel = 'default'): array
     {
+        $phone = $this->phoneNormalizer?->normalize($phone) ?? trim($phone);
+        $registerChannel = trim($registerChannel) !== '' ? trim($registerChannel) : 'default';
         $user = $this->userRepo->findByPhone($phone);
         $isNew = false;
 
         if (!$user) {
             try {
                 /** @var array{0: User, 1: bool} $registration */
-                $registration = $this->transaction(function () use ($phone): array {
+                $registration = $this->transaction(function () use ($phone, $registerChannel): array {
                     // Re-check inside the transaction so concurrent requests share the
                     // user created by the request that won the unique phone constraint.
                     $existing = $this->userRepo->findByPhone($phone);
@@ -47,7 +51,7 @@ final class UserApplicationService
                     }
 
                     $id = $this->snowflake->nextId();
-                    $user = $this->userRepo->create($id, $phone, null);
+                    $user = $this->userRepo->create($id, $phone, null, $registerChannel);
 
                     $personaId = $this->snowflake->nextId();
                     $persona = $this->personaRepo->create(

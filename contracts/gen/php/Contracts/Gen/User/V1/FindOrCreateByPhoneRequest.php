@@ -17,6 +17,10 @@ class FindOrCreateByPhoneRequest extends \Google\Protobuf\Internal\Message
      * Generated from protobuf field <code>string phone = 1;</code>
      */
     protected $phone = '';
+    /**
+     * Generated from protobuf field <code>string register_channel = 2;</code>
+     */
+    protected $register_channel = '';
 
     /**
      * Constructor.
@@ -25,6 +29,7 @@ class FindOrCreateByPhoneRequest extends \Google\Protobuf\Internal\Message
      *     Optional. Data for populating the Message object.
      *
      *     @type string $phone
+     *     @type string $register_channel
      * }
      */
     public function __construct($data = NULL) {
@@ -50,6 +55,28 @@ class FindOrCreateByPhoneRequest extends \Google\Protobuf\Internal\Message
     {
         GPBUtil::checkString($var, True);
         $this->phone = $var;
+
+        return $this;
+    }
+
+    /**
+     * Generated from protobuf field <code>string register_channel = 2;</code>
+     * @return string
+     */
+    public function getRegisterChannel()
+    {
+        return $this->register_channel;
+    }
+
+    /**
+     * Generated from protobuf field <code>string register_channel = 2;</code>
+     * @param string $var
+     * @return $this
+     */
+    public function setRegisterChannel($var)
+    {
+        GPBUtil::checkString($var, True);
+        $this->register_channel = $var;
 
         return $this;
     }

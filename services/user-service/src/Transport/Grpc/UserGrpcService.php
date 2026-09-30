@@ -56,7 +56,10 @@ final class UserGrpcService implements UserServiceInterface
                 throw GRPCException::create('phone is required', StatusCode::INVALID_ARGUMENT);
             }
 
-            $result = $this->userService->findOrCreateUserByPhone($phone);
+            $result = $this->userService->findOrCreateUserByPhone(
+                $phone,
+                trim($in->getRegisterChannel()) !== '' ? trim($in->getRegisterChannel()) : 'default',
+            );
 
             return (new FindOrCreateByPhoneResponse())
                 ->setUser($this->toUserProfile($result['user']))

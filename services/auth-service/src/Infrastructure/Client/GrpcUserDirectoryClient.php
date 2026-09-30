@@ -24,7 +24,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
     ) {
     }
 
-    public function findOrCreateByPhone(string $phone): array
+    public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
     {
         $client = $this->client ??= new UnaryGrpcClient(
             $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052')
@@ -34,7 +34,10 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
             /** @var FindOrCreateByPhoneResponse $response */
             $response = $client->call(
                 '/user.v1.UserService/FindOrCreateByPhone',
-                new FindOrCreateByPhoneRequest(['phone' => $phone]),
+                new FindOrCreateByPhoneRequest([
+                    'phone'           => $phone,
+                    'register_channel' => $registerChannel,
+                ]),
                 FindOrCreateByPhoneResponse::class,
                 $this->timeoutMs
             );

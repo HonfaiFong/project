@@ -9,5 +9,5 @@ interface UserDirectoryInterface
     /**
      * @return array{user_id: string, is_new_user: bool}
      */
-    public function findOrCreateByPhone(string $phone): array;
+    public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array;
 }

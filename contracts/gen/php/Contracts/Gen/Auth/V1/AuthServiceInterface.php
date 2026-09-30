@@ -22,6 +22,33 @@ interface AuthServiceInterface extends GRPC\ServiceInterface
 
     /**
     * @param GRPC\ContextInterface $ctx
+    * @param SocialLoginRequest $in
+    * @return SocialLoginResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function SocialLogin(GRPC\ContextInterface $ctx, SocialLoginRequest $in): SocialLoginResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param SendSocialPhoneCodeRequest $in
+    * @return SendSocialPhoneCodeResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function SendSocialPhoneCode(GRPC\ContextInterface $ctx, SendSocialPhoneCodeRequest $in): SendSocialPhoneCodeResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param BindSocialPhoneRequest $in
+    * @return BindSocialPhoneResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function BindSocialPhone(GRPC\ContextInterface $ctx, BindSocialPhoneRequest $in): BindSocialPhoneResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
     * @param RefreshTokenRequest $in
     * @return RefreshTokenResponse
     *

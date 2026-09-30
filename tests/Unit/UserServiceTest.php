@@ -238,6 +238,17 @@ final class UserServiceTest extends TestCase
         $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['payload']['id']);
     }
 
+    public function testFindOrCreateUsesRegisterChannelOnlyForNewUsers(): void
+    {
+        $first = $this->userService->findOrCreateUserByPhone('+1234567890', 'wechat');
+        $second = $this->userService->findOrCreateUserByPhone('+1234567890', 'qq');
+
+        $this->assertTrue($first['is_new_user']);
+        $this->assertFalse($second['is_new_user']);
+        $this->assertSame('wechat', $first['user']->registerChannel);
+        $this->assertSame('wechat', $second['user']->registerChannel);
+    }
+
     public function testFindOrCreateHandlesConcurrentDuplicateUser(): void
     {
         $racingRepo = new class ($this->userRepo) extends InMemoryUserRepository {

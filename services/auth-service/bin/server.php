@@ -4,17 +4,29 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../../vendor/autoload.php';
 
+use GuzzleHttp\Client;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
+use Packages\Phone\PhoneNormalizer;
 use Contracts\Gen\Auth\V1\AuthServiceInterface;
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
+use Services\AuthService\Infrastructure\Cache\RedisDistributedLock;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
+use Services\AuthService\Infrastructure\Cache\RedisSocialBindSessionStore;
 use Services\AuthService\Infrastructure\Client\GrpcUserDirectoryClient;
+use Services\AuthService\Infrastructure\OAuth\GuzzleOAuthHttpClient;
+use Services\AuthService\Infrastructure\OAuth\QqOAuthProvider;
+use Services\AuthService\Infrastructure\OAuth\SocialAuthProviderRegistry;
+use Services\AuthService\Infrastructure\OAuth\WeChatOAuthProvider;
+use Services\AuthService\Infrastructure\Phone\DevSmsSender;
+use Services\AuthService\Infrastructure\Phone\RedisPhoneVerificationService;
+use Services\AuthService\Infrastructure\Phone\UnavailableSmsSender;
 use Services\AuthService\Infrastructure\Repository\PdoAuthRepository;
+use Services\AuthService\Infrastructure\Repository\PdoSocialIdentityRepository;
 use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
 use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
@@ -98,6 +110,61 @@ if (!$credentialVerifier->isDevelopment() && !$credentialVerifier->hasProvider()
 $userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
 $userDirectory = new GrpcUserDirectoryClient($userServiceTarget);
 
+$appEnvironment = strtolower(trim((string)(getenv('APP_ENV') ?: 'production')));
+$isDevelopment = in_array($appEnvironment, ['local', 'development', 'dev', 'testing'], true);
+$enableWeChat = filter_var(getenv('ENABLE_WECHAT_LOGIN') ?: 'false', FILTER_VALIDATE_BOOL);
+$enableQq = filter_var(getenv('ENABLE_QQ_LOGIN') ?: 'false', FILTER_VALIDATE_BOOL);
+$socialLoginEnabled = $enableWeChat || $enableQq;
+
+$oauthHttpClient = new GuzzleOAuthHttpClient(
+    new Client(),
+    (int)(getenv('SOCIAL_HTTP_CONNECT_TIMEOUT_MS') ?: 1000),
+    (int)(getenv('SOCIAL_HTTP_TIMEOUT_MS') ?: 3000),
+);
+$socialProviders = [];
+if ($enableWeChat) {
+    $socialProviders[] = new WeChatOAuthProvider(
+        httpClient: $oauthHttpClient,
+        appId: trim((string)getenv('WECHAT_APP_ID')),
+        appSecret: trim((string)getenv('WECHAT_APP_SECRET')),
+        identityNamespace: trim((string)(getenv('WECHAT_IDENTITY_NAMESPACE') ?: 'wechat-main')),
+    );
+}
+if ($enableQq) {
+    $socialProviders[] = new QqOAuthProvider(
+        httpClient: $oauthHttpClient,
+        appId: trim((string)getenv('QQ_APP_ID')),
+        appKey: trim((string)getenv('QQ_APP_KEY')),
+        redirectUri: trim((string)(getenv('QQ_REDIRECT_URI') ?: '')),
+        identityNamespace: trim((string)(getenv('QQ_IDENTITY_NAMESPACE') ?: 'qq-main')),
+    );
+}
+
+$smsSender = $isDevelopment ? new DevSmsSender() : new UnavailableSmsSender();
+if ($socialLoginEnabled && !$isDevelopment) {
+    throw new RuntimeException('Social login requires a configured production SMS adapter');
+}
+$smsPepper = trim((string)(getenv('SMS_CODE_PEPPER') ?: ''));
+if ($socialLoginEnabled && $smsPepper === '') {
+    throw new RuntimeException('SMS_CODE_PEPPER is required when social login is enabled');
+}
+if ($smsPepper === '') {
+    $smsPepper = 'local-development-only-sms-pepper';
+}
+$phoneNormalizer = new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGION') ?: 'CN')));
+$socialIdentityRepository = new PdoSocialIdentityRepository($pdo, $snowflake);
+$socialBindSessionStore = new RedisSocialBindSessionStore($redis);
+$distributedLock = new RedisDistributedLock($redis);
+$phoneVerificationService = new RedisPhoneVerificationService(
+    redis: $redis,
+    smsSender: $smsSender,
+    codePepper: $smsPepper,
+    codeTtl: (int)(getenv('SMS_CODE_TTL') ?: 300),
+    resendInterval: (int)(getenv('SMS_RESEND_INTERVAL') ?: 60),
+    maxAttempts: (int)(getenv('SMS_VERIFY_MAX_ATTEMPTS') ?: 5),
+    developmentCode: $isDevelopment ? trim((string)(getenv('DEV_SMS_CODE') ?: '')) : null,
+);
+
 $jwtCodec = new JwtTokenCodec($jwtSecret);
 $wsTicketIssuer = new WsTicketIssuer($wsSecret, 60);
 
@@ -107,7 +174,16 @@ $appService = new AuthApplicationService(
     wsTicketIssuer: $wsTicketIssuer,
     credentialVerifier: $credentialVerifier,
     userDirectory: $userDirectory,
-    accessTokenRevocationStore: $accessTokenRevocationStore
+    accessTokenRevocationStore: $accessTokenRevocationStore,
+    socialProviderRegistry: new SocialAuthProviderRegistry($socialProviders),
+    socialIdentityRepository: $socialIdentityRepository,
+    socialBindSessionStore: $socialBindSessionStore,
+    phoneVerificationService: $phoneVerificationService,
+    distributedLock: $distributedLock,
+    phoneNormalizer: $phoneNormalizer,
+    socialBindTokenTtl: (int)(getenv('SOCIAL_BIND_TOKEN_TTL') ?: 600),
+    smsCodeTtl: (int)(getenv('SMS_CODE_TTL') ?: 300),
+    smsResendInterval: (int)(getenv('SMS_RESEND_INTERVAL') ?: 60),
 );
 $grpcService = new RoadRunnerAuthService($appService, $logger);
 $server = new Server(new Invoker());

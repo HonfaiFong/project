@@ -17,6 +17,15 @@ enum ErrorCode: int
     case AUTH_UNAUTHORIZED          = 1001005;
     case AUTH_DEVICE_INVALID      = 1001006;
     case AUTH_TICKET_EXPIRED      = 1001007;
+    case AUTH_SOCIAL_PROVIDER_UNSUPPORTED = 1001008;
+    case AUTH_SOCIAL_CODE_INVALID        = 1001009;
+    case AUTH_SOCIAL_UPSTREAM_ERROR      = 1001010;
+    case AUTH_SOCIAL_BIND_TOKEN_INVALID  = 1001011;
+    case AUTH_SMS_CODE_INVALID           = 1001012;
+    case AUTH_SMS_CODE_EXPIRED           = 1001013;
+    case AUTH_SOCIAL_PROVIDER_ALREADY_BOUND = 1001014;
+    case AUTH_SOCIAL_BIND_CONFLICT       = 1001015;
+    case AUTH_SOCIAL_BIND_PHONE_CHANGED  = 1001016;
 
     // 200xxxx: User Domain
     case USER_NOT_FOUND           = 2001001;
@@ -74,6 +83,15 @@ enum ErrorCode: int
             self::AUTH_UNAUTHORIZED => 'unauthorized',
             self::AUTH_DEVICE_INVALID => 'invalid device parameters',
             self::AUTH_TICKET_EXPIRED => 'websocket ticket expired',
+            self::AUTH_SOCIAL_PROVIDER_UNSUPPORTED => 'social provider is not supported',
+            self::AUTH_SOCIAL_CODE_INVALID => 'social authorization code is invalid',
+            self::AUTH_SOCIAL_UPSTREAM_ERROR => 'social provider is temporarily unavailable',
+            self::AUTH_SOCIAL_BIND_TOKEN_INVALID => 'social bind token is invalid or expired',
+            self::AUTH_SMS_CODE_INVALID => 'SMS verification code is invalid',
+            self::AUTH_SMS_CODE_EXPIRED => 'SMS verification code is expired',
+            self::AUTH_SOCIAL_PROVIDER_ALREADY_BOUND => 'social provider is already bound',
+            self::AUTH_SOCIAL_BIND_CONFLICT => 'social identity binding conflict',
+            self::AUTH_SOCIAL_BIND_PHONE_CHANGED => 'phone cannot be changed for this bind session',
             self::USER_NOT_FOUND => 'user not found',
             self::USER_ALREADY_EXISTS => 'user already exists',
             self::USER_BANNED => 'user account is banned',
@@ -114,15 +132,31 @@ enum ErrorCode: int
             self::AUTH_INVALID_CREDENTIALS,
             self::AUTH_TOKEN_EXPIRED,
             self::AUTH_TOKEN_INVALID,
-            self::AUTH_TOKEN_REVOKED => 401,
+            self::AUTH_TOKEN_REVOKED,
+            self::AUTH_SOCIAL_CODE_INVALID,
+            self::AUTH_SOCIAL_BIND_TOKEN_INVALID,
+            self::AUTH_SMS_CODE_INVALID,
+            self::AUTH_SMS_CODE_EXPIRED => 401,
             self::PERSONA_FORBIDDEN,
             self::CHAT_FORBIDDEN_BY_PRIVACY,
             self::SOCIAL_USER_BLOCKED => 403,
             self::USER_NOT_FOUND, self::PERSONA_NOT_FOUND, self::CONTENT_POST_NOT_FOUND, self::CONTENT_COMMENT_NOT_FOUND, self::CHAT_CONVERSATION_NOT_FOUND, self::MESSAGE_NOT_FOUND => 404,
-            self::USER_ALREADY_EXISTS, self::SOCIAL_ALREADY_FOLLOWED, self::IDEMPOTENCY_CONFLICT, self::MESSAGE_DUPLICATE_CLIENT_ID => 409,
-            self::INVALID_ARGUMENT, self::AUTH_DEVICE_INVALID, self::AUTH_TICKET_EXPIRED, self::SOCIAL_CANNOT_FOLLOW_SELF, self::SOCIAL_CANNOT_BLOCK_SELF, self::PERSONA_LIMIT_EXCEEDED => 422,
+            self::USER_ALREADY_EXISTS,
+            self::SOCIAL_ALREADY_FOLLOWED,
+            self::IDEMPOTENCY_CONFLICT,
+            self::MESSAGE_DUPLICATE_CLIENT_ID,
+            self::AUTH_SOCIAL_PROVIDER_ALREADY_BOUND,
+            self::AUTH_SOCIAL_BIND_CONFLICT,
+            self::AUTH_SOCIAL_BIND_PHONE_CHANGED => 409,
+            self::AUTH_SOCIAL_PROVIDER_UNSUPPORTED,
+            self::INVALID_ARGUMENT,
+            self::AUTH_DEVICE_INVALID,
+            self::AUTH_TICKET_EXPIRED,
+            self::SOCIAL_CANNOT_FOLLOW_SELF,
+            self::SOCIAL_CANNOT_BLOCK_SELF,
+            self::PERSONA_LIMIT_EXCEEDED => 422,
             self::RATE_LIMIT_EXCEEDED => 429,
-            self::SERVICE_UNAVAILABLE, self::RPC_TIMEOUT => 503,
+            self::AUTH_SOCIAL_UPSTREAM_ERROR, self::SERVICE_UNAVAILABLE, self::RPC_TIMEOUT => 503,
             default => 500,
         };
     }

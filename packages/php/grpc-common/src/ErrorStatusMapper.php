@@ -51,7 +51,15 @@ final class ErrorStatusMapper
             ErrorCode::AUTH_TOKEN_EXPIRED,
             ErrorCode::AUTH_TOKEN_INVALID,
             ErrorCode::AUTH_TOKEN_REVOKED,
-            ErrorCode::AUTH_UNAUTHORIZED => StatusCode::UNAUTHENTICATED,
+            ErrorCode::AUTH_UNAUTHORIZED,
+            ErrorCode::AUTH_SOCIAL_CODE_INVALID,
+            ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID,
+            ErrorCode::AUTH_SMS_CODE_INVALID,
+            ErrorCode::AUTH_SMS_CODE_EXPIRED => StatusCode::UNAUTHENTICATED,
+
+            ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED => StatusCode::INVALID_ARGUMENT,
+
+            ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR => StatusCode::UNAVAILABLE,
 
             ErrorCode::PERSONA_FORBIDDEN,
             ErrorCode::CHAT_FORBIDDEN_BY_PRIVACY,
@@ -67,7 +75,10 @@ final class ErrorStatusMapper
 
             ErrorCode::USER_ALREADY_EXISTS,
             ErrorCode::SOCIAL_ALREADY_FOLLOWED,
-            ErrorCode::MESSAGE_DUPLICATE_CLIENT_ID => StatusCode::ALREADY_EXISTS,
+            ErrorCode::MESSAGE_DUPLICATE_CLIENT_ID,
+            ErrorCode::AUTH_SOCIAL_PROVIDER_ALREADY_BOUND,
+            ErrorCode::AUTH_SOCIAL_BIND_CONFLICT,
+            ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED => StatusCode::ALREADY_EXISTS,
 
             ErrorCode::IDEMPOTENCY_CONFLICT => StatusCode::ABORTED,
 

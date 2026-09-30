@@ -35,6 +35,12 @@ final class GatewayWebmanWiringTest extends TestCase
         $this->assertSame(ErrorCode::INVALID_ARGUMENT->httpStatus(), $response->getStatusCode());
         $this->assertSame('public-123', json_decode($response->rawBody(), true)['request_id']);
 
+        [$status, $social] = Route::dispatch('POST', '/api/v1/auth/social/login');
+        $this->assertSame(Dispatcher::FOUND, $status);
+        $socialRequest = new GatewayRequest("POST /api/v1/auth/social/login HTTP/1.1\r\nHost: localhost\r\nX-Request-Id: social-public-123\r\n\r\n");
+        $socialResponse = Http::getCallback('', 'ApiGateway', $social['callback'], [], true, $social['route'])($socialRequest);
+        $this->assertSame(ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED->httpStatus(), $socialResponse->getStatusCode());
+
         [$status, $protected] = Route::dispatch('GET', '/api/v1/me');
         $this->assertSame(Dispatcher::FOUND, $status);
         $request = new GatewayRequest("GET /api/v1/me HTTP/1.1\r\nHost: localhost\r\nX-Request-Id: protected-123\r\n\r\n");

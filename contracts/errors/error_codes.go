@@ -8,13 +8,22 @@ const (
 	OK ErrorCode = 0
 
 	// 100xxxx: Auth Domain
-	AuthInvalidCredentials ErrorCode = 1001001
-	AuthTokenExpired       ErrorCode = 1001002
-	AuthTokenInvalid       ErrorCode = 1001003
-	AuthTokenRevoked       ErrorCode = 1001004
-	AuthUnauthorized       ErrorCode = 1001005
-	AuthDeviceInvalid      ErrorCode = 1001006
-	AuthTicketExpired      ErrorCode = 1001007
+	AuthInvalidCredentials         ErrorCode = 1001001
+	AuthTokenExpired               ErrorCode = 1001002
+	AuthTokenInvalid               ErrorCode = 1001003
+	AuthTokenRevoked               ErrorCode = 1001004
+	AuthUnauthorized               ErrorCode = 1001005
+	AuthDeviceInvalid              ErrorCode = 1001006
+	AuthTicketExpired              ErrorCode = 1001007
+	AuthSocialProviderUnsupported  ErrorCode = 1001008
+	AuthSocialCodeInvalid          ErrorCode = 1001009
+	AuthSocialUpstreamError        ErrorCode = 1001010
+	AuthSocialBindTokenInvalid     ErrorCode = 1001011
+	AuthSMSCodeInvalid             ErrorCode = 1001012
+	AuthSMSCodeExpired             ErrorCode = 1001013
+	AuthSocialProviderAlreadyBound ErrorCode = 1001014
+	AuthSocialBindConflict         ErrorCode = 1001015
+	AuthSocialBindPhoneChanged     ErrorCode = 1001016
 
 	// 200xxxx: User Domain
 	UserNotFound         ErrorCode = 2001001
@@ -80,6 +89,24 @@ func (e ErrorCode) Message() string {
 		return "invalid device parameters"
 	case AuthTicketExpired:
 		return "websocket ticket expired"
+	case AuthSocialProviderUnsupported:
+		return "social provider is not supported"
+	case AuthSocialCodeInvalid:
+		return "social authorization code is invalid"
+	case AuthSocialUpstreamError:
+		return "social provider is temporarily unavailable"
+	case AuthSocialBindTokenInvalid:
+		return "social bind token is invalid or expired"
+	case AuthSMSCodeInvalid:
+		return "SMS verification code is invalid"
+	case AuthSMSCodeExpired:
+		return "SMS verification code is expired"
+	case AuthSocialProviderAlreadyBound:
+		return "social provider is already bound"
+	case AuthSocialBindConflict:
+		return "social identity binding conflict"
+	case AuthSocialBindPhoneChanged:
+		return "phone cannot be changed for this bind session"
 	case UserNotFound:
 		return "user not found"
 	case UserAlreadyExists:
@@ -147,19 +174,21 @@ func (e ErrorCode) HTTPStatus() int {
 	switch e {
 	case OK:
 		return http.StatusOK
-	case AuthUnauthorized, AuthTokenExpired, AuthTokenInvalid, AuthTokenRevoked:
+	case AuthUnauthorized, AuthTokenExpired, AuthTokenInvalid, AuthTokenRevoked,
+		AuthSocialCodeInvalid, AuthSocialBindTokenInvalid, AuthSMSCodeInvalid, AuthSMSCodeExpired:
 		return http.StatusUnauthorized
 	case AuthInvalidCredentials, PersonaForbidden, ChatForbiddenByPrivacy, SocialUserBlocked:
 		return http.StatusForbidden
 	case UserNotFound, PersonaNotFound, ContentPostNotFound, ContentCommentNotFound, ChatConversationNotFound, MessageNotFound:
 		return http.StatusNotFound
-	case UserAlreadyExists, SocialAlreadyFollowed, IdempotencyConflict, MessageDuplicateClientID:
+	case UserAlreadyExists, SocialAlreadyFollowed, IdempotencyConflict, MessageDuplicateClientID,
+		AuthSocialProviderAlreadyBound, AuthSocialBindConflict, AuthSocialBindPhoneChanged:
 		return http.StatusConflict
-	case InvalidArgument, AuthDeviceInvalid, AuthTicketExpired, SocialCannotFollowSelf, SocialCannotBlockSelf, PersonaLimitExceeded:
+	case AuthSocialProviderUnsupported, InvalidArgument, AuthDeviceInvalid, AuthTicketExpired, SocialCannotFollowSelf, SocialCannotBlockSelf, PersonaLimitExceeded:
 		return http.StatusUnprocessableEntity
 	case RateLimitExceeded:
 		return http.StatusTooManyRequests
-	case ServiceUnavailable, RPCTimeout:
+	case AuthSocialUpstreamError, ServiceUnavailable, RPCTimeout:
 		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError

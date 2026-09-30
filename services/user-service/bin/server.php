@@ -8,6 +8,7 @@ use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
+use Packages\Phone\PhoneNormalizer;
 use Packages\Outbox\OutboxRepository;
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Contracts\Gen\User\V1\UserServiceInterface;
@@ -58,7 +59,14 @@ $personaRepo = new PdoPersonaRepository($pdo);
 $transactionManager = new PdoTransactionManager($pdo);
 $outbox = new OutboxRepository($pdo, $snowflake);
 
-$appService = new UserApplicationService($userRepo, $personaRepo, $snowflake, $transactionManager, $outbox);
+$appService = new UserApplicationService(
+    $userRepo,
+    $personaRepo,
+    $snowflake,
+    $transactionManager,
+    $outbox,
+    new PhoneNormalizer(),
+);
 $grpcService = new UserGrpcService($appService, $logger);
 $server = new Server(new Invoker());
 $server->registerService(UserServiceInterface::class, $grpcService);

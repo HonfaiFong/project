@@ -48,10 +48,11 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
     ) {
     }
 
-    public function findOrCreateByPhone(string $phone): array
+    public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
     {
         $response = $this->call('/user.v1.UserService/FindOrCreateByPhone', new FindOrCreateByPhoneRequest([
-            'phone' => $phone,
+            'phone'            => $phone,
+            'register_channel' => $registerChannel,
         ]), FindOrCreateByPhoneResponse::class);
 
         return [

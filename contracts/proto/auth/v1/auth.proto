@@ -32,6 +32,52 @@ message LoginResponse {
   bool is_new_user = 6;
 }
 
+enum SocialProvider {
+  SOCIAL_PROVIDER_UNSPECIFIED = 0;
+  SOCIAL_PROVIDER_WECHAT = 1;
+  SOCIAL_PROVIDER_QQ = 2;
+}
+
+enum SocialLoginState {
+  SOCIAL_LOGIN_STATE_UNSPECIFIED = 0;
+  SOCIAL_LOGIN_STATE_AUTHENTICATED = 1;
+  SOCIAL_LOGIN_STATE_PHONE_BINDING_REQUIRED = 2;
+}
+
+message SocialLoginRequest {
+  SocialProvider provider = 1;
+  string code = 2;
+  DeviceInfo device = 3;
+}
+
+message SocialLoginResponse {
+  SocialLoginState state = 1;
+  LoginResponse login = 2;
+  string bind_token = 3;
+  int64 bind_token_expires_at = 4;
+}
+
+message SendSocialPhoneCodeRequest {
+  string bind_token = 1;
+  string phone = 2;
+}
+
+message SendSocialPhoneCodeResponse {
+  int32 expires_in = 1;
+  int32 resend_after = 2;
+}
+
+message BindSocialPhoneRequest {
+  string bind_token = 1;
+  string phone = 2;
+  string code = 3;
+  DeviceInfo device = 4;
+}
+
+message BindSocialPhoneResponse {
+  LoginResponse login = 1;
+}
+
 message RefreshTokenRequest {
   string refresh_token = 1;
   DeviceInfo device = 2;
@@ -76,6 +122,9 @@ message CreateWsTicketResponse {
 
 service AuthService {
   rpc Login(LoginRequest) returns (LoginResponse);
+  rpc SocialLogin(SocialLoginRequest) returns (SocialLoginResponse);
+  rpc SendSocialPhoneCode(SendSocialPhoneCodeRequest) returns (SendSocialPhoneCodeResponse);
+  rpc BindSocialPhone(BindSocialPhoneRequest) returns (BindSocialPhoneResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse);

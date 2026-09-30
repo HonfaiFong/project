@@ -11,6 +11,12 @@ use Contracts\Gen\Auth\V1\CreateWsTicketResponse;
 use Contracts\Gen\Auth\V1\DeviceInfo;
 use Contracts\Gen\Auth\V1\LoginRequest;
 use Contracts\Gen\Auth\V1\LoginResponse;
+use Contracts\Gen\Auth\V1\BindSocialPhoneRequest;
+use Contracts\Gen\Auth\V1\BindSocialPhoneResponse;
+use Contracts\Gen\Auth\V1\SendSocialPhoneCodeRequest;
+use Contracts\Gen\Auth\V1\SendSocialPhoneCodeResponse;
+use Contracts\Gen\Auth\V1\SocialLoginRequest;
+use Contracts\Gen\Auth\V1\SocialLoginResponse;
 use Contracts\Gen\Auth\V1\LogoutRequest;
 use Contracts\Gen\Auth\V1\LogoutResponse;
 use Contracts\Gen\Auth\V1\RefreshTokenRequest;
@@ -21,6 +27,7 @@ use Packages\GrpcCommon\ErrorStatusMapper;
 use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
 use Services\AuthService\Application\Service\AuthApplicationService;
+use Services\AuthService\Domain\Auth\SocialProvider;
 use Spiral\RoadRunner\GRPC\ContextInterface;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
 use Spiral\RoadRunner\GRPC\ResponseTrailers;
@@ -74,6 +81,70 @@ final class RoadRunnerAuthService implements AuthServiceInterface
                 'refresh_token'            => (string)$result['refresh_token'],
                 'access_token_expires_at'  => (string)$result['access_token_expires_at'],
                 'refresh_token_expires_at' => (string)$result['refresh_token_expires_at'],
+            ]);
+        });
+    }
+
+    public function SocialLogin(ContextInterface $ctx, SocialLoginRequest $in): SocialLoginResponse
+    {
+        return $this->call($ctx, 'SocialLogin', function () use ($in): SocialLoginResponse {
+            $result = $this->authService->socialLogin(
+                $this->socialProvider($in->getProvider()),
+                trim($in->getCode()),
+                $this->deviceInfo($in->getDevice()),
+            );
+
+            $response = new SocialLoginResponse([
+                'state' => $result['state'] === 'authenticated' ? 1 : 2,
+            ]);
+
+            if ($result['state'] === 'authenticated') {
+                $response->setLogin($this->loginResponse($result['login']));
+            } else {
+                $response
+                    ->setBindToken((string)$result['bind_token'])
+                    ->setBindTokenExpiresAt((int)$result['bind_token_expires_at']);
+            }
+
+            return $response;
+        });
+    }
+
+    public function SendSocialPhoneCode(
+        ContextInterface $ctx,
+        SendSocialPhoneCodeRequest $in
+    ): SendSocialPhoneCodeResponse {
+        return $this->call($ctx, 'SendSocialPhoneCode', function () use ($ctx, $in): SendSocialPhoneCodeResponse {
+            $result = $this->authService->sendSocialPhoneCode(
+                trim($in->getBindToken()),
+                trim($in->getPhone()),
+                [
+                    'ip'          => $this->metadataValue($ctx, 'x-client-ip'),
+                    'device_uuid' => $this->metadataValue($ctx, 'x-device-id'),
+                ],
+            );
+
+            return new SendSocialPhoneCodeResponse([
+                'expires_in'   => $result['expires_in'],
+                'resend_after' => $result['resend_after'],
+            ]);
+        });
+    }
+
+    public function BindSocialPhone(
+        ContextInterface $ctx,
+        BindSocialPhoneRequest $in
+    ): BindSocialPhoneResponse {
+        return $this->call($ctx, 'BindSocialPhone', function () use ($in): BindSocialPhoneResponse {
+            $result = $this->authService->bindSocialPhone(
+                trim($in->getBindToken()),
+                trim($in->getPhone()),
+                trim($in->getCode()),
+                $this->deviceInfo($in->getDevice()),
+            );
+
+            return new BindSocialPhoneResponse([
+                'login' => $this->loginResponse($result['login']),
             ]);
         });
     }
@@ -203,6 +274,28 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         $error = $this->appErrorCode((int)$exception->getCode());
 
         return $error !== null ? $exception->getMessage() : ErrorCode::INTERNAL_SERVER_ERROR->message();
+    }
+
+    private function socialProvider(int $provider): SocialProvider
+    {
+        return match ($provider) {
+            1 => SocialProvider::WECHAT,
+            2 => SocialProvider::QQ,
+            default => throw GRPCException::create('social provider is required', StatusCode::INVALID_ARGUMENT),
+        };
+    }
+
+    /** @param array<string, mixed> $result */
+    private function loginResponse(array $result): LoginResponse
+    {
+        return new LoginResponse([
+            'user_id'                  => $this->uint64((string)$result['user_id'], 'user_id'),
+            'access_token'             => (string)$result['access_token'],
+            'refresh_token'            => (string)$result['refresh_token'],
+            'access_token_expires_at'  => (string)$result['access_token_expires_at'],
+            'refresh_token_expires_at' => (string)$result['refresh_token_expires_at'],
+            'is_new_user'              => (bool)($result['is_new_user'] ?? false),
+        ]);
     }
 
     private function metadataValue(ContextInterface $ctx, string $key): ?string

@@ -98,6 +98,7 @@ final class ErrorStatusMapperTest extends TestCase
                 ErrorCode::INVALID_ARGUMENT,
                 ErrorCode::AUTH_DEVICE_INVALID,
                 ErrorCode::AUTH_TICKET_EXPIRED,
+                ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED,
             ],
             StatusCode::UNAUTHENTICATED => [
                 ErrorCode::AUTH_INVALID_CREDENTIALS,
@@ -105,6 +106,10 @@ final class ErrorStatusMapperTest extends TestCase
                 ErrorCode::AUTH_TOKEN_INVALID,
                 ErrorCode::AUTH_TOKEN_REVOKED,
                 ErrorCode::AUTH_UNAUTHORIZED,
+                ErrorCode::AUTH_SOCIAL_CODE_INVALID,
+                ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID,
+                ErrorCode::AUTH_SMS_CODE_INVALID,
+                ErrorCode::AUTH_SMS_CODE_EXPIRED,
             ],
             StatusCode::PERMISSION_DENIED => [
                 ErrorCode::PERSONA_FORBIDDEN,
@@ -124,6 +129,9 @@ final class ErrorStatusMapperTest extends TestCase
                 ErrorCode::USER_ALREADY_EXISTS,
                 ErrorCode::SOCIAL_ALREADY_FOLLOWED,
                 ErrorCode::MESSAGE_DUPLICATE_CLIENT_ID,
+                ErrorCode::AUTH_SOCIAL_PROVIDER_ALREADY_BOUND,
+                ErrorCode::AUTH_SOCIAL_BIND_CONFLICT,
+                ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED,
             ],
             StatusCode::ABORTED => [
                 ErrorCode::IDEMPOTENCY_CONFLICT,
@@ -136,6 +144,7 @@ final class ErrorStatusMapperTest extends TestCase
                 ErrorCode::RPC_TIMEOUT,
             ],
             StatusCode::UNAVAILABLE => [
+                ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR,
                 ErrorCode::SERVICE_UNAVAILABLE,
             ],
             StatusCode::INTERNAL => [

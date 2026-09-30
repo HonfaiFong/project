@@ -142,7 +142,7 @@ final class AuthServiceTest extends TestCase
         $this->repo = new InMemoryAuthRepository();
         $this->revocationStore = new InMemoryAccessTokenRevocationStore();
         $userDirectory = new class implements UserDirectoryInterface {
-            public function findOrCreateByPhone(string $phone): array
+            public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
             {
                 return [
                     'user_id'     => '20001',
