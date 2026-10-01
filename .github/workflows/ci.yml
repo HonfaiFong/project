@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main, master ]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rabbitmq-contract:
     name: RabbitMQ publisher contract
@@ -164,6 +168,7 @@ jobs:
             'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS social_test_auth CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"'
 
       - name: Run MySQL and Redis integration tests
+        timeout-minutes: 5
         run: vendor/bin/phpunit tests/Integration/PdoSocialIdentityRepositoryTest.php tests/Integration/RedisSocialAuthSupportTest.php tests/Integration/UserPhoneMigrationTest.php --fail-on-skipped
         env:
           SOCIAL_TEST_MYSQL_DATABASE: social_test_auth
