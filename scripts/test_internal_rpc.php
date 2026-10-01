@@ -48,6 +48,18 @@ final class InternalRpcSmokeRunner
 
     private function runGatewayChecks(string $target, string $validToken): void
     {
+        $authTarget = getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051';
+        foreach ([null, self::WRONG_TOKEN] as $token) {
+            $this->expectStatus(
+                $token === null ? 'auth missing token' : 'auth wrong token',
+                new UnaryGrpcClient($authTarget, $token),
+                '/common.v1.HealthService/Check',
+                new HealthCheckRequest(),
+                HealthCheckResponse::class,
+                StatusCode::UNAUTHENTICATED,
+            );
+        }
+
         $request = new GetUserRequest(['user_id' => '0']);
         $this->expectStatus(
             'gateway missing token',
