@@ -426,6 +426,10 @@ final class SocialPhoneVerificationFake implements PhoneVerificationServiceInter
 
     public int $verifyCalls = 0;
 
+    public function __construct(private readonly SocialBindSessionStoreFake $bindStore)
+    {
+    }
+
     public function send(string $phone, VerificationScene $scene, string $contextId, array $context = []): void
     {
         $this->sent[] = [
@@ -436,7 +440,7 @@ final class SocialPhoneVerificationFake implements PhoneVerificationServiceInter
         ];
     }
 
-    public function verify(string $phone, string $code, VerificationScene $scene, string $contextId): void
+    public function verify(string $phone, string $code, VerificationScene $scene, string $contextId, ?string $bindToken = null): void
     {
         $this->verifyCalls++;
         if ($code !== '123456') {
@@ -444,6 +448,9 @@ final class SocialPhoneVerificationFake implements PhoneVerificationServiceInter
                 ErrorCode::AUTH_SMS_CODE_INVALID->message(),
                 ErrorCode::AUTH_SMS_CODE_INVALID->value
             );
+        }
+        if ($bindToken !== null) {
+            $this->bindStore->markPhoneVerified($bindToken, $phone);
         }
     }
 }
@@ -688,7 +695,7 @@ final class SocialAuthServiceTest extends TestCase
             $identityRepo->seed($this->identity($provider, $identity->openId, 'identity-1', $userResult['user_id'], SocialIdentity::STATUS_ACTIVE));
         }
         $bindStore = new SocialBindSessionStoreFake();
-        $phone = new SocialPhoneVerificationFake();
+        $phone = new SocialPhoneVerificationFake($bindStore);
         $lock = new SocialLockFake();
         $service = new AuthApplicationService(
             authRepo: $authRepo,

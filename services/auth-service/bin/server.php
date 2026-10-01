@@ -6,6 +6,7 @@ require_once __DIR__ . '/../../../vendor/autoload.php';
 
 use GuzzleHttp\Client;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
+use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
@@ -108,7 +109,14 @@ if (!$credentialVerifier->isDevelopment() && !$credentialVerifier->hasProvider()
     $logger->warning('AuthService running in production mode without configured Credential Provider. Real logins will fail until providers are registered.');
 }
 $userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
-$userDirectory = new GrpcUserDirectoryClient($userServiceTarget);
+$userDirectory = new GrpcUserDirectoryClient(
+    target: $userServiceTarget,
+    serviceToken: trim((string)(getenv('GRPC_USER_SERVICE_TOKEN') ?: '')) ?: null,
+);
+$internalRpcToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_AUTH_TOKEN') ?: ''));
+$internalRpcAuthorizer = new InternalRpcAuthorizer(
+    callerTokens: ['api-gateway' => $internalRpcToken],
+);
 
 $appEnvironment = strtolower(trim((string)(getenv('APP_ENV') ?: 'production')));
 $isDevelopment = in_array($appEnvironment, ['local', 'development', 'dev', 'testing'], true);
@@ -193,10 +201,13 @@ $appService = new AuthApplicationService(
     smsCodeTtl: (int)(getenv('SMS_CODE_TTL') ?: 300),
     smsResendInterval: (int)(getenv('SMS_RESEND_INTERVAL') ?: 60),
 );
-$grpcService = new RoadRunnerAuthService($appService, $logger);
+$grpcService = new RoadRunnerAuthService($appService, $logger, $internalRpcAuthorizer);
 $server = new Server(new Invoker());
 $server->registerService(AuthServiceInterface::class, $grpcService);
-$server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService());
+$server->registerService(
+    HealthServiceInterface::class,
+    new RoadRunnerHealthService(authorizer: $internalRpcAuthorizer),
+);
 
 $logger->info('AuthService started with RoadRunner gRPC worker');
 $server->serve(Worker::create());

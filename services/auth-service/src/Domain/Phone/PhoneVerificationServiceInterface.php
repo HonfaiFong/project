@@ -16,10 +16,12 @@ interface PhoneVerificationServiceInterface
         array $context = []
     ): void;
 
+    /** With bindToken, consumption and verified-session persistence must be atomic. */
     public function verify(
         string $phone,
         string $code,
         VerificationScene $scene,
-        string $contextId
+        string $contextId,
+        ?string $bindToken = null
     ): void;
 }

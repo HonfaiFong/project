@@ -7,6 +7,7 @@ namespace Services\AuthService\Infrastructure\Phone;
 use Contracts\Errors\ErrorCode;
 use Redis;
 use RuntimeException;
+use Services\AuthService\Infrastructure\Cache\RedisSocialBindSessionStore;
 use Services\AuthService\Domain\Phone\PhoneVerificationServiceInterface;
 use Services\AuthService\Domain\Phone\SmsSenderInterface;
 use Services\AuthService\Domain\Phone\VerificationScene;
@@ -125,25 +126,55 @@ LUA, array_merge([$cooldownKey, $verificationKey], $rateKeys, [$owner], $reserva
         string $phone,
         string $code,
         VerificationScene $scene,
-        string $contextId
+        string $contextId,
+        ?string $bindToken = null
     ): void {
         $phoneHash = hash('sha256', $phone);
         $verificationKey = $this->verificationKey($scene, $contextId, $phoneHash);
-        $result = (int)$this->redis->eval(<<<'LUA'
+        $keys = [$verificationKey];
+        $arguments = [$this->hashCode(trim($code)), $this->maxAttempts];
+        if ($bindToken !== null) {
+            $tokenHash = hash('sha256', trim($bindToken));
+            $keys[] = RedisSocialBindSessionStore::TOKEN_PREFIX . $tokenHash;
+            $keys[] = RedisSocialBindSessionStore::IDENTITY_PREFIX . $contextId;
+            $arguments = array_merge($arguments, [$tokenHash, $phoneHash, $phone]);
+        }
+        $result = $this->redis->eval(<<<'LUA'
+if #KEYS == 3 then
+    if redis.call('GET', KEYS[3]) ~= ARGV[3] or redis.call('EXISTS', KEYS[2]) == 0 then return 4 end
+    if redis.call('HGET', KEYS[2], 'phone_hash') ~= ARGV[4] then return 5 end
+    -- A retry after a lost reply must not consume another SMS code.
+    if redis.call('HGET', KEYS[2], 'phone_verified') == '1' then return 0 end
+end
 if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
 local attempts = tonumber(redis.call('HGET', KEYS[1], 'attempts') or '0')
 if attempts >= tonumber(ARGV[2]) then redis.call('DEL', KEYS[1]); return 2 end
-if redis.call('HGET', KEYS[1], 'code_hash') == ARGV[1] then redis.call('DEL', KEYS[1]); return 0 end
+if redis.call('HGET', KEYS[1], 'code_hash') == ARGV[1] then
+    if #KEYS == 3 then
+        local now = tonumber(redis.call('TIME')[1])
+        local expires = math.max(tonumber(redis.call('HGET', KEYS[2], 'expires_at') or '0'), now + 300)
+        redis.call('HSET', KEYS[2], 'phone_verified', '1', 'verified_phone', ARGV[5], 'expires_at', expires)
+        redis.call('EXPIREAT', KEYS[2], expires)
+        redis.call('EXPIREAT', KEYS[3], expires)
+    end
+    redis.call('DEL', KEYS[1])
+    return 0
+end
 attempts = redis.call('HINCRBY', KEYS[1], 'attempts', 1)
 if attempts >= tonumber(ARGV[2]) then redis.call('DEL', KEYS[1]); return 2 end
 return 3
-LUA, [$verificationKey, $this->hashCode(trim($code)), $this->maxAttempts], 1);
+LUA, array_merge($keys, $arguments), count($keys));
+        if (!is_int($result)) {
+            throw new RuntimeException(ErrorCode::SERVICE_UNAVAILABLE->message(), ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
         if ($result === 0) {
             return;
         }
         $error = match ($result) {
             1 => ErrorCode::AUTH_SMS_CODE_EXPIRED,
             2 => ErrorCode::RATE_LIMIT_EXCEEDED,
+            4 => ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID,
+            5 => ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED,
             default => ErrorCode::AUTH_SMS_CODE_INVALID,
         };
         throw new RuntimeException($error->message(), $error->value);

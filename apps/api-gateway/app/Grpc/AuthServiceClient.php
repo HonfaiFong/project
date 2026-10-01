@@ -47,6 +47,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         private readonly int $socialBindTimeoutMs = 1000,
         private readonly int $socialHttpTimeoutMs = 3000,
         ?UnaryGrpcClient $client = null,
+        private readonly ?string $serviceToken = null,
     ) {
         if ($this->socialLoginTimeoutMs <= 2 * $this->socialHttpTimeoutMs) {
             throw new InvalidArgumentException(
@@ -235,7 +236,8 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
     ): Message
     {
         $client = $this->client ??= new UnaryGrpcClient(
-            $this->target ?: (getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051')
+            $this->target ?: (getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051'),
+            $this->serviceToken,
         );
 
         try {
