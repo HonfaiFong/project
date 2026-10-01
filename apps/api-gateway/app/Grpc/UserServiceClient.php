@@ -44,7 +44,8 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
 
     public function __construct(
         private readonly ?string $target = null,
-        private readonly int $timeoutMs = 150
+        private readonly int $timeoutMs = 150,
+        private readonly ?string $serviceToken = null,
     ) {
     }
 
@@ -178,7 +179,8 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
     private function call(string $method, Message $request, string $responseClass): Message
     {
         $client = $this->client ??= new UnaryGrpcClient(
-            $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052')
+            $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052'),
+            $this->serviceToken,
         );
 
         try {

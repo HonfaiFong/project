@@ -196,6 +196,7 @@ final class AuthApplicationService
                 code: $code,
                 scene: VerificationScene::SOCIAL_BIND_PHONE,
                 contextId: $identity->id,
+                bindToken: $bindToken,
             );
             $session = $this->socialBindSessionStore->markPhoneVerified($bindToken, $phone);
         } else {

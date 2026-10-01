@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../../vendor/autoload.php';
 
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
+use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
@@ -58,6 +59,17 @@ $userRepo = new PdoUserRepository($pdo);
 $personaRepo = new PdoPersonaRepository($pdo);
 $transactionManager = new PdoTransactionManager($pdo);
 $outbox = new OutboxRepository($pdo, $snowflake);
+$gatewayRpcToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_USER_TOKEN') ?: ''));
+$authRpcToken = trim((string)(getenv('INTERNAL_RPC_AUTH_USER_TOKEN') ?: ''));
+$internalRpcAuthorizer = new InternalRpcAuthorizer(
+    callerTokens: [
+        'api-gateway' => $gatewayRpcToken,
+        'auth-service' => $authRpcToken,
+    ],
+    allowedMethodsByCaller: [
+        'auth-service' => ['FindOrCreateByPhone', 'GetUser'],
+    ],
+);
 
 $appService = new UserApplicationService(
     $userRepo,
@@ -67,10 +79,13 @@ $appService = new UserApplicationService(
     $outbox,
     new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGION') ?: 'CN'))),
 );
-$grpcService = new UserGrpcService($appService, $logger);
+$grpcService = new UserGrpcService($appService, $logger, $internalRpcAuthorizer);
 $server = new Server(new Invoker());
 $server->registerService(UserServiceInterface::class, $grpcService);
-$server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService());
+$server->registerService(
+    HealthServiceInterface::class,
+    new RoadRunnerHealthService(authorizer: $internalRpcAuthorizer),
+);
 
 $logger->info('UserService started with RoadRunner gRPC worker');
 $server->serve(Worker::create());

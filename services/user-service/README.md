@@ -34,6 +34,9 @@
 ## 6. Dependencies
 - MySQL (`user_db`)
 - Redis (Persona and User caching)
+- Internal gRPC callers use separate Gateway→User and Auth→User tokens. AuthService
+  is limited to `FindOrCreateByPhone` and `GetUser`; Gateway handles the public
+  UserService operations.
 
 ## 7. Local Run
 ```bash
@@ -41,6 +44,10 @@ docker compose up -d user-service
 # Or directly:
 php services/user-service/bin/server.php
 ```
+
+Compose does not publish the UserService gRPC port to the host. Set the three
+`INTERNAL_RPC_*_TOKEN` values in `.env`; the service verifies the caller token
+before dispatching any RPC method.
 
 ## 8. Test
 ```bash
@@ -58,9 +65,12 @@ against the target database before enabling the new services:
 docker compose run --rm --no-deps user-service php /app/scripts/normalize_user_phones.php
 ```
 
-Invalid numbers and multiple users sharing one normalized number stop the
-migration; resolve those records explicitly. During a maintenance window, stop
-phone/account writes, review the report, and apply the backfill:
+The preflight scans in bounded batches through connection-scoped temporary
+tables, so it does not load every user into PHP memory. Invalid numbers and
+multiple users sharing one normalized number stop the migration; resolve those
+records explicitly. The report includes sample user IDs only and never prints
+full phone values. During a maintenance window, stop phone/account writes,
+review the report, and apply the backfill:
 
 ```bash
 docker compose run --rm --no-deps user-service php /app/scripts/normalize_user_phones.php --apply

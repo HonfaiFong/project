@@ -11,7 +11,10 @@ use const Grpc\STATUS_OK;
 
 class UnaryGrpcClient extends BaseStub
 {
-    public function __construct(string $target)
+    public function __construct(
+        string $target,
+        private readonly ?string $serviceToken = null,
+    )
     {
         parent::__construct($target, [
             'credentials' => ChannelCredentials::createInsecure(),
@@ -31,7 +34,7 @@ class UnaryGrpcClient extends BaseStub
         int $timeoutMs,
         array $metadata = []
     ): Message {
-        $options = GrpcClientContext::createCallOptions($timeoutMs, $metadata);
+        $options = GrpcClientContext::createCallOptions($timeoutMs, $metadata, $this->serviceToken);
         // 本项目的 grpc/grpc 版本按 list($className, $func) 解构反序列化器,
         // 只认二元数组不认 Closure,第二个元素仅占位
         /** @var callable $deserialize */

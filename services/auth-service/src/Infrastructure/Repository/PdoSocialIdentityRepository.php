@@ -241,17 +241,87 @@ final class PdoSocialIdentityRepository implements SocialIdentityRepositoryInter
 
         $unionUserId = $unionRow['user_id'] === null ? null : (string)$unionRow['user_id'];
         $openIdUserId = $openIdRow['user_id'] === null ? null : (string)$openIdRow['user_id'];
-        if ($unionUserId !== $openIdUserId) {
+        if ($unionUserId !== null && $openIdUserId !== null && $unionUserId !== $openIdUserId) {
             throw $this->bindConflict();
         }
 
-        // The unionid row is the canonical row once it exists. A duplicate
-        // openid row for the same local user is safe to remove inside this
-        // transaction; a different user was rejected above.
+        $canonicalUserId = $unionUserId ?? $openIdUserId;
+        $canonicalStatus = $this->reconciledStatus($unionRow, $openIdRow, $canonicalUserId);
+        $canonicalBoundAt = $unionRow['bound_at'];
+        if ($canonicalUserId !== null && $canonicalBoundAt === null) {
+            $canonicalBoundAt = $openIdRow['bound_at'] ?? gmdate('Y-m-d H:i:s.v');
+        }
+
+        // Delete first when the openid row already owns the same user. The
+        // production unique(user_id, provider) key then permits the canonical
+        // unionid row to inherit that user atomically.
         $delete = $this->pdo->prepare('DELETE FROM social_identities WHERE id = :id');
         $delete->execute(['id' => $openIdRow['id']]);
 
-        return $unionRow;
+        return $this->updateCanonicalUnionRow(
+            $unionRow,
+            $canonicalUserId,
+            $canonicalStatus,
+            $canonicalBoundAt,
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $unionRow
+     * @param array<string, mixed> $openIdRow
+     */
+    private function reconciledStatus(array $unionRow, array $openIdRow, ?string $userId): int
+    {
+        if ((int)$unionRow['status'] === SocialIdentity::STATUS_DISABLED
+            || (int)$openIdRow['status'] === SocialIdentity::STATUS_DISABLED
+        ) {
+            return SocialIdentity::STATUS_DISABLED;
+        }
+
+        return $userId === null
+            ? SocialIdentity::STATUS_PENDING_PHONE
+            : SocialIdentity::STATUS_ACTIVE;
+    }
+
+    /**
+     * @param array<string, mixed> $unionRow
+     * @return array<string, mixed>
+     */
+    private function updateCanonicalUnionRow(
+        array $unionRow,
+        ?string $userId,
+        int $status,
+        ?string $boundAt,
+    ): array {
+        $currentUserId = $unionRow['user_id'] === null ? null : (string)$unionRow['user_id'];
+        if ($currentUserId !== $userId
+            || (int)$unionRow['status'] !== $status
+            || $unionRow['bound_at'] !== $boundAt
+        ) {
+            $now = gmdate('Y-m-d H:i:s.v');
+            $stmt = $this->pdo->prepare(
+                'UPDATE social_identities
+                 SET user_id = :user_id,
+                     status = :status,
+                     bound_at = :bound_at,
+                     updated_at = :updated_at
+                 WHERE id = :id'
+            );
+            $stmt->execute([
+                'user_id'    => $userId,
+                'status'     => $status,
+                'bound_at'   => $boundAt,
+                'updated_at' => $now,
+                'id'         => $unionRow['id'],
+            ]);
+        }
+
+        $canonical = $this->findRowById((string)$unionRow['id']);
+        if ($canonical === null) {
+            throw $this->bindConflict();
+        }
+
+        return $canonical;
     }
 
     /**

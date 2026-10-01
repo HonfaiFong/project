@@ -27,6 +27,7 @@ use Contracts\Gen\User\V1\UpdateUserResponse;
 use Contracts\Gen\User\V1\UserProfile;
 use Contracts\Gen\User\V1\UserServiceInterface;
 use Packages\GrpcCommon\ErrorStatusMapper;
+use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
 use Services\UserService\Application\Service\UserApplicationService;
@@ -43,6 +44,7 @@ final class UserGrpcService implements UserServiceInterface
     public function __construct(
         private readonly UserApplicationService $userService,
         private readonly LoggerInterface $logger,
+        private readonly ?InternalRpcAuthorizer $authorizer = null,
     ) {
     }
 
@@ -171,6 +173,10 @@ final class UserGrpcService implements UserServiceInterface
      */
     private function call(ContextInterface $ctx, string $method, callable $operation): mixed
     {
+        if ($this->authorizer !== null) {
+            $this->authorizer->authorize($ctx, $method);
+        }
+
         $trace = TraceContext::create(
             requestId: $this->metadataValue($ctx, 'x-request-id'),
             traceId: $this->metadataValue($ctx, 'x-trace-id'),

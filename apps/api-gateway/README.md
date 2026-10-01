@@ -51,7 +51,14 @@ performs two upstream requests, so the social login deadline must remain above
 that worst-case budget. `GRPC_SOCIAL_LOGIN_TIMEOUT_MS` is validated at startup
 to exceed two `SOCIAL_HTTP_TIMEOUT_MS` budgets. Phone-code sending and phone binding use
 separate 5-second and 1-second deadlines respectively. Social login requests
-are rate limited per socket peer address before the OAuth call.
+are rate limited before the OAuth call. Set `SOCIAL_TRUSTED_PROXY_CIDRS` to a
+comma-separated list of reverse-proxy IP ranges when the gateway is behind a
+proxy. Only an immediate socket peer inside those ranges may supply
+`X-Forwarded-For`; the first address outside the trusted proxy chain becomes the
+rate-limit bucket key. Untrusted forwarding headers are ignored and direct
+connections use the socket peer address. Proxy deployments must set this
+variable to the actual proxy ranges; leaving it empty groups users by the
+proxy peer, and public catch-all ranges such as `0.0.0.0/0` are rejected.
 
 ## 6. Local Run
 ```bash
@@ -64,3 +71,9 @@ The HTTP listener and worker count are configured in `config/process.php` via
 `HTTP_PORT` and `WEBMAN_WORKERS`. Routes are declared in `config/route.php`;
 request tracing is global middleware, while token verification applies only to
 the protected route group. Auth and User remain independent gRPC services.
+
+The gateway identifies itself on internal gRPC calls with `SERVICE_NAME=api-gateway`
+and a target-specific token (`GRPC_AUTH_TOKEN` or `GRPC_USER_TOKEN`). AuthService
+and UserService accept only their configured callers and do not publish ports to
+the host; set separate random tokens of at least 32 bytes for Gateway→Auth,
+Gateway→User, and Auth→User before starting Compose.

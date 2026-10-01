@@ -229,6 +229,64 @@ final class RedisSocialAuthSupportTest extends TestCase
         $this->assertCount(0, $sender->messages);
     }
 
+    public function testSmsConsumptionPersistsVerifiedSessionBeforeAnyLaterWriteAndSurvivesLostReply(): void
+    {
+        $store = new RedisSocialBindSessionStore($this->redis);
+        $sender = new RedisSmsSenderFake();
+        $service = new RedisPhoneVerificationService($this->redis, $sender, 'integration-test-pepper', developmentCode: '123456');
+        $identityId = 'integration-' . bin2hex(random_bytes(8));
+        $phone = '+86139' . random_int(10000000, 99999999);
+        $issued = $store->issue($identityId, 5);
+        $token = $issued['bind_token'];
+        $this->trackBindToken($identityId, $token);
+        $store->setPhone($token, $phone);
+        $hash = hash('sha256', $phone);
+        $key = 'auth:sms:social_bind_phone:' . $identityId . ':' . $hash;
+        array_push($this->keysToDelete, $key, $key . ':cooldown', 'auth:sms:rate:phone:' . $hash, 'auth:sms:rate:phone-day:' . $hash);
+        $service->send($phone, VerificationScene::SOCIAL_BIND_PHONE, $identityId);
+
+        // Stop immediately after verification, as if the worker lost its reply
+        // or died before markPhoneVerified / UserService could execute.
+        $service->verify($phone, '123456', VerificationScene::SOCIAL_BIND_PHONE, $identityId, $token);
+        $this->assertSame(0, $this->redis->exists($key));
+        $recovered = (new RedisSocialBindSessionStore($this->redis))->verify($token);
+        $this->assertNotNull($recovered);
+        $this->assertTrue($recovered->phoneVerified);
+        $this->assertSame($phone, $recovered->verifiedPhone);
+        $this->assertGreaterThanOrEqual(time() + 299, $recovered->expiresAt);
+        // Retrying the same state transition is idempotent without an SMS key.
+        $service->verify($phone, 'unused', VerificationScene::SOCIAL_BIND_PHONE, $identityId, $token);
+        $this->assertTrue($store->verify($token)->phoneVerified);
+    }
+
+    public function testRotatedBindTokenCannotConsumeSmsOrVerifyANewSession(): void
+    {
+        $store = new RedisSocialBindSessionStore($this->redis);
+        $service = new RedisPhoneVerificationService($this->redis, new RedisSmsSenderFake(), 'integration-test-pepper', developmentCode: '123456');
+        $identityId = 'integration-' . bin2hex(random_bytes(8));
+        $phone = '+86139' . random_int(10000000, 99999999);
+        $first = $store->issue($identityId, 60)['bind_token'];
+        $store->setPhone($first, $phone);
+        $second = $store->issue($identityId, 60)['bind_token'];
+        $store->setPhone($second, $phone);
+        $this->trackBindToken($identityId, $first);
+        $this->trackBindToken($identityId, $second);
+        $hash = hash('sha256', $phone);
+        $key = 'auth:sms:social_bind_phone:' . $identityId . ':' . $hash;
+        array_push($this->keysToDelete, $key, $key . ':cooldown', 'auth:sms:rate:phone:' . $hash, 'auth:sms:rate:phone-day:' . $hash);
+        $service->send($phone, VerificationScene::SOCIAL_BIND_PHONE, $identityId);
+        try {
+            $service->verify($phone, '123456', VerificationScene::SOCIAL_BIND_PHONE, $identityId, $first);
+            $this->fail('Rotated token must not verify');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->value, $e->getCode());
+        }
+        $this->assertSame(1, $this->redis->exists($key));
+        $this->assertFalse($store->verify($second)->phoneVerified);
+        $service->verify($phone, '123456', VerificationScene::SOCIAL_BIND_PHONE, $identityId, $second);
+        $this->assertTrue($store->verify($second)->phoneVerified);
+    }
+
     private function trackBindToken(string $identityId, string $token): void
     {
         $tokenHash = hash('sha256', $token);

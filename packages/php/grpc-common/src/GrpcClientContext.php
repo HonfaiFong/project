@@ -13,9 +13,14 @@ final class GrpcClientContext
      *
      * @param int $timeoutMs Default deadline timeout in milliseconds (e.g. 150ms)
      * @param array<string, string|array<string>> $customMetadata Extra metadata
+     * @param string|null $serviceToken Token configured for this target service
      * @return array{timeout: int, metadata: array<string, array<string>>, call_credentials?: mixed} Call options array compatible with gRPC PHP clients
      */
-    public static function createCallOptions(int $timeoutMs = 150, array $customMetadata = []): array
+    public static function createCallOptions(
+        int $timeoutMs = 150,
+        array $customMetadata = [],
+        ?string $serviceToken = null,
+    ): array
     {
         $trace = TraceContext::current();
 
@@ -42,6 +47,23 @@ final class GrpcClientContext
 
         foreach ($customMetadata as $k => $v) {
             $metadata[$k] = is_array($v) ? $v : [$v];
+        }
+
+        // Service identity is process configuration, never caller-provided
+        // metadata. Keep these fields authoritative even when a client adds
+        // custom metadata for an individual RPC.
+        foreach (array_keys($metadata) as $key) {
+            if (in_array(strtolower((string)$key), ['x-service-name', 'x-service-token'], true)) {
+                unset($metadata[$key]);
+            }
+        }
+        $serviceName = trim((string)(getenv('SERVICE_NAME') ?: ''));
+        $serviceToken = trim((string)($serviceToken ?? ''));
+        if ($serviceName !== '') {
+            $metadata['x-service-name'] = [$serviceName];
+        }
+        if ($serviceToken !== '') {
+            $metadata['x-service-token'] = [$serviceToken];
         }
 
         return [

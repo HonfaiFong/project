@@ -79,7 +79,8 @@
 
 ```bash
 # 1. 复制配置文件，并设置其中的 MYSQL_PASSWORD / JWT_SECRET / WS_TICKET_SECRET
-#    （compose.yaml 对这三个变量做强校验，缺失会拒绝启动）
+#    以及三个独立的 INTERNAL_RPC_*_TOKEN
+#    （compose.yaml 对这些变量做强校验，缺失会拒绝启动）
 cp .env.example .env
 
 # 2. 一键启动全流程
@@ -92,6 +93,12 @@ curl http://127.0.0.1:8787/health
 ```
 
 > **启动与迁移顺序说明**：`make up` 依次启动 MySQL、Redis、RabbitMQ，导入 broker 拓扑，执行数据库迁移，再启动业务服务。对象存储按需运行 `make storage-up`。
+
+AuthService 与 UserService 的 gRPC 端口只在 Compose 内部网络暴露，不发布到宿主机；Gateway→Auth、Gateway→User、Auth→User 分别使用独立的 `INTERNAL_RPC_*_TOKEN`，并通过 `SERVICE_NAME` 做调用方和方法授权。部署前必须把 `.env` 中的三个 token 替换为至少 32 字节的随机值。
+
+MySQL、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 服务之间继续使用内部 hostname 通信，需要外部访问时再显式设置对应的 `*_BIND_ADDRESS`。
+
+生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`ENABLE_DEV_SMS=false` 且固定验证码为空。当前没有生产短信适配器，QQ/微信开关必须保持关闭；强行开启时 AuthService 拒绝启动。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
 
 Snowflake Worker ID 说明：MVP 阶段 `compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 `pid % 32` 消散，在单容器小并发阶段可正常工作。注意：`pid % 32` 在数学上无法杜绝跨进程碰撞，在生产环境横向扩容（多 Pod × 多 RoadRunner Worker）前必须切换为基于 Redis `SET NX` 租约分发的动态 WorkerId Allocator（0-1023）并定时续期。
 

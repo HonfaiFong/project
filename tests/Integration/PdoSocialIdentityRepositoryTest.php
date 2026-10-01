@@ -182,6 +182,111 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         );
     }
 
+    public function testUnionActiveAndOpenIdPendingKeepTheActiveUnionRow(): void
+    {
+        $repository = $this->repository();
+        $this->insertIdentity(
+            id: '4101',
+            providerAppId: 'wechat-other-app',
+            subjectType: 'unionid',
+            subjectId: 'active-unionid',
+            openId: 'active-other-openid',
+            unionId: 'active-unionid',
+            userId: '4100',
+            status: 1,
+        );
+        $this->insertIdentity(
+            id: '4102',
+            providerAppId: 'wechat-main-app',
+            subjectType: 'openid',
+            subjectId: 'active-openid',
+            openId: 'active-openid',
+            unionId: null,
+            userId: null,
+            status: 0,
+        );
+
+        $canonical = $repository->findByExternalIdentity(
+            $this->identity('active-openid', 'active-unionid', 'wechat-main-app'),
+        );
+
+        $this->assertNotNull($canonical);
+        $this->assertSame('4101', $canonical->id);
+        $this->assertSame('4100', $canonical->userId);
+        $this->assertSame(1, $canonical->status);
+        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+    }
+
+    public function testUnionPendingAndOpenIdActiveTransferTheUserToTheUnionRow(): void
+    {
+        $repository = $this->repository();
+        $this->insertIdentity(
+            id: '4201',
+            providerAppId: 'wechat-other-app',
+            subjectType: 'unionid',
+            subjectId: 'pending-unionid',
+            openId: 'pending-other-openid',
+            unionId: 'pending-unionid',
+            userId: null,
+            status: 0,
+        );
+        $this->insertIdentity(
+            id: '4202',
+            providerAppId: 'wechat-main-app',
+            subjectType: 'openid',
+            subjectId: 'pending-openid',
+            openId: 'pending-openid',
+            unionId: null,
+            userId: '4200',
+            status: 1,
+        );
+
+        $canonical = $repository->findByExternalIdentity(
+            $this->identity('pending-openid', 'pending-unionid', 'wechat-main-app'),
+        );
+
+        $this->assertNotNull($canonical);
+        $this->assertSame('4201', $canonical->id);
+        $this->assertSame('4200', $canonical->userId);
+        $this->assertSame(1, $canonical->status);
+        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+    }
+
+    public function testBothPendingRowsMergeToTheUnionRow(): void
+    {
+        $repository = $this->repository();
+        $this->insertIdentity(
+            id: '4301',
+            providerAppId: 'wechat-other-app',
+            subjectType: 'unionid',
+            subjectId: 'both-pending-unionid',
+            openId: 'both-pending-other-openid',
+            unionId: 'both-pending-unionid',
+            userId: null,
+            status: 0,
+        );
+        $this->insertIdentity(
+            id: '4302',
+            providerAppId: 'wechat-main-app',
+            subjectType: 'openid',
+            subjectId: 'both-pending-openid',
+            openId: 'both-pending-openid',
+            unionId: null,
+            userId: null,
+            status: 0,
+        );
+
+        $canonical = $repository->findByExternalIdentity(
+            $this->identity('both-pending-openid', 'both-pending-unionid', 'wechat-main-app'),
+        );
+
+        $this->assertNotNull($canonical);
+        $this->assertSame('4301', $canonical->id);
+        $this->assertNull($canonical->userId);
+        $this->assertSame(0, $canonical->status);
+        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+    }
+
     public function testSameUserLegacyUnionAndOpenIdRowsAreMergedAndOpenIdRowRemoved(): void
     {
         $repository = $this->repository();
@@ -254,6 +359,42 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         }
 
         $this->assertSame(2, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+    }
+
+    public function testDisabledIdentityStateWinsWhenRowsAreMerged(): void
+    {
+        $repository = $this->repository();
+        $this->pdo->exec('ALTER TABLE social_identities DROP INDEX uniq_user_provider');
+
+        $this->insertIdentity(
+            id: '5101',
+            providerAppId: 'wechat-other-app',
+            subjectType: 'unionid',
+            subjectId: 'disabled-unionid',
+            openId: 'disabled-other-openid',
+            unionId: 'disabled-unionid',
+            userId: '5100',
+            status: 1,
+        );
+        $this->insertIdentity(
+            id: '5102',
+            providerAppId: 'wechat-main-app',
+            subjectType: 'openid',
+            subjectId: 'disabled-openid',
+            openId: 'disabled-openid',
+            unionId: null,
+            userId: '5100',
+            status: 2,
+        );
+
+        $canonical = $repository->findByExternalIdentity(
+            $this->identity('disabled-openid', 'disabled-unionid', 'wechat-main-app'),
+        );
+
+        $this->assertNotNull($canonical);
+        $this->assertSame('5100', $canonical->userId);
+        $this->assertSame(2, $canonical->status);
+        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
     }
 
     private function repository(): PdoSocialIdentityRepository
