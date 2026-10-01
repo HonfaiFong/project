@@ -148,7 +148,7 @@ services:
       - "50051:50051"
     environment:
       - SERVICE_NAME=auth-service
-      - APP_ENV=${APP_ENV:-local}
+      - APP_ENV=${APP_ENV:-production}
       # Snowflake service slot (0-31). Replicas of this service must use
       # distinct values; WorkerId::resolve() spreads rr worker processes
       # within the slot automatically.
@@ -176,11 +176,14 @@ services:
       - SOCIAL_HTTP_TIMEOUT_MS=${SOCIAL_HTTP_TIMEOUT_MS:-3000}
       - PHONE_DEFAULT_REGION=${PHONE_DEFAULT_REGION:-CN}
       - SMS_PROVIDER=${SMS_PROVIDER:-}
+      - ENABLE_DEV_LOGIN=${ENABLE_DEV_LOGIN:-false}
+      - DEV_LOGIN_CODE=${DEV_LOGIN_CODE:-}
+      - ENABLE_DEV_SMS=${ENABLE_DEV_SMS:-false}
       - SMS_CODE_TTL=${SMS_CODE_TTL:-300}
       - SMS_RESEND_INTERVAL=${SMS_RESEND_INTERVAL:-60}
       - SMS_VERIFY_MAX_ATTEMPTS=${SMS_VERIFY_MAX_ATTEMPTS:-5}
       - SMS_CODE_PEPPER=${SMS_CODE_PEPPER:-}
-      - DEV_SMS_CODE=${DEV_SMS_CODE:-123456}
+      - DEV_SMS_CODE=${DEV_SMS_CODE:-}
     volumes:
       - .:/app
     depends_on:
@@ -208,6 +211,7 @@ services:
       - USER_DB_NAME=user_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - PHONE_DEFAULT_REGION=${PHONE_DEFAULT_REGION:-CN}
     volumes:
       - .:/app
     depends_on:
@@ -252,13 +256,20 @@ services:
       - "8787:8787"
     environment:
       - SERVICE_NAME=api-gateway
+      - APP_ENV=${APP_ENV:-production}
       - GRPC_AUTH_SERVICE=auth-service:50051
       - GRPC_USER_SERVICE=user-service:50052
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env}
-      - ENABLE_DEV_LOGIN=${ENABLE_DEV_LOGIN:-false}
-      - DEV_LOGIN_CODE=${DEV_LOGIN_CODE:-}
+      - SOCIAL_HTTP_TIMEOUT_MS=${SOCIAL_HTTP_TIMEOUT_MS:-3000}
+      - GRPC_AUTH_TIMEOUT_MS=${GRPC_AUTH_TIMEOUT_MS:-300}
+      - GRPC_SOCIAL_LOGIN_TIMEOUT_MS=${GRPC_SOCIAL_LOGIN_TIMEOUT_MS:-7000}
+      - GRPC_SOCIAL_PHONE_CODE_TIMEOUT_MS=${GRPC_SOCIAL_PHONE_CODE_TIMEOUT_MS:-5000}
+      - GRPC_SOCIAL_BIND_TIMEOUT_MS=${GRPC_SOCIAL_BIND_TIMEOUT_MS:-1000}
+      - SOCIAL_LOGIN_RATE_LIMIT=${SOCIAL_LOGIN_RATE_LIMIT:-30}
+      - SOCIAL_LOGIN_RATE_WINDOW_SECONDS=${SOCIAL_LOGIN_RATE_WINDOW_SECONDS:-60}
     volumes:
       - .:/app
     depends_on:

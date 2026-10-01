@@ -13,7 +13,7 @@ final class LoginCredentialVerifierTest extends TestCase
 {
     public function testDevelopmentLoginRequiresConfiguredVerificationCode(): void
     {
-        $verifier = new LoginCredentialVerifier('local', 'dev-only-code');
+        $verifier = new LoginCredentialVerifier('local', 'dev-only-code', null, true);
 
         $this->assertThrows(fn () => $verifier->verify('+8613800000000', []));
         $this->assertThrows(fn () => $verifier->verify('+8613800000000', ['code' => 'wrong']));
@@ -33,6 +33,23 @@ final class LoginCredentialVerifierTest extends TestCase
                 $phone === '13800000000' && $code === '654321' && $password === ''
         );
         $provider->verify('13800000000', ['code' => '654321']);
+    }
+
+    public function testEnvironmentBasedDevelopmentLoginRequiresExplicitOptIn(): void
+    {
+        $disabled = LoginCredentialVerifier::fromEnvironment([
+            'APP_ENV' => 'local',
+            'DEV_LOGIN_CODE' => 'dev-only-code',
+            'ENABLE_DEV_LOGIN' => 'false',
+        ]);
+        $this->assertThrows(fn () => $disabled->verify('+8613800000000', ['code' => 'dev-only-code']));
+
+        $enabled = LoginCredentialVerifier::fromEnvironment([
+            'APP_ENV' => 'local',
+            'DEV_LOGIN_CODE' => 'dev-only-code',
+            'ENABLE_DEV_LOGIN' => 'true',
+        ]);
+        $enabled->verify('+8613800000000', ['code' => 'dev-only-code']);
     }
 
     private function assertThrows(callable $callback): void

@@ -20,6 +20,7 @@ final class GatewayWebmanWiringTest extends TestCase
     #[RunInSeparateProcess]
     public function testPublicProtectedAndFallbackRoutesUseWebmanPipeline(): void
     {
+        putenv('APP_ENV=testing');
         $gatewayPath = dirname(__DIR__, 2) . '/apps/api-gateway';
         Config::load($gatewayPath . '/config', ['route']);
         Middleware::load(config('middleware'));
@@ -40,6 +41,12 @@ final class GatewayWebmanWiringTest extends TestCase
         $socialRequest = new GatewayRequest("POST /api/v1/auth/social/login HTTP/1.1\r\nHost: localhost\r\nX-Request-Id: social-public-123\r\n\r\n");
         $socialResponse = Http::getCallback('', 'ApiGateway', $social['callback'], [], true, $social['route'])($socialRequest);
         $this->assertSame(ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED->httpStatus(), $socialResponse->getStatusCode());
+
+        [$status, $socialBind] = Route::dispatch('POST', '/api/v1/auth/social/phone/bind');
+        $this->assertSame(Dispatcher::FOUND, $status);
+        $socialBindRequest = new GatewayRequest("POST /api/v1/auth/social/phone/bind HTTP/1.1\r\nHost: localhost\r\nX-Request-Id: social-bind-public-123\r\n\r\n");
+        $socialBindResponse = Http::getCallback('', 'ApiGateway', $socialBind['callback'], [], true, $socialBind['route'])($socialBindRequest);
+        $this->assertSame(ErrorCode::INVALID_ARGUMENT->httpStatus(), $socialBindResponse->getStatusCode());
 
         [$status, $protected] = Route::dispatch('GET', '/api/v1/me');
         $this->assertSame(Dispatcher::FOUND, $status);

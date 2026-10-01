@@ -18,8 +18,18 @@ final class RedisSmsSenderFake implements SmsSenderInterface
     /** @var array<array{phone: string, code: string, scene: VerificationScene}> */
     public array $messages = [];
 
+    public bool $fail = false;
+
+    public ?\Closure $duringSend = null;
+
     public function sendVerificationCode(string $phone, string $code, VerificationScene $scene): void
     {
+        if ($this->duringSend !== null) {
+            ($this->duringSend)();
+        }
+        if ($this->fail) {
+            throw new \RuntimeException('SMS provider unavailable');
+        }
         $this->messages[] = [
             'phone' => $phone,
             'code'  => $code,
@@ -140,6 +150,83 @@ final class RedisSocialAuthSupportTest extends TestCase
 
         $lock->release($key, (string)$owner);
         $this->assertNotNull($lock->acquire($key, 60));
+    }
+
+    public function testVerifiedSessionExtendsBothKeysAndExpiry(): void
+    {
+        $store = new RedisSocialBindSessionStore($this->redis);
+        $identityId = 'integration-' . bin2hex(random_bytes(8));
+        $issued = $store->issue($identityId, 5);
+        $token = $issued['bind_token'];
+        $this->trackBindToken($identityId, $token);
+        $store->setPhone($token, '+8613800000000');
+        $session = $store->markPhoneVerified($token, '+8613800000000');
+        $this->assertTrue($session->phoneVerified);
+        $this->assertGreaterThanOrEqual(time() + 299, $session->expiresAt);
+        foreach ($this->keysToDelete as $key) {
+            $this->assertGreaterThanOrEqual(299, $this->redis->ttl($key));
+        }
+        $this->assertSame($session->expiresAt, (int)$this->redis->hGet($this->keysToDelete[0], 'expires_at'));
+    }
+
+    public function testConcurrentSendIsRejectedAndProviderFailureRefundsReservation(): void
+    {
+        $sender = new RedisSmsSenderFake();
+        $service = new RedisPhoneVerificationService($this->redis, $sender, 'integration-test-pepper', developmentCode: '123456');
+        $phone = '+86139' . random_int(10000000, 99999999);
+        $contextId = 'integration-' . bin2hex(random_bytes(8));
+        $hash = hash('sha256', $phone);
+        $key = 'auth:sms:social_bind_phone:' . $contextId . ':' . $hash;
+        $this->keysToDelete = [$key, $key . ':cooldown', 'auth:sms:rate:phone:' . $hash, 'auth:sms:rate:phone-day:' . $hash];
+        $sender->duringSend = function () use ($service, $phone, $contextId): void {
+            try {
+                $service->send($phone, VerificationScene::SOCIAL_BIND_PHONE, $contextId);
+                $this->fail('Concurrent send must be rejected before provider invocation');
+            } catch (\RuntimeException $e) {
+                $this->assertSame(ErrorCode::RATE_LIMIT_EXCEEDED->value, $e->getCode());
+            }
+        };
+        $sender->fail = true;
+        try {
+            $service->send($phone, VerificationScene::SOCIAL_BIND_PHONE, $contextId);
+            $this->fail('Expected provider failure');
+        } catch (\RuntimeException $e) {
+            $this->assertSame('SMS provider unavailable', $e->getMessage());
+        }
+        $this->assertSame(0, $this->redis->exists($key . ':cooldown'));
+        $this->assertSame(0, $this->redis->exists($key));
+        foreach (array_slice($this->keysToDelete, 2) as $rateKey) {
+            $this->assertSame('0', $this->redis->hGet($rateKey, 'count'));
+            $this->assertGreaterThan(0, $this->redis->ttl($rateKey));
+        }
+        $sender->fail = false;
+        $service->send($phone, VerificationScene::SOCIAL_BIND_PHONE, $contextId);
+        $this->assertCount(1, $sender->messages);
+        $service->verify($phone, '123456', VerificationScene::SOCIAL_BIND_PHONE, $contextId);
+        $this->expectExceptionCode(ErrorCode::AUTH_SMS_CODE_EXPIRED->value);
+        $service->verify($phone, '123456', VerificationScene::SOCIAL_BIND_PHONE, $contextId);
+    }
+
+    public function testExistingNumericQuotaIsPreservedDuringUpgrade(): void
+    {
+        $sender = new RedisSmsSenderFake();
+        $service = new RedisPhoneVerificationService($this->redis, $sender, 'integration-test-pepper');
+        $phone = '+86139' . random_int(10000000, 99999999);
+        $contextId = 'integration-' . bin2hex(random_bytes(8));
+        $hash = hash('sha256', $phone);
+        $key = 'auth:sms:rate:phone:' . $hash;
+        $this->keysToDelete = [$key];
+        $this->redis->set($key, '5', 60);
+        try {
+            $service->send($phone, VerificationScene::SOCIAL_BIND_PHONE, $contextId);
+            $this->fail('Existing quota must not be reset');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::RATE_LIMIT_EXCEEDED->value, $e->getCode());
+        }
+        $this->assertSame('5', $this->redis->hGet($key, 'count'));
+        $this->assertGreaterThan(0, $this->redis->ttl($key));
+        $this->assertLessThanOrEqual(60, $this->redis->ttl($key));
+        $this->assertCount(0, $sender->messages);
     }
 
     private function trackBindToken(string $identityId, string $token): void

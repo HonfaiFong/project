@@ -92,16 +92,20 @@ final class RedisSocialBindSessionStore implements SocialBindSessionStoreInterfa
     {
         $session = $this->requireSession($bindToken);
         $phoneHash = hash('sha256', $phone);
-        if ($session->phoneHash !== null && !hash_equals($session->phoneHash, $phoneHash)) {
-            throw new RuntimeException(
-                ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED->message(),
-                ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED->value
-            );
+        $updated = (int)$this->redis->eval(<<<'LUA'
+if redis.call('GET', KEYS[2]) ~= ARGV[1] or redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+local current = redis.call('HGET', KEYS[1], 'phone_hash')
+if current and current ~= '' and current ~= ARGV[2] then return 2 end
+redis.call('HSET', KEYS[1], 'phone_hash', ARGV[2])
+return 1
+LUA, [self::TOKEN_PREFIX . $session->tokenHash, self::IDENTITY_PREFIX . $session->socialIdentityId,
+            $session->tokenHash, $phoneHash], 2);
+        if ($updated !== 1) {
+            $error = $updated === 2 ? ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED : ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID;
+            throw new RuntimeException($error->message(), $error->value);
         }
 
-        $this->redis->hSet(self::TOKEN_PREFIX . $session->tokenHash, 'phone_hash', $phoneHash);
-
-        return $this->verify($bindToken) ?? $session;
+        return $this->requireSession($bindToken);
     }
 
     public function assertPhone(string $bindToken, string $phone): SocialBindSession
@@ -121,12 +125,22 @@ final class RedisSocialBindSessionStore implements SocialBindSessionStoreInterfa
     public function markPhoneVerified(string $bindToken, string $phone): SocialBindSession
     {
         $session = $this->setPhone($bindToken, $phone);
-        $this->redis->hMSet(self::TOKEN_PREFIX . $session->tokenHash, [
-            'phone_verified' => '1',
-            'verified_phone' => $phone,
-        ]);
+        $updated = $this->redis->eval(<<<'LUA'
+if redis.call('GET', KEYS[2]) ~= ARGV[1] or redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+if redis.call('HGET', KEYS[1], 'phone_hash') ~= ARGV[2] then return 0 end
+local now = tonumber(redis.call('TIME')[1])
+local expires = math.max(tonumber(redis.call('HGET', KEYS[1], 'expires_at') or '0'), now + 300)
+redis.call('HSET', KEYS[1], 'phone_verified', '1', 'verified_phone', ARGV[3], 'expires_at', expires)
+redis.call('EXPIREAT', KEYS[1], expires)
+redis.call('EXPIREAT', KEYS[2], expires)
+return 1
+LUA, [self::TOKEN_PREFIX . $session->tokenHash, self::IDENTITY_PREFIX . $session->socialIdentityId,
+            $session->tokenHash, hash('sha256', $phone), $phone], 2);
+        if ($updated !== 1) {
+            throw new RuntimeException(ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->message(), ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->value);
+        }
 
-        return $this->verify($bindToken) ?? $session;
+        return $this->requireSession($bindToken);
     }
 
     public function consume(string $bindToken): void
@@ -136,12 +150,12 @@ final class RedisSocialBindSessionStore implements SocialBindSessionStoreInterfa
             return;
         }
 
-        $identityKey = self::IDENTITY_PREFIX . $session->socialIdentityId;
-        $currentHash = $this->redis->get($identityKey);
-        $this->redis->del(self::TOKEN_PREFIX . $session->tokenHash);
-        if (is_string($currentHash) && hash_equals($session->tokenHash, $currentHash)) {
-            $this->redis->del($identityKey);
-        }
+        $this->redis->eval(<<<'LUA'
+redis.call('DEL', KEYS[1])
+if redis.call('GET', KEYS[2]) == ARGV[1] then redis.call('DEL', KEYS[2]) end
+return 1
+LUA, [self::TOKEN_PREFIX . $session->tokenHash, self::IDENTITY_PREFIX . $session->socialIdentityId,
+            $session->tokenHash], 2);
     }
 
     private function requireSession(string $bindToken): SocialBindSession

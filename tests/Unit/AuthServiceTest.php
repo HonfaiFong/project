@@ -130,10 +130,40 @@ final class InMemoryAccessTokenRevocationStore implements AccessTokenRevocationS
     }
 }
 
+final class AuthUserDirectoryFake implements UserDirectoryInterface
+{
+    public int $status = self::STATUS_ACTIVE;
+    public bool $deleted = false;
+
+    public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
+    {
+        return [
+            'user_id'     => '20001',
+            'is_new_user' => false,
+        ];
+    }
+
+    public function findById(string $userId): array
+    {
+        if ($this->deleted) {
+            throw new \RuntimeException(
+                ErrorCode::USER_NOT_FOUND->message(),
+                ErrorCode::USER_NOT_FOUND->value
+            );
+        }
+
+        return [
+            'user_id' => $userId,
+            'status'  => $this->status,
+        ];
+    }
+}
+
 final class AuthServiceTest extends TestCase
 {
     private InMemoryAuthRepository $repo;
     private InMemoryAccessTokenRevocationStore $revocationStore;
+    private AuthUserDirectoryFake $userDirectory;
     private AuthApplicationService $authService;
 
     protected function setUp(): void
@@ -141,21 +171,13 @@ final class AuthServiceTest extends TestCase
         parent::setUp();
         $this->repo = new InMemoryAuthRepository();
         $this->revocationStore = new InMemoryAccessTokenRevocationStore();
-        $userDirectory = new class implements UserDirectoryInterface {
-            public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
-            {
-                return [
-                    'user_id'     => '20001',
-                    'is_new_user' => false,
-                ];
-            }
-        };
+        $this->userDirectory = new AuthUserDirectoryFake();
         $this->authService = new AuthApplicationService(
             authRepo: $this->repo,
             jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
             wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
-            credentialVerifier: new LoginCredentialVerifier('local', 'dev-1234'),
-            userDirectory: $userDirectory,
+            credentialVerifier: new LoginCredentialVerifier('local', 'dev-1234', null, true),
+            userDirectory: $this->userDirectory,
             accessTokenRevocationStore: $this->revocationStore
         );
     }
@@ -206,6 +228,43 @@ final class AuthServiceTest extends TestCase
 
         $this->expectException(\RuntimeException::class);
         $this->authService->refreshToken($login['refresh_token']);
+    }
+
+    public function testRefreshTokenRejectsInactiveUserBeforeRotation(): void
+    {
+        $login = $this->authService->login('+8613800000000', 'dev-1234', [
+            'device_uuid' => 'uuid-123',
+            'platform'    => 'ios',
+            'app_version' => '1.0.0',
+        ]);
+        $this->userDirectory->status = 0;
+
+        try {
+            $this->authService->refreshToken($login['refresh_token']);
+            $this->fail('Expected inactive user refresh to be rejected');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::USER_BANNED->value, $e->getCode());
+        }
+
+        $this->assertArrayHasKey(hash('sha256', $login['refresh_token']), $this->repo->tokens);
+    }
+
+    public function testLoginRejectsDeletedUserBeforeIssuingToken(): void
+    {
+        $this->userDirectory->deleted = true;
+
+        try {
+            $this->authService->login('+8613800000000', 'dev-1234', [
+                'device_uuid' => 'uuid-123',
+                'platform'    => 'ios',
+                'app_version' => '1.0.0',
+            ]);
+            $this->fail('Expected deleted user login to be rejected');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::USER_NOT_FOUND->value, $e->getCode());
+        }
+
+        $this->assertSame([], $this->repo->devices);
     }
 
     public function testLogoutRevokesAccessTokenImmediately(): void

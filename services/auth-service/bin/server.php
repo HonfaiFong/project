@@ -140,9 +140,17 @@ if ($enableQq) {
     );
 }
 
-$smsSender = $isDevelopment ? new DevSmsSender() : new UnavailableSmsSender();
-if ($socialLoginEnabled && !$isDevelopment) {
-    throw new RuntimeException('Social login requires a configured production SMS adapter');
+$enableDevSms = filter_var(getenv('ENABLE_DEV_SMS') ?: 'false', FILTER_VALIDATE_BOOL);
+if ($enableDevSms && !$isDevelopment) {
+    throw new RuntimeException('ENABLE_DEV_SMS is only allowed in local, development, or testing environments');
+}
+$developmentSmsCode = trim((string)(getenv('DEV_SMS_CODE') ?: ''));
+if ($enableDevSms && $developmentSmsCode === '') {
+    throw new RuntimeException('DEV_SMS_CODE is required when ENABLE_DEV_SMS is enabled');
+}
+$smsSender = $enableDevSms ? new DevSmsSender() : new UnavailableSmsSender();
+if ($socialLoginEnabled && !$enableDevSms) {
+    throw new RuntimeException('Social login requires a configured production SMS adapter or explicitly enabled development SMS');
 }
 $smsPepper = trim((string)(getenv('SMS_CODE_PEPPER') ?: ''));
 if ($socialLoginEnabled && $smsPepper === '') {
@@ -162,7 +170,7 @@ $phoneVerificationService = new RedisPhoneVerificationService(
     codeTtl: (int)(getenv('SMS_CODE_TTL') ?: 300),
     resendInterval: (int)(getenv('SMS_RESEND_INTERVAL') ?: 60),
     maxAttempts: (int)(getenv('SMS_VERIFY_MAX_ATTEMPTS') ?: 5),
-    developmentCode: $isDevelopment ? trim((string)(getenv('DEV_SMS_CODE') ?: '')) : null,
+    developmentCode: $enableDevSms ? $developmentSmsCode : null,
 );
 
 $jwtCodec = new JwtTokenCodec($jwtSecret);

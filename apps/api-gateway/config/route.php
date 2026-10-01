@@ -7,6 +7,7 @@ use Apps\ApiGateway\Controller\HealthController;
 use Apps\ApiGateway\Controller\PersonaController;
 use Apps\ApiGateway\Controller\UserController;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
+use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\TraceMiddleware;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
@@ -17,9 +18,10 @@ Route::disableDefaultRoute();
 Route::get('/health', [HealthController::class, 'check']);
 Route::get('/api/v1/health', [HealthController::class, 'check']);
 Route::post('/api/v1/auth/login', [AuthController::class, 'login']);
-Route::post('/api/v1/auth/social/login', [AuthController::class, 'socialLogin']);
+Route::post('/api/v1/auth/social/login', [AuthController::class, 'socialLogin'])
+    ->middleware([SocialLoginRateLimitMiddleware::class]);
 Route::post('/api/v1/auth/social/phone/code', [AuthController::class, 'sendSocialPhoneCode']);
-Route::post('/api/v1/auth/social/bind-phone', [AuthController::class, 'bindSocialPhone']);
+Route::post('/api/v1/auth/social/phone/bind', [AuthController::class, 'bindSocialPhone']);
 Route::post('/api/v1/auth/refresh', [AuthController::class, 'refresh']);
 
 Route::group('/api/v1', static function (): void {

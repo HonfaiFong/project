@@ -27,6 +27,7 @@ use Contracts\Gen\Common\V1\HealthCheckResponse;
 use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
+use InvalidArgumentException;
 use RuntimeException;
 use Apps\ApiGateway\Action\WsTicketClient;
 use const Grpc\STATUS_DEADLINE_EXCEEDED;
@@ -40,8 +41,20 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
 
     public function __construct(
         private readonly ?string $target = null,
-        private readonly int $timeoutMs = 300
+        private readonly int $timeoutMs = 300,
+        private readonly int $socialLoginTimeoutMs = 7000,
+        private readonly int $socialPhoneCodeTimeoutMs = 5000,
+        private readonly int $socialBindTimeoutMs = 1000,
+        private readonly int $socialHttpTimeoutMs = 3000,
+        ?UnaryGrpcClient $client = null,
     ) {
+        if ($this->socialLoginTimeoutMs <= 2 * $this->socialHttpTimeoutMs) {
+            throw new InvalidArgumentException(
+                'SocialLogin gRPC deadline must exceed two social HTTP timeouts'
+            );
+        }
+
+        $this->client = $client;
     }
 
     public function login(string $phone, string $code, array $deviceInfo, ?string $password = null): array
@@ -74,7 +87,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
             'provider' => $providerValue,
             'code'     => $code,
             'device'   => $this->device($deviceInfo),
-        ]), SocialLoginResponse::class);
+        ]), SocialLoginResponse::class, [], $this->socialLoginTimeoutMs);
 
         if ($response->getState() === 1) {
             $login = $response->getLogin();
@@ -110,7 +123,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         ]), SendSocialPhoneCodeResponse::class, [
             'x-client-ip' => (string)($context['ip'] ?? ''),
             'x-device-id' => (string)($context['device_uuid'] ?? ''),
-        ]);
+        ], $this->socialPhoneCodeTimeoutMs);
 
         return [
             'expires_in'   => $response->getExpiresIn(),
@@ -130,7 +143,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
             'phone'      => $phone,
             'code'       => $code,
             'device'     => $this->device($deviceInfo),
-        ]), BindSocialPhoneResponse::class);
+        ]), BindSocialPhoneResponse::class, [], $this->socialBindTimeoutMs);
         $login = $response->getLogin();
         if ($login === null) {
             throw new RuntimeException(
@@ -213,14 +226,20 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
      * @param array<string, string|array<string>> $metadata
      * @return T
      */
-    private function call(string $method, Message $request, string $responseClass, array $metadata = []): Message
+    private function call(
+        string $method,
+        Message $request,
+        string $responseClass,
+        array $metadata = [],
+        ?int $timeoutMs = null
+    ): Message
     {
         $client = $this->client ??= new UnaryGrpcClient(
             $this->target ?: (getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051')
         );
 
         try {
-            return $client->call($method, $request, $responseClass, $this->timeoutMs, $metadata);
+            return $client->call($method, $request, $responseClass, $timeoutMs ?? $this->timeoutMs, $metadata);
         } catch (GrpcCallException $e) {
             throw $this->mapGrpcCallException($e);
         }

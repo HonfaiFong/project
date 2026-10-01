@@ -14,6 +14,7 @@ use Contracts\Gen\User\V1\UpdateUserRequest;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\IdGenerator\Snowflake;
 use Packages\Logging\JsonLogger;
+use Packages\Phone\PhoneNormalizer;
 use PDOException;
 use ReflectionMethod;
 use RuntimeException;
@@ -87,6 +88,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
             outbox: new RecordingEventOutbox(),
+            phoneNormalizer: new PhoneNormalizer(),
         );
 
         $ctx = $this->context();
@@ -268,6 +270,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
             outbox: new RecordingEventOutbox(),
+            phoneNormalizer: new PhoneNormalizer(),
         );
 
         $ctx = $this->context();
@@ -316,7 +319,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
                 : new EmptyAuthRepository(),
             jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
             wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
-            credentialVerifier: new LoginCredentialVerifier('local', 'dev-code'),
+            credentialVerifier: new LoginCredentialVerifier('local', 'dev-code', null, true),
             userDirectory: new class ($userDirectoryFails) implements UserDirectoryInterface {
                 public function __construct(private readonly bool $fails)
                 {
@@ -329,6 +332,11 @@ final class GrpcErrorTrailerContractTest extends TestCase
                     }
 
                     return ['user_id' => '20001', 'is_new_user' => false];
+                }
+
+                public function findById(string $userId): array
+                {
+                    return ['user_id' => $userId, 'status' => self::STATUS_ACTIVE];
                 }
             },
         );

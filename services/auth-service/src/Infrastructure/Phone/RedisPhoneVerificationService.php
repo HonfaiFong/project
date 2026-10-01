@@ -34,42 +34,89 @@ final class RedisPhoneVerificationService implements PhoneVerificationServiceInt
         $verificationKey = $this->verificationKey($scene, $contextId, $phoneHash);
         $cooldownKey = $verificationKey . ':cooldown';
 
-        if ((int)$this->redis->ttl($cooldownKey) > 0) {
-            throw new RuntimeException(
-                ErrorCode::RATE_LIMIT_EXCEEDED->message(),
-                ErrorCode::RATE_LIMIT_EXCEEDED->value
-            );
-        }
-
-        $this->checkRateLimit('phone', $phoneHash, 5, 3600);
-        $this->checkRateLimit('phone-day', $phoneHash, 10, 86400);
-
+        $rateKeys = [
+            'auth:sms:rate:phone:' . $phoneHash,
+            'auth:sms:rate:phone-day:' . $phoneHash,
+        ];
+        $limits = [5, 10];
+        $ttls = [3600, 86400];
         $ip = trim((string)($context['ip'] ?? ''));
         if ($ip !== '') {
-            $this->checkRateLimit('ip', hash('sha256', $ip), 30, 3600);
+            $rateKeys[] = 'auth:sms:rate:ip:' . hash('sha256', $ip);
+            $limits[] = 30;
+            $ttls[] = 3600;
         }
-
         $deviceUuid = trim((string)($context['device_uuid'] ?? ''));
         if ($deviceUuid !== '') {
-            $this->checkRateLimit('device', hash('sha256', $deviceUuid), 10, 3600);
+            $rateKeys[] = 'auth:sms:rate:device:' . hash('sha256', $deviceUuid);
+            $limits[] = 10;
+            $ttls[] = 3600;
+        }
+        $owner = bin2hex(random_bytes(16));
+        $reservation = $this->redis->eval(<<<'LUA'
+if redis.call('EXISTS', KEYS[1]) == 1 then return {} end
+for i = 2, #KEYS do
+    -- Upgrade existing numeric rate keys without resetting their quota/window.
+    if redis.call('TYPE', KEYS[i]).ok == 'string' then
+        local count = tonumber(redis.call('GET', KEYS[i]) or '0')
+        local ttl = redis.call('TTL', KEYS[i])
+        redis.call('DEL', KEYS[i])
+        redis.call('HSET', KEYS[i], 'window', ARGV[1], 'count', count)
+        redis.call('EXPIRE', KEYS[i], ttl > 0 and ttl or ARGV[2 * i])
+    end
+    if tonumber(redis.call('HGET', KEYS[i], 'count') or '0') >= tonumber(ARGV[2 * i - 1]) then
+        return {}
+    end
+end
+if not redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[2]) then return {} end
+local windows = {}
+for i = 2, #KEYS do
+    local window = redis.call('HGET', KEYS[i], 'window')
+    if not window then
+        window = ARGV[1]
+        redis.call('HSET', KEYS[i], 'window', window, 'count', 0)
+    end
+    redis.call('HINCRBY', KEYS[i], 'count', 1)
+    if redis.call('TTL', KEYS[i]) < 0 then redis.call('EXPIRE', KEYS[i], ARGV[2 * i]) end
+    windows[#windows + 1] = window
+end
+return windows
+LUA, array_merge([$cooldownKey], $rateKeys, [$owner, $this->resendInterval],
+            $this->rateArguments($limits, $ttls)), count($rateKeys) + 1);
+        if (!is_array($reservation) || $reservation === []) {
+            throw new RuntimeException(ErrorCode::RATE_LIMIT_EXCEEDED->message(), ErrorCode::RATE_LIMIT_EXCEEDED->value);
         }
 
         $code = $this->developmentCode !== null && $this->developmentCode !== ''
             ? $this->developmentCode
             : (string)random_int(100000, 999999);
 
-        $this->redis->hMSet($verificationKey, [
-            'code_hash' => $this->hashCode($code),
-            'attempts'  => '0',
-            'created_at' => (string)time(),
-        ]);
-        $this->redis->expire($verificationKey, $this->codeTtl);
-        $this->redis->set($cooldownKey, '1', $this->resendInterval);
-
         try {
+            $stored = $this->redis->eval(<<<'LUA'
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('HSET', KEYS[2], 'code_hash', ARGV[2], 'attempts', '0', 'created_at', ARGV[3])
+redis.call('EXPIRE', KEYS[2], ARGV[4])
+return 1
+LUA, [$cooldownKey, $verificationKey, $owner, $this->hashCode($code), time(), $this->codeTtl], 2);
+            if ($stored !== 1) {
+                throw new RuntimeException(ErrorCode::RATE_LIMIT_EXCEEDED->message(), ErrorCode::RATE_LIMIT_EXCEEDED->value);
+            }
+
             $this->smsSender->sendVerificationCode($phone, $code, $scene);
         } catch (\Throwable $e) {
-            $this->redis->del($verificationKey);
+            // Refund only this reservation; a later cooldown owner/window is untouched.
+            $this->redis->eval(<<<'LUA'
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    redis.call('DEL', KEYS[1], KEYS[2])
+end
+for i = 3, #KEYS do
+    if redis.call('HGET', KEYS[i], 'window') == ARGV[i - 1] then
+        local count = tonumber(redis.call('HGET', KEYS[i], 'count') or '0')
+        if count > 0 then redis.call('HINCRBY', KEYS[i], 'count', -1) end
+    end
+end
+return 1
+LUA, array_merge([$cooldownKey, $verificationKey], $rateKeys, [$owner], $reservation), count($rateKeys) + 2);
             throw $e;
         }
     }
@@ -82,42 +129,24 @@ final class RedisPhoneVerificationService implements PhoneVerificationServiceInt
     ): void {
         $phoneHash = hash('sha256', $phone);
         $verificationKey = $this->verificationKey($scene, $contextId, $phoneHash);
-        $data = $this->redis->hGetAll($verificationKey);
-        if (!is_array($data) || $data === []) {
-            throw new RuntimeException(
-                ErrorCode::AUTH_SMS_CODE_EXPIRED->message(),
-                ErrorCode::AUTH_SMS_CODE_EXPIRED->value
-            );
-        }
-
-        $attempts = (int)($data['attempts'] ?? 0);
-        if ($attempts >= $this->maxAttempts) {
-            $this->redis->del($verificationKey);
-            throw new RuntimeException(
-                ErrorCode::RATE_LIMIT_EXCEEDED->message(),
-                ErrorCode::RATE_LIMIT_EXCEEDED->value
-            );
-        }
-
-        $expected = (string)($data['code_hash'] ?? '');
-        if ($expected !== '' && hash_equals($expected, $this->hashCode(trim($code)))) {
-            $this->redis->del($verificationKey);
+        $result = (int)$this->redis->eval(<<<'LUA'
+if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end
+local attempts = tonumber(redis.call('HGET', KEYS[1], 'attempts') or '0')
+if attempts >= tonumber(ARGV[2]) then redis.call('DEL', KEYS[1]); return 2 end
+if redis.call('HGET', KEYS[1], 'code_hash') == ARGV[1] then redis.call('DEL', KEYS[1]); return 0 end
+attempts = redis.call('HINCRBY', KEYS[1], 'attempts', 1)
+if attempts >= tonumber(ARGV[2]) then redis.call('DEL', KEYS[1]); return 2 end
+return 3
+LUA, [$verificationKey, $this->hashCode(trim($code)), $this->maxAttempts], 1);
+        if ($result === 0) {
             return;
         }
-
-        $attempts = (int)$this->redis->hIncrBy($verificationKey, 'attempts', 1);
-        if ($attempts >= $this->maxAttempts) {
-            $this->redis->del($verificationKey);
-            throw new RuntimeException(
-                ErrorCode::RATE_LIMIT_EXCEEDED->message(),
-                ErrorCode::RATE_LIMIT_EXCEEDED->value
-            );
-        }
-
-        throw new RuntimeException(
-            ErrorCode::AUTH_SMS_CODE_INVALID->message(),
-            ErrorCode::AUTH_SMS_CODE_INVALID->value
-        );
+        $error = match ($result) {
+            1 => ErrorCode::AUTH_SMS_CODE_EXPIRED,
+            2 => ErrorCode::RATE_LIMIT_EXCEEDED,
+            default => ErrorCode::AUTH_SMS_CODE_INVALID,
+        };
+        throw new RuntimeException($error->message(), $error->value);
     }
 
     private function verificationKey(VerificationScene $scene, string $contextId, string $phoneHash): string
@@ -130,18 +159,14 @@ final class RedisPhoneVerificationService implements PhoneVerificationServiceInt
         return hash_hmac('sha256', $code, $this->codePepper);
     }
 
-    private function checkRateLimit(string $scope, string $value, int $limit, int $ttl): void
+    /** @param array<int> $limits @param array<int> $ttls @return array<int> */
+    private function rateArguments(array $limits, array $ttls): array
     {
-        $key = 'auth:sms:rate:' . $scope . ':' . $value;
-        $count = (int)$this->redis->incr($key);
-        if ($count === 1) {
-            $this->redis->expire($key, $ttl);
+        $arguments = [];
+        foreach ($limits as $index => $limit) {
+            $arguments[] = $limit;
+            $arguments[] = $ttls[$index];
         }
-        if ($count > $limit) {
-            throw new RuntimeException(
-                ErrorCode::RATE_LIMIT_EXCEEDED->message(),
-                ErrorCode::RATE_LIMIT_EXCEEDED->value
-            );
-        }
+        return $arguments;
     }
 }

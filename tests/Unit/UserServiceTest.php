@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use Contracts\Errors\ErrorCode;
 use Contracts\Events\EventTypes;
 use Packages\IdGenerator\Snowflake;
+use Packages\Phone\PhoneNormalizer;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
@@ -204,15 +205,16 @@ final class UserServiceTest extends TestCase
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
             outbox: $this->outbox,
+            phoneNormalizer: new PhoneNormalizer(),
         );
     }
 
     public function testFindOrCreateUserAutoCreatesDefaultPersona(): void
     {
-        $res = $this->userService->findOrCreateUserByPhone('+1234567890');
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
 
         $this->assertTrue($res['is_new_user']);
-        $this->assertSame('+1234567890', $res['user']->phone);
+        $this->assertSame('+8613800000000', $res['user']->phone);
 
         $personas = $this->userService->listPersonas($res['user']->id);
         $this->assertNotEmpty($personas);
@@ -226,7 +228,7 @@ final class UserServiceTest extends TestCase
         $this->assertNotSame('', $userRegisteredEvents[0]['trace_id']);
         $this->assertSame(EventTypes::USER_REGISTERED, $userRegisteredEvents[0]['event_type']);
         $this->assertSame($res['user']->id, $userRegisteredEvents[0]['payload']['id']);
-        $this->assertSame('+1234567890', $userRegisteredEvents[0]['payload']['phone']);
+        $this->assertSame('+8613800000000', $userRegisteredEvents[0]['payload']['phone']);
 
         $personaUpdatedEvents = $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED);
         $this->assertCount(1, $personaUpdatedEvents);
@@ -240,13 +242,30 @@ final class UserServiceTest extends TestCase
 
     public function testFindOrCreateUsesRegisterChannelOnlyForNewUsers(): void
     {
-        $first = $this->userService->findOrCreateUserByPhone('+1234567890', 'wechat');
-        $second = $this->userService->findOrCreateUserByPhone('+1234567890', 'qq');
+        $first = $this->userService->findOrCreateUserByPhone('+8613800000000', 'wechat');
+        $second = $this->userService->findOrCreateUserByPhone('+8613800000000', 'qq');
 
         $this->assertTrue($first['is_new_user']);
         $this->assertFalse($second['is_new_user']);
         $this->assertSame('wechat', $first['user']->registerChannel);
         $this->assertSame('wechat', $second['user']->registerChannel);
+    }
+
+    public function testFindOrCreateRejectsInactiveUser(): void
+    {
+        $created = $this->userService->findOrCreateUserByPhone('13800000000');
+        $existing = $created['user'];
+        $this->userRepo->users[$existing->id] = new User(
+            id: $existing->id,
+            status: 0,
+            phone: $existing->phone,
+            email: $existing->email,
+            registerChannel: $existing->registerChannel,
+            riskLevel: $existing->riskLevel,
+        );
+
+        $this->expectExceptionCode(ErrorCode::USER_BANNED->value);
+        $this->userService->findOrCreateUserByPhone('13800000000');
     }
 
     public function testFindOrCreateHandlesConcurrentDuplicateUser(): void
@@ -290,9 +309,10 @@ final class UserServiceTest extends TestCase
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
             outbox: new RecordingEventOutbox(),
+            phoneNormalizer: new PhoneNormalizer(),
         );
 
-        $res = $service->findOrCreateUserByPhone('+19999999999');
+        $res = $service->findOrCreateUserByPhone('+8613800000000');
         $this->assertFalse($res['is_new_user']);
         $this->assertSame('20002', $res['user']->id);
     }
@@ -318,26 +338,27 @@ final class UserServiceTest extends TestCase
             snowflake: new Snowflake(1),
             transactionManager: new PassThroughTransactionManager(),
             outbox: new RecordingEventOutbox(),
+            phoneNormalizer: new PhoneNormalizer(),
         );
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionCode(ErrorCode::INTERNAL_SERVER_ERROR->value);
         $this->expectExceptionMessage(ErrorCode::INTERNAL_SERVER_ERROR->message());
 
-        $service->findOrCreateUserByPhone('+18888888888');
+        $service->findOrCreateUserByPhone('+8613800000000');
     }
 
     public function testUpdateUserSuccess(): void
     {
-        $res = $this->userService->findOrCreateUserByPhone('+1234567890');
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
         $userId = $res['user']->id;
 
-        $updated = $this->userService->updateUser($userId, '+19876543210', 'test@example.com');
-        $this->assertSame('+19876543210', $updated->phone);
+        $updated = $this->userService->updateUser($userId, '+8613900000000', 'test@example.com');
+        $this->assertSame('+8613900000000', $updated->phone);
         $this->assertSame('test@example.com', $updated->email);
 
         $fetched = $this->userService->getUser($userId);
-        $this->assertSame('+19876543210', $fetched->phone);
+        $this->assertSame('+8613900000000', $fetched->phone);
         $this->assertSame('test@example.com', $fetched->email);
 
         $userUpdatedEvents = $this->outbox->findByEventType(EventTypes::USER_UPDATED);
@@ -346,15 +367,24 @@ final class UserServiceTest extends TestCase
         $this->assertSame($userId, $userUpdatedEvents[0]['aggregate_id']);
         $this->assertSame(EventTypes::USER_UPDATED, $userUpdatedEvents[0]['event_type']);
         $this->assertSame($userId, $userUpdatedEvents[0]['payload']['id']);
-        $this->assertSame('+19876543210', $userUpdatedEvents[0]['payload']['phone']);
+        $this->assertSame('+8613900000000', $userUpdatedEvents[0]['payload']['phone']);
         $this->assertSame('test@example.com', $userUpdatedEvents[0]['payload']['email']);
+    }
+
+    public function testUpdateUserNormalizesPhoneBeforePersistence(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('13800000000');
+
+        $updated = $this->userService->updateUser($res['user']->id, '13900000000');
+
+        $this->assertSame('+8613900000000', $updated->phone);
     }
 
     public function testUpdateUserNotFound(): void
     {
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('User not found');
-        $this->userService->updateUser('999999', '+10000000000');
+        $this->userService->updateUser('999999', '+8613900000000');
     }
 
     public function testEnforcesPersonaOwnership(): void
@@ -373,7 +403,7 @@ final class UserServiceTest extends TestCase
 
     public function testUpdatePersonaRecordsOutboxEvent(): void
     {
-        $res = $this->userService->findOrCreateUserByPhone('+1234567890');
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
         $userId = $res['user']->id;
         $personas = $this->userService->listPersonas($userId);
         $personaId = $personas[0]->id;

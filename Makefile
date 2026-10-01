@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate seed e2e logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone seed e2e logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -89,6 +89,11 @@ migrate:
 	@echo "Applying baseline schema (idempotent)..."
 	docker compose exec -T mysql sh -c 'exec mysql -uroot -p"$$MYSQL_ROOT_PASSWORD"' < infra/docker/mysql/init/01-databases.sql
 	bash scripts/run_migrations.sh
+	@$(MAKE) preflight-phone
+
+preflight-phone:
+	@echo "Checking historical user phones before starting services..."
+	docker compose run --rm --no-deps user-service php /app/scripts/normalize_user_phones.php --require-clean
 
 seed:
 	@echo "Seeding initial dev fixtures..."

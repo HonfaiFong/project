@@ -7,6 +7,7 @@ namespace Tests\Integration;
 use Contracts\Events\EventTypes;
 use Packages\IdGenerator\Snowflake;
 use Packages\Outbox\OutboxRepository;
+use Packages\Phone\PhoneNormalizer;
 use PDO;
 use PDOException;
 use Services\UserService\Application\Service\UserApplicationService;
@@ -50,12 +51,13 @@ final class UserOutboxTransactionTest extends TestCase
             snowflake: $snowflake,
             transactionManager: new PdoTransactionManager($this->pdo),
             outbox: new OutboxRepository($this->pdo, $snowflake),
+            phoneNormalizer: new PhoneNormalizer(),
         );
     }
 
     public function testRegistrationCommitsUserPersonaAndOutboxEvents(): void
     {
-        $result = $this->service->findOrCreateUserByPhone('+1234567890');
+        $result = $this->service->findOrCreateUserByPhone('+8613800000000');
         $userId = $result['user']->id;
 
         $this->assertTrue($result['is_new_user']);
@@ -84,7 +86,7 @@ final class UserOutboxTransactionTest extends TestCase
             BEGIN SELECT RAISE(FAIL, 'outbox insert failed'); END");
 
         try {
-            $this->service->findOrCreateUserByPhone('+1234567890');
+            $this->service->findOrCreateUserByPhone('+8613800000000');
             $this->fail('Expected the outbox insert to fail');
         } catch (PDOException $exception) {
             $this->assertStringContainsString('outbox insert failed', $exception->getMessage());

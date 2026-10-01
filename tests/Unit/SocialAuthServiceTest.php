@@ -137,6 +137,14 @@ final class SocialUserDirectoryFake implements UserDirectoryInterface
 
         return $this->result;
     }
+
+    public function findById(string $userId): array
+    {
+        return [
+            'user_id' => $userId,
+            'status'  => self::STATUS_ACTIVE,
+        ];
+    }
 }
 
 final class SocialIdentityRepositoryFake implements SocialIdentityRepositoryInterface
@@ -686,7 +694,7 @@ final class SocialAuthServiceTest extends TestCase
             authRepo: $authRepo,
             jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
             wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
-            credentialVerifier: new LoginCredentialVerifier('local', 'dev-code'),
+            credentialVerifier: new LoginCredentialVerifier('local', 'dev-code', null, true),
             userDirectory: $userDirectory,
             socialProviderRegistry: new SocialAuthProviderRegistry($providers),
             socialIdentityRepository: $identityRepo,

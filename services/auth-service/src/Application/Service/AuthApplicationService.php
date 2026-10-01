@@ -266,6 +266,8 @@ final class AuthApplicationService
      */
     private function issueTokenForUser(string $userId, array $deviceInfo, bool $isNewUser = false): array
     {
+        $this->assertUserCanAuthenticate($userId);
+
         $device = $this->authRepo->findOrCreateDevice(
             userId: $userId,
             deviceUuid: $deviceInfo['device_uuid'] ?: 'uuid-' . bin2hex(random_bytes(8)),
@@ -313,6 +315,11 @@ final class AuthApplicationService
     public function refreshToken(string $rawRefreshToken, array $deviceInfo = []): array
     {
         $tokenHash = hash('sha256', $rawRefreshToken);
+        $record = $this->authRepo->findRefreshToken($tokenHash);
+        if (!$record || !$record->isValid()) {
+            throw new RuntimeException('Token invalid or expired', ErrorCode::AUTH_TOKEN_EXPIRED->value);
+        }
+        $this->assertUserCanAuthenticate($record->userId);
 
         $now = time();
         $accessExpiresAt = $now + $this->accessTokenTtl;
@@ -424,11 +431,12 @@ final class AuthApplicationService
             );
         }
 
+        $login = $this->issueTokenForUser($identity->userId, $deviceInfo, false);
         $this->socialIdentityRepository->touchLastLogin($identity->id);
 
         return [
             'state' => 'authenticated',
-            'login' => $this->issueTokenForUser($identity->userId, $deviceInfo, false),
+            'login' => $login,
         ];
     }
 
@@ -451,5 +459,16 @@ final class AuthApplicationService
     private function normalizePhone(string $phone): string
     {
         return $this->phoneNormalizer?->normalize($phone) ?? trim($phone);
+    }
+
+    private function assertUserCanAuthenticate(string $userId): void
+    {
+        $user = $this->userDirectory->findById($userId);
+        if ($user['status'] !== UserDirectoryInterface::STATUS_ACTIVE) {
+            throw new RuntimeException(
+                ErrorCode::USER_BANNED->message(),
+                ErrorCode::USER_BANNED->value
+            );
+        }
     }
 }

@@ -47,8 +47,9 @@ expect_code() {
 }
 
 stamp="$(date +%s)"
-phone_a="+8613800${stamp}"
-phone_b="+8613900${stamp}"
+phone_suffix="$(printf '%08d' "$((stamp % 100000000))")"
+phone_a="+86138${phone_suffix}"
+phone_b="+86139${phone_suffix}"
 
 request 200 GET /health
 expect_code 0

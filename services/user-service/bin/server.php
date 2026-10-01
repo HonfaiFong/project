@@ -65,7 +65,7 @@ $appService = new UserApplicationService(
     $snowflake,
     $transactionManager,
     $outbox,
-    new PhoneNormalizer(),
+    new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGION') ?: 'CN'))),
 );
 $grpcService = new UserGrpcService($appService, $logger);
 $server = new Server(new Invoker());

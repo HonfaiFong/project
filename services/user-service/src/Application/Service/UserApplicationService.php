@@ -28,13 +28,13 @@ final class UserApplicationService
         private readonly Snowflake $snowflake,
         private readonly TransactionManagerInterface $transactionManager,
         private readonly EventOutboxInterface $outbox,
-        private readonly ?PhoneNormalizer $phoneNormalizer = null,
+        private readonly PhoneNormalizer $phoneNormalizer,
     ) {
     }
 
     public function findOrCreateUserByPhone(string $phone, string $registerChannel = 'default'): array
     {
-        $phone = $this->phoneNormalizer?->normalize($phone) ?? trim($phone);
+        $phone = $this->phoneNormalizer->normalize($phone);
         $registerChannel = trim($registerChannel) !== '' ? trim($registerChannel) : 'default';
         $user = $this->userRepo->findByPhone($phone);
         $isNew = false;
@@ -97,6 +97,7 @@ final class UserApplicationService
             }
         }
 
+        $this->assertUserCanAuthenticate($user);
         $this->userRepo->updateLastLogin($user->id);
 
         return [
@@ -128,6 +129,8 @@ final class UserApplicationService
         ?string $phone = null,
         ?string $email = null
     ): User {
+        $phone = $phone !== null ? $this->phoneNormalizer->normalize($phone) : null;
+
         return $this->transaction(function () use ($userId, $phone, $email): User {
             $user = $this->userRepo->findById($userId);
             if (!$user) {
@@ -272,5 +275,15 @@ final class UserApplicationService
             payload: $payload,
             traceId: TraceContext::current()->traceId,
         );
+    }
+
+    private function assertUserCanAuthenticate(User $user): void
+    {
+        if (!$user->isActive()) {
+            throw new RuntimeException(
+                ErrorCode::USER_BANNED->message(),
+                ErrorCode::USER_BANNED->value
+            );
+        }
     }
 }

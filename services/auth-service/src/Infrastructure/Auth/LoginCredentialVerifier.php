@@ -17,6 +17,7 @@ class LoginCredentialVerifier implements CredentialVerifierInterface
         private readonly string $environment,
         private readonly ?string $developmentCode = null,
         private readonly mixed $provider = null,
+        private readonly bool $developmentEnabled = false,
     ) {
     }
 
@@ -30,8 +31,12 @@ class LoginCredentialVerifier implements CredentialVerifierInterface
             'DEV_VERIFICATION_CODE',
             'DEV_LOGIN_CODE',
         ]);
+        $developmentEnabled = filter_var(
+            (string)($environment['ENABLE_DEV_LOGIN'] ?? getenv('ENABLE_DEV_LOGIN') ?: 'false'),
+            FILTER_VALIDATE_BOOL
+        );
 
-        return new self($appEnvironment, $developmentCode);
+        return new self($appEnvironment, $developmentCode, null, $developmentEnabled);
     }
 
     /**
@@ -67,7 +72,8 @@ class LoginCredentialVerifier implements CredentialVerifierInterface
 
     public function isDevelopment(): bool
     {
-        return in_array($this->environment, ['local', 'development', 'dev', 'testing'], true);
+        return $this->developmentEnabled
+            && in_array($this->environment, ['local', 'development', 'dev', 'testing'], true);
     }
 
     public function hasProvider(): bool

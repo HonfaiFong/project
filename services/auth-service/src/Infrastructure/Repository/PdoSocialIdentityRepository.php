@@ -13,6 +13,7 @@ use Services\AuthService\Domain\Auth\ExternalIdentity;
 use Services\AuthService\Domain\Auth\SocialProvider;
 use Services\AuthService\Domain\Entity\SocialIdentity;
 use Services\AuthService\Domain\Repository\SocialIdentityRepositoryInterface;
+use Throwable;
 
 final class PdoSocialIdentityRepository implements SocialIdentityRepositoryInterface
 {
@@ -24,42 +25,42 @@ final class PdoSocialIdentityRepository implements SocialIdentityRepositoryInter
 
     public function findByExternalIdentity(ExternalIdentity $identity): ?SocialIdentity
     {
-        $stmt = $this->pdo->prepare(
-            'SELECT * FROM social_identities
-             WHERE provider = :provider
-               AND identity_namespace = :identity_namespace
-               AND subject_type = :subject_type
-               AND subject_id = :subject_id
-             LIMIT 1'
-        );
-        $stmt->execute([
-            'provider'           => $identity->provider->value,
-            'identity_namespace' => $identity->identityNamespace,
-            'subject_type'       => $identity->subjectType(),
-            'subject_id'         => $identity->subjectId(),
-        ]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($identity->unionId === null || $identity->unionId === '') {
+            $row = $this->findRowBySubject($identity);
+            if ($row === null) {
+                $row = $this->findRowByProviderOpenId($identity);
+            }
 
-        if (!$row && $identity->openId !== '') {
-            // A provider may expose unionid only after an earlier openid-only login.
-            // Reuse that row rather than creating a second pending identity when the
-            // provider subject type changes.
-            $fallback = $this->pdo->prepare(
-                'SELECT * FROM social_identities
-                 WHERE provider = :provider
-                   AND provider_app_id = :provider_app_id
-                   AND openid = :openid
-                 LIMIT 1'
-            );
-            $fallback->execute([
-                'provider'        => $identity->provider->value,
-                'provider_app_id' => $identity->providerAppId,
-                'openid'          => $identity->openId,
-            ]);
-            $row = $fallback->fetch(PDO::FETCH_ASSOC);
+            return $row ? $this->hydrate($row) : null;
         }
 
-        return $row ? $this->hydrate($row) : null;
+        // Union IDs can arrive after an openid-only row was created. Both rows
+        // must be read and reconciled while locked; otherwise two app requests
+        // can promote or bind different rows for the same provider identity.
+        $ownsTransaction = !$this->pdo->inTransaction();
+        $transactionStarted = false;
+        if ($ownsTransaction) {
+            $this->pdo->beginTransaction();
+            $transactionStarted = true;
+        }
+
+        try {
+            $unionRow = $this->findRowBySubject($identity, lock: true);
+            $openIdRow = $this->findRowByProviderOpenId($identity, lock: true);
+            $row = $this->reconcileUnionIdentity($identity, $unionRow, $openIdRow);
+
+            if ($ownsTransaction) {
+                $this->pdo->commit();
+            }
+
+            return $row ? $this->hydrate($row) : null;
+        } catch (Throwable $e) {
+            if ($transactionStarted) {
+                $this->pdo->rollBack();
+            }
+
+            throw $e;
+        }
     }
 
     public function reserve(ExternalIdentity $identity): SocialIdentity
@@ -122,9 +123,7 @@ final class PdoSocialIdentityRepository implements SocialIdentityRepositoryInter
 
     public function findById(string $id): ?SocialIdentity
     {
-        $stmt = $this->pdo->prepare('SELECT * FROM social_identities WHERE id = :id LIMIT 1');
-        $stmt->execute(['id' => $id]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = $this->findRowById($id);
 
         return $row ? $this->hydrate($row) : null;
     }
@@ -200,6 +199,185 @@ final class PdoSocialIdentityRepository implements SocialIdentityRepositoryInter
             'id'            => $identityId,
             'active'        => SocialIdentity::STATUS_ACTIVE,
         ]);
+    }
+
+    /**
+     * @param array<string, mixed>|null $unionRow
+     * @param array<string, mixed>|null $openIdRow
+     * @return array<string, mixed>|null
+     */
+    private function reconcileUnionIdentity(
+        ExternalIdentity $identity,
+        ?array $unionRow,
+        ?array $openIdRow,
+    ): ?array {
+        if ($unionRow === null && $openIdRow === null) {
+            return null;
+        }
+
+        if ($unionRow === null) {
+            if ((string)$openIdRow['subject_type'] === 'unionid') {
+                if ((string)$openIdRow['subject_id'] !== $identity->unionId) {
+                    throw $this->bindConflict();
+                }
+
+                return $openIdRow;
+            }
+
+            return $this->promoteOpenIdRow($identity, $openIdRow);
+        }
+
+        if ($openIdRow === null || (string)$unionRow['id'] === (string)$openIdRow['id']) {
+            return $unionRow;
+        }
+
+        // A single openid must not be allowed to move between union IDs, even
+        // when the rows currently happen to point at the same local user.
+        if ((string)$openIdRow['subject_type'] === 'unionid'
+            && (string)$openIdRow['subject_id'] !== $identity->unionId
+        ) {
+            throw $this->bindConflict();
+        }
+
+        $unionUserId = $unionRow['user_id'] === null ? null : (string)$unionRow['user_id'];
+        $openIdUserId = $openIdRow['user_id'] === null ? null : (string)$openIdRow['user_id'];
+        if ($unionUserId !== $openIdUserId) {
+            throw $this->bindConflict();
+        }
+
+        // The unionid row is the canonical row once it exists. A duplicate
+        // openid row for the same local user is safe to remove inside this
+        // transaction; a different user was rejected above.
+        $delete = $this->pdo->prepare('DELETE FROM social_identities WHERE id = :id');
+        $delete->execute(['id' => $openIdRow['id']]);
+
+        return $unionRow;
+    }
+
+    /**
+     * @param array<string, mixed> $openIdRow
+     * @return array<string, mixed>
+     */
+    private function promoteOpenIdRow(ExternalIdentity $identity, array $openIdRow): array
+    {
+        $now = gmdate('Y-m-d H:i:s.v');
+        $stmt = $this->pdo->prepare(
+            'UPDATE social_identities
+             SET subject_type = :subject_type,
+                 subject_id = :subject_id,
+                 unionid = :unionid,
+                 updated_at = :updated_at
+             WHERE id = :id
+               AND subject_type = :openid_type
+               AND subject_id = :openid'
+        );
+
+        try {
+            $stmt->execute([
+                'subject_type' => 'unionid',
+                'subject_id'   => $identity->unionId,
+                'unionid'      => $identity->unionId,
+                'updated_at'   => $now,
+                'id'           => $openIdRow['id'],
+                'openid_type'  => 'openid',
+                'openid'       => $identity->openId,
+            ]);
+        } catch (PDOException $e) {
+            if ($this->isUniqueConstraintViolation($e)) {
+                throw $this->bindConflict($e);
+            }
+
+            throw $e;
+        }
+
+        $promoted = $this->findRowById((string)$openIdRow['id']);
+        if ($stmt->rowCount() !== 1 || $promoted === null) {
+            throw $this->bindConflict();
+        }
+
+        return $promoted;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function findRowBySubject(ExternalIdentity $identity, bool $lock = false): ?array
+    {
+        $sql =
+            'SELECT * FROM social_identities
+             WHERE provider = :provider
+               AND identity_namespace = :identity_namespace
+               AND subject_type = :subject_type
+               AND subject_id = :subject_id
+             LIMIT 1';
+        $stmt = $this->pdo->prepare($this->withRowLock($sql, $lock));
+        $stmt->execute([
+            'provider'           => $identity->provider->value,
+            'identity_namespace' => $identity->identityNamespace,
+            'subject_type'       => $identity->subjectType(),
+            'subject_id'         => $identity->subjectId(),
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function findRowByProviderOpenId(ExternalIdentity $identity, bool $lock = false): ?array
+    {
+        if ($identity->openId === '') {
+            return null;
+        }
+
+        $sql =
+            'SELECT * FROM social_identities
+             WHERE provider = :provider
+               AND provider_app_id = :provider_app_id
+               AND openid = :openid
+             LIMIT 1';
+        $stmt = $this->pdo->prepare($this->withRowLock($sql, $lock));
+        $stmt->execute([
+            'provider'        => $identity->provider->value,
+            'provider_app_id' => $identity->providerAppId,
+            'openid'          => $identity->openId,
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function findRowById(string $id, bool $lock = false): ?array
+    {
+        $sql = 'SELECT * FROM social_identities WHERE id = :id LIMIT 1';
+        $stmt = $this->pdo->prepare($this->withRowLock($sql, $lock));
+        $stmt->execute(['id' => $id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+
+    private function withRowLock(string $sql, bool $lock): string
+    {
+        $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        if ($lock && in_array($driver, ['mysql', 'pgsql'], true)) {
+            return $sql . ' FOR UPDATE';
+        }
+
+        return $sql;
+    }
+
+    private function bindConflict(?Throwable $previous = null): RuntimeException
+    {
+        return new RuntimeException(
+            ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->message(),
+            ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value,
+            $previous
+        );
     }
 
     /** @param array<string, mixed> $row */

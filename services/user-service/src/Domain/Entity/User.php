@@ -6,6 +6,8 @@ namespace Services\UserService\Domain\Entity;
 
 final readonly class User
 {
+    public const STATUS_ACTIVE = 1;
+
     public function __construct(
         public string $id,
         public int $status,
@@ -18,6 +20,11 @@ final readonly class User
         public ?string $createdAt = null,
         public ?string $updatedAt = null,
     ) {
+    }
+
+    public function isActive(): bool
+    {
+        return $this->status === self::STATUS_ACTIVE;
     }
 
     public function toArray(): array
