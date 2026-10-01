@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, codex/auth-review-2c13d86 ]
   pull_request:
     branches: [ main, master ]
 
@@ -137,7 +137,25 @@ jobs:
         run: composer install --no-interaction --prefer-dist
 
       - name: Prepare environment configuration
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          cat >> .env <<'EOF'
+          APP_ENV=testing
+          ENABLE_WECHAT_LOGIN=true
+          ENABLE_QQ_LOGIN=true
+          WECHAT_APP_ID=e2e-wechat-app
+          WECHAT_APP_SECRET=e2e-wechat-secret
+          WECHAT_TOKEN_ENDPOINT=http://fake-oauth:8081/sns/oauth2/access_token
+          QQ_APP_ID=e2e-qq-app
+          QQ_APP_KEY=e2e-qq-key
+          QQ_REDIRECT_URI=http://e2e.test/callback
+          QQ_TOKEN_ENDPOINT=http://fake-oauth:8081/oauth2.0/token
+          QQ_OPEN_ID_ENDPOINT=http://fake-oauth:8081/oauth2.0/me
+          SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=true
+          ENABLE_DEV_SMS=true
+          DEV_SMS_CODE=123456
+          SMS_CODE_PEPPER=e2e-only-sms-code-pepper
+          EOF
 
       - name: Start infrastructure
         run: docker compose up -d mysql redis
@@ -159,6 +177,9 @@ jobs:
       - name: Run database migrations
         run: make migrate
 
+      - name: Start fake OAuth upstream for social E2E
+        run: docker compose --profile e2e up -d fake-oauth
+
       - name: Verify production auth startup guards
         run: bash scripts/test_production_auth_config.sh
 
@@ -169,7 +190,7 @@ jobs:
 
       - name: Run MySQL and Redis integration tests
         timeout-minutes: 5
-        run: vendor/bin/phpunit tests/Integration/PdoSocialIdentityRepositoryTest.php tests/Integration/RedisSocialAuthSupportTest.php tests/Integration/UserPhoneMigrationTest.php --fail-on-skipped
+        run: vendor/bin/phpunit tests/Integration/PdoSocialIdentityRepositoryTest.php tests/Integration/PdoDeviceIsolationTest.php tests/Integration/RedisSocialAuthSupportTest.php tests/Integration/UserPhoneMigrationTest.php --fail-on-skipped
         env:
           SOCIAL_TEST_MYSQL_DATABASE: social_test_auth
           SOCIAL_TEST_MYSQL_HOST: 127.0.0.1

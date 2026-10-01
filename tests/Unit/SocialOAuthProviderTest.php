@@ -187,6 +187,41 @@ final class SocialOAuthProviderTest extends TestCase
         }
     }
 
+    public function testOAuthHttpClientAllowsLocalFakeHttpOnlyWhenExplicitlyEnabled(): void
+    {
+        $client = $this->createMock(ClientInterface::class);
+        $client->expects($this->once())
+            ->method('request')
+            ->with('GET', 'http://fake-oauth:8081/oauth', $this->arrayHasKey('connect_timeout'))
+            ->willReturn(new Response(200, [], '{}'));
+
+        $previousEnvironment = getenv('APP_ENV');
+        putenv('APP_ENV=testing');
+        try {
+            $this->assertSame('{}', (new GuzzleOAuthHttpClient(
+                $client,
+                allowInsecureHttp: true,
+            ))->get('http://fake-oauth:8081/oauth'));
+        } finally {
+            $previousEnvironment === false ? putenv('APP_ENV') : putenv('APP_ENV=' . $previousEnvironment);
+        }
+    }
+
+    public function testOAuthHttpClientNeverAllowsFakeHttpInProduction(): void
+    {
+        $client = $this->createMock(ClientInterface::class);
+        $client->expects($this->never())->method('request');
+
+        $previousEnvironment = getenv('APP_ENV');
+        putenv('APP_ENV=production');
+        try {
+            $this->expectExceptionCode(ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->value);
+            (new GuzzleOAuthHttpClient($client, allowInsecureHttp: true))->get('http://fake-oauth:8081/oauth');
+        } finally {
+            $previousEnvironment === false ? putenv('APP_ENV') : putenv('APP_ENV=' . $previousEnvironment);
+        }
+    }
+
     public function testProvidersRejectEmptyCodesBeforeCallingUpstream(): void
     {
         $wechatHttp = new SocialOAuthHttpFake([]);

@@ -138,6 +138,17 @@ services:
       dockerfile: infra/docker/php/Dockerfile
     image: project-php-runtime:rabbitmq
 
+  fake-oauth:
+    image: project-php-runtime:rabbitmq
+    profiles:
+      - e2e
+    working_dir: /app
+    command: php -S 0.0.0.0:8081 /app/scripts/fake_oauth_server.php
+    expose:
+      - "8081"
+    volumes:
+      - .:/app
+
   auth-service:
     image: project-php-runtime:rabbitmq
     container_name: social-auth-service
@@ -169,10 +180,14 @@ services:
       - WECHAT_APP_ID=${WECHAT_APP_ID:-}
       - WECHAT_APP_SECRET=${WECHAT_APP_SECRET:-}
       - WECHAT_IDENTITY_NAMESPACE=${WECHAT_IDENTITY_NAMESPACE:-wechat-main}
+      - WECHAT_TOKEN_ENDPOINT=${WECHAT_TOKEN_ENDPOINT:-https://api.weixin.qq.com/sns/oauth2/access_token}
       - QQ_APP_ID=${QQ_APP_ID:-}
       - QQ_APP_KEY=${QQ_APP_KEY:-}
       - QQ_REDIRECT_URI=${QQ_REDIRECT_URI:-}
       - QQ_IDENTITY_NAMESPACE=${QQ_IDENTITY_NAMESPACE:-qq-main}
+      - QQ_TOKEN_ENDPOINT=${QQ_TOKEN_ENDPOINT:-https://graph.qq.com/oauth2.0/token}
+      - QQ_OPEN_ID_ENDPOINT=${QQ_OPEN_ID_ENDPOINT:-https://graph.qq.com/oauth2.0/me}
+      - SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=${SOCIAL_OAUTH_ALLOW_INSECURE_HTTP:-false}
       - SOCIAL_BIND_TOKEN_TTL=${SOCIAL_BIND_TOKEN_TTL:-600}
       - SOCIAL_HTTP_CONNECT_TIMEOUT_MS=${SOCIAL_HTTP_CONNECT_TIMEOUT_MS:-1000}
       - SOCIAL_HTTP_TIMEOUT_MS=${SOCIAL_HTTP_TIMEOUT_MS:-3000}

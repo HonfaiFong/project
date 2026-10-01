@@ -18,6 +18,8 @@ interface AuthRepositoryInterface
         ?string $ip
     ): Device;
 
+    public function deviceBelongsToUser(string $userId, string $deviceId): bool;
+
     public function createRefreshToken(
         string $userId,
         string $deviceId,

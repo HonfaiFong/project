@@ -21,6 +21,8 @@ final class QqOAuthProvider implements SocialAuthProviderInterface
         private readonly string $appKey,
         private readonly string $redirectUri = '',
         private readonly string $identityNamespace = 'qq-main',
+        private readonly string $tokenEndpoint = self::TOKEN_ENDPOINT,
+        private readonly string $openIdEndpoint = self::OPEN_ID_ENDPOINT,
     ) {
         if ($this->appId === '' || $this->appKey === '') {
             throw new RuntimeException(
@@ -45,7 +47,7 @@ final class QqOAuthProvider implements SocialAuthProviderInterface
             );
         }
 
-        $tokenPayload = $this->parseQueryString($this->httpClient->get(self::TOKEN_ENDPOINT, [
+        $tokenPayload = $this->parseQueryString($this->httpClient->get($this->tokenEndpoint, [
             'grant_type'    => 'authorization_code',
             'client_id'     => $this->appId,
             'client_secret' => $this->appKey,
@@ -60,7 +62,7 @@ final class QqOAuthProvider implements SocialAuthProviderInterface
             );
         }
 
-        $openIdBody = $this->httpClient->get(self::OPEN_ID_ENDPOINT, [
+        $openIdBody = $this->httpClient->get($this->openIdEndpoint, [
             'access_token' => (string)$tokenPayload['access_token'],
         ]);
         $identityPayload = $this->parseCallbackJson($openIdBody);

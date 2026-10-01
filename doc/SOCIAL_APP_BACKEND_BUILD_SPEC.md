@@ -840,7 +840,7 @@ last_active_at DATETIME(3)
 created_at DATETIME(3)
 updated_at DATETIME(3)
 
-UNIQUE(device_uuid)
+UNIQUE(user_id, device_uuid)
 INDEX(user_id)
 ```
 

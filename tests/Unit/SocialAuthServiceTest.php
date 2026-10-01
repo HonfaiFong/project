@@ -57,6 +57,17 @@ final class SocialAuthRepositoryFake implements AuthRepositoryInterface
         return $device;
     }
 
+    public function deviceBelongsToUser(string $userId, string $deviceId): bool
+    {
+        foreach ($this->devices as $device) {
+            if ($device->id === $deviceId && $device->userId === $userId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function createRefreshToken(
         string $userId,
         string $deviceId,

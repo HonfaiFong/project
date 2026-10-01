@@ -30,6 +30,10 @@ run_rejection_case \
   'ENABLE_DEV_SMS is only allowed in local, development, or testing environments' \
   -e APP_ENV=production \
   -e ENABLE_DEV_LOGIN=false \
+  -e SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=false \
+  -e WECHAT_TOKEN_ENDPOINT=https://api.weixin.qq.com/sns/oauth2/access_token \
+  -e QQ_TOKEN_ENDPOINT=https://graph.qq.com/oauth2.0/token \
+  -e QQ_OPEN_ID_ENDPOINT=https://graph.qq.com/oauth2.0/me \
   -e ENABLE_DEV_SMS=true
 
 # Enabling a social provider in production without a real SMS adapter must
@@ -40,8 +44,38 @@ run_rejection_case \
   'Social login requires a configured production SMS adapter or explicitly enabled development SMS' \
   -e APP_ENV=production \
   -e ENABLE_DEV_LOGIN=false \
+  -e SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=false \
+  -e WECHAT_TOKEN_ENDPOINT=https://api.weixin.qq.com/sns/oauth2/access_token \
+  -e QQ_TOKEN_ENDPOINT=https://graph.qq.com/oauth2.0/token \
+  -e QQ_OPEN_ID_ENDPOINT=https://graph.qq.com/oauth2.0/me \
   -e ENABLE_DEV_SMS=false \
   -e SMS_PROVIDER= \
   -e ENABLE_WECHAT_LOGIN=true \
   -e WECHAT_APP_ID=internal-rpc-config-smoke-app \
   -e WECHAT_APP_SECRET=internal-rpc-config-smoke-secret
+
+# Test-only OAuth endpoint overrides must never be accepted by a production
+# AuthService, even when the provider and SMS settings otherwise look valid.
+run_rejection_case \
+  oauth-endpoint-override-rejected-in-production \
+  'OAuth endpoint overrides are only allowed in local, development, or testing environments' \
+  -e APP_ENV=production \
+  -e ENABLE_DEV_LOGIN=false \
+  -e SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=false \
+  -e ENABLE_DEV_SMS=false \
+  -e SMS_PROVIDER=twilio \
+  -e ENABLE_WECHAT_LOGIN=true \
+  -e WECHAT_APP_ID=internal-rpc-config-smoke-app \
+  -e WECHAT_APP_SECRET=internal-rpc-config-smoke-secret \
+  -e WECHAT_TOKEN_ENDPOINT=http://fake-oauth:8081/sns/oauth2/access_token
+
+run_rejection_case \
+  insecure-oauth-http-rejected-in-production \
+  'SOCIAL_OAUTH_ALLOW_INSECURE_HTTP is only allowed in local, development, or testing environments' \
+  -e APP_ENV=production \
+  -e ENABLE_DEV_LOGIN=false \
+  -e ENABLE_DEV_SMS=false \
+  -e SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=true \
+  -e WECHAT_TOKEN_ENDPOINT=https://api.weixin.qq.com/sns/oauth2/access_token \
+  -e QQ_TOKEN_ENDPOINT=https://graph.qq.com/oauth2.0/token \
+  -e QQ_OPEN_ID_ENDPOINT=https://graph.qq.com/oauth2.0/me

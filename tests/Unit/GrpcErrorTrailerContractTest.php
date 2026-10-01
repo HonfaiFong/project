@@ -487,6 +487,11 @@ class EmptyAuthRepository implements AuthRepositoryInterface
         );
     }
 
+    public function deviceBelongsToUser(string $userId, string $deviceId): bool
+    {
+        return false;
+    }
+
     public function createRefreshToken(
         string $userId,
         string $deviceId,

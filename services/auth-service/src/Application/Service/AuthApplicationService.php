@@ -407,6 +407,19 @@ final class AuthApplicationService
                 return ['valid' => false];
             }
 
+            // Legacy sessions may reference a device that was reassigned by
+            // the old UUID-only lookup. Never accept another user's device.
+            if (!$this->authRepo->deviceBelongsToUser(
+                (string)$payload['sub'],
+                (string)($payload['device_id'] ?? '')
+            )) {
+                return ['valid' => false];
+            }
+
+            // Check the authoritative status on every request: an already-issued
+            // JWT must not keep a banned or deleted user authenticated.
+            $this->assertUserCanAuthenticate((string)$payload['sub']);
+
             return [
                 'valid'     => true,
                 'user_id'   => (string)$payload['sub'],

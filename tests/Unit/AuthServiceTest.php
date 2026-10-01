@@ -50,6 +50,17 @@ final class InMemoryAuthRepository implements AuthRepositoryInterface
         return $dev;
     }
 
+    public function deviceBelongsToUser(string $userId, string $deviceId): bool
+    {
+        foreach ($this->devices as $device) {
+            if ($device->id === $deviceId && $device->userId === $userId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function createRefreshToken(
         string $userId,
         string $deviceId,
@@ -134,6 +145,7 @@ final class AuthUserDirectoryFake implements UserDirectoryInterface
 {
     public int $status = self::STATUS_ACTIVE;
     public bool $deleted = false;
+    public bool $unavailable = false;
 
     public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
     {
@@ -145,6 +157,10 @@ final class AuthUserDirectoryFake implements UserDirectoryInterface
 
     public function findById(string $userId): array
     {
+        if ($this->unavailable) {
+            throw new \RuntimeException('User directory unavailable', ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
+
         if ($this->deleted) {
             throw new \RuntimeException(
                 ErrorCode::USER_NOT_FOUND->message(),
@@ -278,6 +294,60 @@ final class AuthServiceTest extends TestCase
         $this->assertTrue($this->authService->verifyToken($login['access_token'])['valid']);
         $this->assertTrue($this->authService->logout($login['refresh_token']));
         $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
+    }
+
+    public function testIssuedTokenRejectsBannedUserOnNextVerification(): void
+    {
+        $login = $this->loginForStatusTest();
+        $this->assertTrue($this->authService->verifyToken($login['access_token'])['valid']);
+
+        $this->userDirectory->status = 0;
+        $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
+
+        // Status-based suspension: restoring active status restores a token
+        // that has not expired or been independently revoked by logout.
+        $this->userDirectory->status = UserDirectoryInterface::STATUS_ACTIVE;
+        $this->assertTrue($this->authService->verifyToken($login['access_token'])['valid']);
+    }
+
+    public function testIssuedTokenRejectsDeletedUserOnNextVerification(): void
+    {
+        $login = $this->loginForStatusTest();
+        $this->userDirectory->deleted = true;
+
+        $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
+    }
+
+    public function testIssuedTokenFailsClosedWhenUserDirectoryIsUnavailable(): void
+    {
+        $login = $this->loginForStatusTest();
+        $this->userDirectory->unavailable = true;
+
+        $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
+    }
+
+    public function testIssuedTokenIsRejectedWhenItsDeviceBelongsToAnotherUser(): void
+    {
+        $login = $this->loginForStatusTest();
+        $this->repo->devices['uuid-status-test'] = new Device(
+            id: 'dev_1001',
+            userId: '20002',
+            deviceUuid: 'uuid-status-test',
+            platform: 'ios',
+            appVersion: '1.0.0',
+        );
+
+        $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
+    }
+
+    /** @return array{access_token: string} */
+    private function loginForStatusTest(): array
+    {
+        return $this->authService->login('+8613800000000', 'dev-1234', [
+            'device_uuid' => 'uuid-status-test',
+            'platform' => 'ios',
+            'app_version' => '1.0.0',
+        ]);
     }
 
     public function testCreateWsTicketGeneratesValidSignature(): void

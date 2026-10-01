@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS `devices` (
   `last_active_at` DATETIME(3) NOT NULL,
   `created_at` DATETIME(3) NOT NULL,
   `updated_at` DATETIME(3) NOT NULL,
-  UNIQUE KEY `uniq_device_uuid` (`device_uuid`),
+  UNIQUE KEY `uniq_user_device_uuid` (`user_id`, `device_uuid`),
   INDEX `idx_user_id` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
