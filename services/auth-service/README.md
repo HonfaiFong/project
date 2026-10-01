@@ -33,7 +33,6 @@
 ## 6. Dependencies
 - MySQL (`auth_db`)
 - Redis (session cache and token blacklist)
-- UserService over internal gRPC (`GRPC_USER_SERVICE_TOKEN` authenticates Auth→User)
 
 ## 7. Local Run
 ```bash
@@ -41,10 +40,6 @@ docker compose up -d auth-service
 # Or directly:
 php services/auth-service/bin/server.php
 ```
-
-Compose does not publish the AuthService gRPC port to the host. Incoming calls
-must carry the Gateway→Auth token and `SERVICE_NAME=api-gateway`; the service
-also uses a separate Auth→User token for its UserService calls.
 
 ## 8. Test
 ```bash

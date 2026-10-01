@@ -14,10 +14,6 @@ use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
 use Psr\Container\ContainerInterface;
 
 $socialLoginRateLimitCounter = null;
-$trustedProxyCidrs = array_values(array_filter(
-    array_map('trim', explode(',', (string)(getenv('SOCIAL_TRUSTED_PROXY_CIDRS') ?: ''))),
-    static fn (string $cidr): bool => $cidr !== '',
-));
 if (trim((string)(getenv('REDIS_HOST') ?: '')) !== '') {
     $redis = null;
     $socialLoginRateLimitCounter = static function (string $key, int $ttl) use (&$redis): int {
@@ -39,16 +35,11 @@ if (trim((string)(getenv('REDIS_HOST') ?: '')) !== '') {
         }
 
         try {
-            $count = $redis->eval(<<<'LUA'
+            return (int)$redis->eval(<<<'LUA'
 local current = redis.call('INCR', KEYS[1])
 if current == 1 or redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 return current
 LUA, [$key, (string)$ttl], 1);
-            if (!is_int($count)) {
-                throw new RuntimeException('Gateway Redis rate counter failed');
-            }
-
-            return $count;
         } catch (\Throwable $e) {
             $redis = null;
             throw $e;
@@ -64,11 +55,9 @@ return (new Webman\Container())->addDefinitions([
         socialPhoneCodeTimeoutMs: (int)(getenv('GRPC_SOCIAL_PHONE_CODE_TIMEOUT_MS') ?: 5000),
         socialBindTimeoutMs: (int)(getenv('GRPC_SOCIAL_BIND_TIMEOUT_MS') ?: 1000),
         socialHttpTimeoutMs: (int)(getenv('SOCIAL_HTTP_TIMEOUT_MS') ?: 3000),
-        serviceToken: trim((string)(getenv('GRPC_AUTH_TOKEN') ?: '')) ?: null,
     ),
     UserServiceClient::class => static fn (): UserServiceClient => new UserServiceClient(
-        target: getenv('GRPC_USER_SERVICE') ?: 'user-service:50052',
-        serviceToken: trim((string)(getenv('GRPC_USER_TOKEN') ?: '')) ?: null,
+        getenv('GRPC_USER_SERVICE') ?: 'user-service:50052'
     ),
     CreateWsTicketAction::class => static fn (ContainerInterface $c): CreateWsTicketAction => new CreateWsTicketAction(
         $c->get(AuthServiceClient::class), $c->get(UserServiceClient::class)
@@ -93,6 +82,5 @@ return (new Webman\Container())->addDefinitions([
         counter: $socialLoginRateLimitCounter,
         limit: (int)(getenv('SOCIAL_LOGIN_RATE_LIMIT') ?: 30),
         windowSeconds: (int)(getenv('SOCIAL_LOGIN_RATE_WINDOW_SECONDS') ?: 60),
-        trustedProxyCidrs: $trustedProxyCidrs,
     ),
 ]);

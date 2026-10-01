@@ -22,16 +22,14 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
 
     public function __construct(
         private readonly ?string $target = null,
-        private readonly int $timeoutMs = 150,
-        private readonly ?string $serviceToken = null,
+        private readonly int $timeoutMs = 150
     ) {
     }
 
     public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
     {
         $client = $this->client ??= new UnaryGrpcClient(
-            $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052'),
-            $this->serviceToken,
+            $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052')
         );
 
         try {
@@ -69,8 +67,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
     public function findById(string $userId): array
     {
         $client = $this->client ??= new UnaryGrpcClient(
-            $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052'),
-            $this->serviceToken,
+            $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052')
         );
 
         try {

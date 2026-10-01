@@ -8,7 +8,6 @@ use Contracts\Gen\Common\V1\HealthCheckRequest;
 use Contracts\Gen\Common\V1\HealthCheckResponse;
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Contracts\Gen\Common\V1\HealthStatus;
-use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Spiral\RoadRunner\GRPC\ContextInterface;
 
 /**
@@ -26,20 +25,13 @@ final class RoadRunnerHealthService implements HealthServiceInterface
     /**
      * @param (callable(): bool)|null $readinessChecker
      */
-    public function __construct(
-        ?callable $readinessChecker = null,
-        private readonly ?InternalRpcAuthorizer $authorizer = null,
-    )
+    public function __construct(?callable $readinessChecker = null)
     {
         $this->readinessChecker = $readinessChecker;
     }
 
     public function Check(ContextInterface $ctx, HealthCheckRequest $in): HealthCheckResponse
     {
-        if ($this->authorizer !== null) {
-            $this->authorizer->authorize($ctx, 'Check');
-        }
-
         if ($this->readinessChecker !== null) {
             try {
                 $ok = ($this->readinessChecker)();

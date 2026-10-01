@@ -7,18 +7,6 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use Packages\Phone\PhoneNormalizer;
 use Services\UserService\Infrastructure\Migration\UserPhoneMigration;
 
-set_exception_handler(static function (Throwable $exception): void {
-    if ($exception instanceof PDOException) {
-        fwrite(
-            STDERR,
-            sprintf("Phone migration database error (code=%s, type=PDOException).\n", (string)$exception->getCode())
-        );
-    } else {
-        fwrite(STDERR, $exception->getMessage() . PHP_EOL);
-    }
-    exit(1);
-});
-
 $options = array_slice($argv, 1);
 $apply = in_array('--apply', $options, true);
 $requireClean = in_array('--require-clean', $options, true);
@@ -42,34 +30,25 @@ $migration = new UserPhoneMigration(new PhoneNormalizer(getenv('PHONE_DEFAULT_RE
 
 if (!$apply) {
     $plan = $migration->preflight($pdo);
-    if ($plan['invalid_user_ids'] !== []) {
-        fwrite(
-            STDERR,
-            sprintf("invalid phone user_ids (sample): %s\n", implode(',', $plan['invalid_user_ids']))
-        );
+    foreach ($plan['invalid'] as $row) {
+        fwrite(STDERR, sprintf("invalid phone: user_id=%s phone=%s\n", $row['id'], $row['phone']));
     }
-    if ($plan['collision_user_ids'] !== []) {
-        fwrite(
-            STDERR,
-            sprintf(
-                "normalized phone collision user_ids (sample): %s\n",
-                implode(',', $plan['collision_user_ids'])
-            )
-        );
+    foreach ($plan['collisions'] as $phone => $ids) {
+        fwrite(STDERR, sprintf("normalized phone collision: phone=%s user_ids=%s\n", $phone, implode(',', $ids)));
     }
 
     printf(
         "Preflight: %d change(s), %d invalid phone(s), %d collision(s).\n",
-        $plan['change_count'],
-        $plan['invalid_count'],
-        $plan['collision_count'],
+        count($plan['changes']),
+        count($plan['invalid']),
+        count($plan['collisions']),
     );
 
-    if ($requireClean && $plan['change_count'] > 0) {
+    if ($requireClean && $plan['changes'] !== []) {
         fwrite(STDERR, "Phone backfill is required before starting the new services; review preflight and run --apply during a maintenance window.\n");
     }
-    exit($plan['invalid_count'] > 0 || $plan['collision_count'] > 0
-        || ($requireClean && $plan['change_count'] > 0) ? 2 : 0);
+    exit($plan['invalid'] !== [] || $plan['collisions'] !== []
+        || ($requireClean && $plan['changes'] !== []) ? 2 : 0);
 }
 
 $result = $migration->apply($pdo);

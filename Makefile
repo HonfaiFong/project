@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone mysql-ready redis-ready seed e2e logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone seed e2e logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -29,7 +29,6 @@ test:
 
 infra-up:
 	docker compose up -d mysql redis rabbitmq
-	$(MAKE) mysql-ready redis-ready
 	$(MAKE) broker-init
 
 broker-init:
@@ -55,7 +54,19 @@ up:
 	@echo ">>> 启动基础设施 (MySQL / Redis / RabbitMQ)..."
 	docker compose up -d mysql redis rabbitmq
 	@$(MAKE) broker-init
-	@$(MAKE) mysql-ready redis-ready
+	@echo ">>> 等待 MySQL 就绪..."
+	@ready=0; \
+	for i in $$(seq 1 30); do \
+		if docker compose exec -T mysql sh -c 'mysqladmin ping -h localhost -uroot -p"$$MYSQL_ROOT_PASSWORD" --silent' >/dev/null 2>&1; then \
+			ready=1; \
+			break; \
+		fi; \
+		sleep 1; \
+	done; \
+	if [ "$$ready" -ne 1 ]; then \
+		echo ">>> 错误: MySQL 等待超时未就绪"; \
+		exit 1; \
+	fi
 	@echo ">>> 执行数据库基线与增量迁移..."
 	@$(MAKE) migrate
 	@echo ">>> 启动业务应用与网关服务..."
@@ -79,36 +90,6 @@ migrate:
 	docker compose exec -T mysql sh -c 'exec mysql -uroot -p"$$MYSQL_ROOT_PASSWORD"' < infra/docker/mysql/init/01-databases.sql
 	bash scripts/run_migrations.sh
 	@$(MAKE) preflight-phone
-
-mysql-ready:
-	@echo ">>> 等待 MySQL SQL readiness..."
-	@ready=0; \
-	for i in $$(seq 1 60); do \
-		if docker compose exec -T mysql sh -c 'mysql -h 127.0.0.1 -uroot -p"$$MYSQL_ROOT_PASSWORD" -e "SELECT 1" >/dev/null 2>&1'; then \
-			ready=1; \
-			break; \
-		fi; \
-		sleep 1; \
-	done; \
-	if [ "$$ready" -ne 1 ]; then \
-		echo ">>> 错误: MySQL SQL readiness 等待超时"; \
-		exit 1; \
-	fi
-
-redis-ready:
-	@echo ">>> 等待 Redis readiness..."
-	@ready=0; \
-	for i in $$(seq 1 30); do \
-		if docker compose exec -T redis sh -c 'redis-cli ping | grep -q PONG' >/dev/null 2>&1; then \
-			ready=1; \
-			break; \
-		fi; \
-		sleep 1; \
-	done; \
-	if [ "$$ready" -ne 1 ]; then \
-		echo ">>> 错误: Redis readiness 等待超时"; \
-		exit 1; \
-	fi
 
 preflight-phone:
 	@echo "Checking historical user phones before starting services..."

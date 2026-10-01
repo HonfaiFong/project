@@ -12,8 +12,8 @@ use Services\AuthService\Domain\Repository\SocialBindSessionStoreInterface;
 
 final class RedisSocialBindSessionStore implements SocialBindSessionStoreInterface
 {
-    public const TOKEN_PREFIX = 'auth:social:bind:token:';
-    public const IDENTITY_PREFIX = 'auth:social:bind:identity:';
+    private const TOKEN_PREFIX = 'auth:social:bind:token:';
+    private const IDENTITY_PREFIX = 'auth:social:bind:identity:';
 
     public function __construct(private readonly Redis $redis)
     {

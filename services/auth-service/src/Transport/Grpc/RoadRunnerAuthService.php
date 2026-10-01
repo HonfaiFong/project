@@ -24,7 +24,6 @@ use Contracts\Gen\Auth\V1\RefreshTokenResponse;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use Packages\GrpcCommon\ErrorStatusMapper;
-use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
 use Services\AuthService\Application\Service\AuthApplicationService;
@@ -39,8 +38,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
 {
     public function __construct(
         private readonly AuthApplicationService $authService,
-        private readonly LoggerInterface $logger,
-        private readonly ?InternalRpcAuthorizer $authorizer = null,
+        private readonly LoggerInterface $logger
     ) {
     }
 
@@ -210,10 +208,6 @@ final class RoadRunnerAuthService implements AuthServiceInterface
      */
     private function call(ContextInterface $ctx, string $method, callable $operation): mixed
     {
-        if ($this->authorizer !== null) {
-            $this->authorizer->authorize($ctx, $method);
-        }
-
         $trace = TraceContext::create(
             requestId: $this->metadataValue($ctx, 'x-request-id'),
             traceId: $this->metadataValue($ctx, 'x-trace-id'),

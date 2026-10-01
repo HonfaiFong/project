@@ -4,55 +4,80 @@ declare(strict_types=1);
 
 namespace Services\UserService\Infrastructure\Migration;
 
-use Packages\Phone\PhoneNormalizer;
 use PDO;
+use Packages\Phone\PhoneNormalizer;
 use RuntimeException;
 use Throwable;
 
 /**
  * Plans and, when explicitly requested, applies the user phone normalization.
  *
- * The plan is kept in a connection-scoped temporary table. This bounds PHP
- * memory while still allowing the whole data set to be checked before any
- * user row is changed.
+ * This is kept outside the regular service startup path because historical data
+ * must be reviewed before any phone value is changed.
  */
 final class UserPhoneMigration
 {
-    private const PLAN_TABLE = 'user_phone_migration_plan';
-    private const COLLISION_TABLE = 'user_phone_migration_collisions';
-    private const REPORT_SAMPLE_LIMIT = 20;
-
-    public function __construct(
-        private readonly PhoneNormalizer $phoneNormalizer,
-        private readonly int $batchSize = 500,
-    ) {
-        if ($this->batchSize < 1) {
-            throw new \InvalidArgumentException('Phone migration batch size must be positive');
-        }
+    public function __construct(private readonly PhoneNormalizer $phoneNormalizer)
+    {
     }
 
     /**
      * @return array{
-     *     total_count: int,
-     *     change_count: int,
-     *     invalid_count: int,
-     *     collision_count: int,
-     *     change_user_ids: list<string>,
-     *     invalid_user_ids: list<string>,
-     *     collision_user_ids: list<string>,
+     *     changes: list<array{id: string, phone: string, normalized_phone: string}>,
+     *     invalid: list<array{id: string, phone: string}>,
+     *     collisions: array<string, list<string>>,
      * }
      */
     public function preflight(PDO $pdo, bool $lockRows = false): array
     {
-        $this->createPlanTable($pdo);
-
-        try {
-            $this->scanIntoPlan($pdo, $lockRows);
-
-            return $this->summarizePlan($pdo);
-        } finally {
-            $this->dropPlanTable($pdo);
+        $sql = 'SELECT id, phone FROM users WHERE phone IS NOT NULL ORDER BY id';
+        if ($lockRows && $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+            $sql .= ' FOR UPDATE';
         }
+
+        $stmt = $pdo->query($sql);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $changes = [];
+        $invalid = [];
+        $groups = [];
+
+        foreach ($rows as $row) {
+            $id = (string)$row['id'];
+            $phone = (string)$row['phone'];
+
+            try {
+                $normalized = $this->phoneNormalizer->normalize($phone);
+            } catch (RuntimeException) {
+                $invalid[] = [
+                    'id'    => $id,
+                    'phone' => $phone,
+                ];
+                continue;
+            }
+
+            $groups[$normalized][] = $id;
+            if ($phone !== $normalized) {
+                $changes[] = [
+                    'id'               => $id,
+                    'phone'            => $phone,
+                    'normalized_phone' => $normalized,
+                ];
+            }
+        }
+
+        $collisions = [];
+        foreach ($groups as $normalized => $ids) {
+            $uniqueIds = array_values(array_unique($ids));
+            if (count($uniqueIds) > 1) {
+                $collisions[$normalized] = $uniqueIds;
+            }
+        }
+
+        return [
+            'changes'    => $changes,
+            'invalid'    => $invalid,
+            'collisions' => $collisions,
+        ];
     }
 
     /**
@@ -66,29 +91,40 @@ final class UserPhoneMigration
         }
 
         try {
-            $this->createPlanTable($pdo);
-            $this->scanIntoPlan($pdo, true);
-            $report = $this->summarizePlan($pdo);
-
-            if ($report['invalid_count'] > 0) {
-                throw new RuntimeException($this->invalidMessage($report['invalid_user_ids'], $report['invalid_count']));
+            $plan = $this->preflight($pdo, true);
+            if ($plan['invalid'] !== []) {
+                throw new RuntimeException($this->invalidMessage($plan['invalid']));
             }
-            if ($report['collision_count'] > 0) {
-                throw new RuntimeException(
-                    $this->collisionMessage($report['collision_user_ids'], $report['collision_count'])
-                );
+            if ($plan['collisions'] !== []) {
+                throw new RuntimeException($this->collisionMessage($plan['collisions']));
             }
 
-            $updated = $this->updateFromPlan($pdo);
-            $this->dropPlanTable($pdo);
+            $stmt = $pdo->prepare(
+                'UPDATE users
+                 SET phone = :phone, updated_at = :updated_at
+                 WHERE id = :id AND phone = :original_phone'
+            );
+            $updatedAt = gmdate('Y-m-d H:i:s.v');
+            foreach ($plan['changes'] as $change) {
+                $stmt->execute([
+                    'phone'          => $change['normalized_phone'],
+                    'updated_at'     => $updatedAt,
+                    'id'             => $change['id'],
+                    'original_phone' => $change['phone'],
+                ]);
+                if ($stmt->rowCount() !== 1) {
+                    throw new RuntimeException(
+                        'user phone migration aborted: phone changed after preflight for user ' . $change['id']
+                    );
+                }
+            }
 
             if ($startedTransaction) {
                 $pdo->commit();
             }
 
-            return ['updated' => $updated];
+            return ['updated' => count($plan['changes'])];
         } catch (Throwable $e) {
-            $this->dropPlanTable($pdo);
             if ($startedTransaction) {
                 try {
                     $pdo->rollBack();
@@ -100,242 +136,29 @@ final class UserPhoneMigration
         }
     }
 
-    private function createPlanTable(PDO $pdo): void
+    /**
+     * @param list<array{id: string, phone: string}> $invalid
+     */
+    private function invalidMessage(array $invalid): string
     {
-        $mysql = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
-        $temporary = $mysql ? 'TEMPORARY ' : 'TEMP ';
-        $this->dropPlanTable($pdo);
-        $pdo->exec('CREATE ' . $temporary . 'TABLE ' . self::PLAN_TABLE . ' (
-                user_id VARCHAR(64) NOT NULL PRIMARY KEY,
-                original_phone VARCHAR(64) NOT NULL,
-                normalized_phone VARCHAR(64) NULL,
-                error_code VARCHAR(32) NULL'
-            . ($mysql ? ', INDEX idx_normalized_phone (normalized_phone)' : '')
-            . ')'
-        );
-        if (!$mysql) {
-            $pdo->exec(
-                'CREATE INDEX idx_normalized_phone ON ' . self::PLAN_TABLE . ' (normalized_phone)'
-            );
-        }
-    }
-
-    private function dropPlanTable(PDO $pdo): void
-    {
-        $temporary = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'TEMPORARY ' : '';
-        $pdo->exec('DROP ' . $temporary . 'TABLE IF EXISTS ' . self::PLAN_TABLE);
-        $pdo->exec('DROP ' . $temporary . 'TABLE IF EXISTS ' . self::COLLISION_TABLE);
-    }
-
-    private function createCollisionTable(PDO $pdo): void
-    {
-        $temporary = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql'
-            ? 'TEMPORARY '
-            : 'TEMP ';
-        $pdo->exec(
-            'CREATE ' . $temporary . 'TABLE ' . self::COLLISION_TABLE . ' (
-                normalized_phone VARCHAR(64) NOT NULL PRIMARY KEY
-            )'
-        );
-        $pdo->exec(
-            'INSERT INTO ' . self::COLLISION_TABLE . ' (normalized_phone)
-             SELECT normalized_phone
-             FROM ' . self::PLAN_TABLE . '
-             WHERE error_code IS NULL AND normalized_phone IS NOT NULL
-             GROUP BY normalized_phone
-             HAVING COUNT(*) > 1'
-        );
-    }
-
-    private function scanIntoPlan(PDO $pdo, bool $lockRows): void
-    {
-        $lastId = '0';
-        $insert = $pdo->prepare(
-            'INSERT INTO ' . self::PLAN_TABLE . '
-             (user_id, original_phone, normalized_phone, error_code)
-             VALUES (:user_id, :original_phone, :normalized_phone, :error_code)'
+        $values = array_map(
+            static fn (array $row): string => $row['id'] . ':' . $row['phone'],
+            $invalid,
         );
 
-        while (true) {
-            $sql = 'SELECT id, phone
-                    FROM users
-                    WHERE phone IS NOT NULL AND id > :last_id
-                    ORDER BY id
-                    LIMIT ' . $this->batchSize;
-            if ($lockRows && $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-                $sql .= ' FOR UPDATE';
-            }
-
-            $select = $pdo->prepare($sql);
-            $select->execute(['last_id' => $lastId]);
-            $rowsRead = 0;
-            while ($row = $select->fetch(PDO::FETCH_ASSOC)) {
-                $userId = (string)$row['id'];
-                $phone = (string)$row['phone'];
-                $lastId = $userId;
-                $rowsRead++;
-
-                try {
-                    $normalized = $this->phoneNormalizer->normalize($phone);
-                    $errorCode = null;
-                } catch (RuntimeException) {
-                    $normalized = null;
-                    $errorCode = 'invalid_phone';
-                }
-
-                $insert->execute([
-                    'user_id'          => $userId,
-                    'original_phone'   => $phone,
-                    'normalized_phone' => $normalized,
-                    'error_code'       => $errorCode,
-                ]);
-            }
-            $select->closeCursor();
-
-            if ($rowsRead < $this->batchSize) {
-                return;
-            }
-        }
+        return 'user phone preflight failed: invalid phone(s) ' . implode(', ', $values);
     }
 
     /**
-     * @return array{
-     *     total_count: int,
-     *     change_count: int,
-     *     invalid_count: int,
-     *     collision_count: int,
-     *     change_user_ids: list<string>,
-     *     invalid_user_ids: list<string>,
-     *     collision_user_ids: list<string>,
-     * }
+     * @param array<string, list<string>> $collisions
      */
-    private function summarizePlan(PDO $pdo): array
+    private function collisionMessage(array $collisions): string
     {
-        $totalCount = $this->count($pdo, 'SELECT COUNT(*) FROM ' . self::PLAN_TABLE);
-        $changeCount = $this->count(
-            $pdo,
-            'SELECT COUNT(*) FROM ' . self::PLAN_TABLE . '
-             WHERE error_code IS NULL AND original_phone <> normalized_phone'
-        );
-        $invalidCount = $this->count(
-            $pdo,
-            'SELECT COUNT(*) FROM ' . self::PLAN_TABLE . " WHERE error_code = 'invalid_phone'"
-        );
-        $this->createCollisionTable($pdo);
-        $collisionCount = $this->count($pdo, 'SELECT COUNT(*) FROM ' . self::COLLISION_TABLE);
-
-        try {
-            return [
-                'total_count'        => $totalCount,
-                'change_count'       => $changeCount,
-                'invalid_count'      => $invalidCount,
-                'collision_count'    => $collisionCount,
-                'change_user_ids'    => $this->sampleIds(
-                    $pdo,
-                    'SELECT user_id FROM ' . self::PLAN_TABLE . '
-                     WHERE error_code IS NULL AND original_phone <> normalized_phone
-                     ORDER BY user_id'
-                ),
-                'invalid_user_ids'   => $this->sampleIds(
-                    $pdo,
-                    "SELECT user_id FROM " . self::PLAN_TABLE . " WHERE error_code = 'invalid_phone' ORDER BY user_id"
-                ),
-                'collision_user_ids' => $this->sampleIds(
-                    $pdo,
-                    'SELECT plan.user_id
-                     FROM ' . self::PLAN_TABLE . ' plan
-                     INNER JOIN ' . self::COLLISION_TABLE . ' collisions
-                        ON collisions.normalized_phone = plan.normalized_phone
-                     ORDER BY plan.user_id'
-                ),
-            ];
-        } finally {
-            $temporary = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'TEMPORARY ' : '';
-            $pdo->exec('DROP ' . $temporary . 'TABLE IF EXISTS ' . self::COLLISION_TABLE);
+        $values = [];
+        foreach ($collisions as $phone => $ids) {
+            $values[] = $phone . '=[' . implode(',', $ids) . ']';
         }
-    }
 
-    private function count(PDO $pdo, string $sql): int
-    {
-        return (int)$pdo->query($sql)->fetchColumn();
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function sampleIds(PDO $pdo, string $sql): array
-    {
-        $stmt = $pdo->query($sql . ' LIMIT ' . self::REPORT_SAMPLE_LIMIT);
-        $ids = [];
-        while (($id = $stmt->fetchColumn()) !== false) {
-            $ids[] = (string)$id;
-        }
-        $stmt->closeCursor();
-
-        return $ids;
-    }
-
-    private function updateFromPlan(PDO $pdo): int
-    {
-        $update = $pdo->prepare(
-            'UPDATE users
-             SET phone = :phone, updated_at = :updated_at
-             WHERE id = :id AND phone = :original_phone'
-        );
-        $updatedAt = gmdate('Y-m-d H:i:s.v');
-        $lastId = '0';
-        $updated = 0;
-
-        while (true) {
-            $select = $pdo->prepare(
-                'SELECT user_id, original_phone, normalized_phone
-                 FROM ' . self::PLAN_TABLE . '
-                 WHERE error_code IS NULL AND original_phone <> normalized_phone AND user_id > :last_id
-                 ORDER BY user_id
-                 LIMIT ' . $this->batchSize
-            );
-            $select->execute(['last_id' => $lastId]);
-            $rowsRead = 0;
-
-            while ($row = $select->fetch(PDO::FETCH_ASSOC)) {
-                $lastId = (string)$row['user_id'];
-                $rowsRead++;
-                $update->execute([
-                    'phone'          => $row['normalized_phone'],
-                    'updated_at'     => $updatedAt,
-                    'id'             => $row['user_id'],
-                    'original_phone' => $row['original_phone'],
-                ]);
-                if ($update->rowCount() !== 1) {
-                    throw new RuntimeException(
-                        'user phone migration aborted: phone changed after preflight for user ' . $lastId
-                    );
-                }
-                $updated++;
-            }
-            $select->closeCursor();
-
-            if ($rowsRead < $this->batchSize) {
-                return $updated;
-            }
-        }
-    }
-
-    /**
-     * @param list<string> $sampleIds
-     */
-    private function invalidMessage(array $sampleIds, int $totalCount): string
-    {
-        return 'user phone preflight failed: '
-            . $totalCount . ' invalid phone(s); sample user_ids=' . implode(',', $sampleIds);
-    }
-
-    /**
-     * @param list<string> $sampleIds
-     */
-    private function collisionMessage(array $sampleIds, int $totalCount): string
-    {
-        return 'user phone preflight failed: '
-            . $totalCount . ' normalized phone collision group(s); sample user_ids=' . implode(',', $sampleIds);
+        return 'user phone preflight failed: normalized phone collision(s) ' . implode(', ', $values);
     }
 }

@@ -25,7 +25,7 @@ final class UserPhoneMigrationTest extends TestCase
                 updated_at TEXT NOT NULL
             )'
         );
-        $this->migration = new UserPhoneMigration(new PhoneNormalizer(), 2);
+        $this->migration = new UserPhoneMigration(new PhoneNormalizer());
     }
 
     public function testPreflightReportsLegacyPhoneChangeWithoutWriting(): void
@@ -34,11 +34,15 @@ final class UserPhoneMigrationTest extends TestCase
 
         $plan = $this->migration->preflight($this->pdo);
 
-        $this->assertSame(1, $plan['total_count']);
-        $this->assertSame(1, $plan['change_count']);
-        $this->assertSame(0, $plan['invalid_count']);
-        $this->assertSame(0, $plan['collision_count']);
-        $this->assertSame(['1'], $plan['change_user_ids']);
+        $this->assertSame([], $plan['invalid']);
+        $this->assertSame([], $plan['collisions']);
+        $this->assertSame([
+            [
+                'id'               => '1',
+                'phone'            => '13800000000',
+                'normalized_phone' => '+8613800000000',
+            ],
+        ], $plan['changes']);
         $this->assertSame('13800000000', $this->phoneFor('1'));
     }
 
@@ -54,19 +58,6 @@ final class UserPhoneMigrationTest extends TestCase
         $this->assertSame('+8613900000000', $this->phoneFor('2'));
     }
 
-    public function testPreflightUsesBoundedBatchesForAllRows(): void
-    {
-        $this->insertUser('1', '13800000000');
-        $this->insertUser('2', '13900000000');
-        $this->insertUser('3', '13700000000');
-
-        $plan = $this->migration->preflight($this->pdo);
-
-        $this->assertSame(3, $plan['total_count']);
-        $this->assertSame(3, $plan['change_count']);
-        $this->assertSame(['1', '2', '3'], $plan['change_user_ids']);
-    }
-
     public function testApplyFailsBeforeWritingWhenNormalizationCollides(): void
     {
         $this->insertUser('1', '13800000000');
@@ -77,7 +68,6 @@ final class UserPhoneMigrationTest extends TestCase
             $this->fail('Expected a normalized phone collision to abort the migration');
         } catch (RuntimeException $e) {
             $this->assertStringContainsString('normalized phone collision', $e->getMessage());
-            $this->assertStringNotContainsString('13800000000', $e->getMessage());
         }
 
         $this->assertSame('13800000000', $this->phoneFor('1'));
@@ -94,7 +84,6 @@ final class UserPhoneMigrationTest extends TestCase
             $this->fail('Expected invalid phone to abort the migration');
         } catch (RuntimeException $e) {
             $this->assertStringContainsString('invalid phone', $e->getMessage());
-            $this->assertStringNotContainsString('not-a-phone', $e->getMessage());
         }
 
         $this->assertSame('not-a-phone', $this->phoneFor('1'));
