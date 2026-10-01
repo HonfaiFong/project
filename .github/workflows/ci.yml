@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main, master ]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   rabbitmq-contract:
     name: RabbitMQ publisher contract
@@ -22,7 +26,7 @@ jobs:
       - run: docker compose up -d rabbitmq
       - run: docker compose run --rm rabbitmq-init
       - name: Verify Stream routing and mandatory return
-        run: vendor/bin/phpunit tests/Integration/RabbitMqPublisherContractTest.php
+        run: vendor/bin/phpunit tests/Integration/RabbitMqPublisherContractTest.php --fail-on-skipped
         env:
           RABBITMQ_INTEGRATION: '1'
           RABBITMQ_HOST: 127.0.0.1
@@ -139,25 +143,41 @@ jobs:
         run: docker compose up -d mysql redis
 
       - name: Wait for MySQL to become healthy
-        run: |
-          echo "Waiting for MySQL to become healthy..."
-          ready=0
-          for i in {1..30}; do
-            if docker compose exec -T mysql sh -c 'mysqladmin ping -h localhost -uroot -p"$MYSQL_ROOT_PASSWORD" --silent'; then
-              ready=1
-              echo "MySQL is healthy!"
-              break
-            fi
-            sleep 2
-          done
+        run: make mysql-ready
 
-          if [ "$ready" -ne 1 ]; then
-            echo "MySQL failed to become healthy within timeout!"
+      - name: Wait for Redis to become ready
+        run: make redis-ready
+
+      - name: Verify MySQL readiness rejects wrong credentials
+        run: |
+          if docker compose exec -T mysql sh -c \
+            'mysql -h 127.0.0.1 -uroot -p"definitely-wrong-password" -e "SELECT 1" >/dev/null 2>&1'; then
+            echo "MySQL accepted invalid credentials"
             exit 1
           fi
 
       - name: Run database migrations
         run: make migrate
+
+      - name: Verify production auth startup guards
+        run: bash scripts/test_production_auth_config.sh
+
+      - name: Prepare MySQL integration database
+        run: |
+          docker compose exec -T mysql sh -c \
+            'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS social_test_auth CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"'
+
+      - name: Run MySQL and Redis integration tests
+        timeout-minutes: 5
+        run: vendor/bin/phpunit tests/Integration/PdoSocialIdentityRepositoryTest.php tests/Integration/RedisSocialAuthSupportTest.php tests/Integration/UserPhoneMigrationTest.php --fail-on-skipped
+        env:
+          SOCIAL_TEST_MYSQL_DATABASE: social_test_auth
+          SOCIAL_TEST_MYSQL_HOST: 127.0.0.1
+          SOCIAL_TEST_MYSQL_PORT: '3306'
+          SOCIAL_TEST_MYSQL_USER: root
+          SOCIAL_TEST_MYSQL_PASSWORD: replace-with-random-local-mysql-password
+          SOCIAL_TEST_REDIS_HOST: 127.0.0.1
+          SOCIAL_TEST_REDIS_PORT: '6379'
 
       - name: Start application services
         run: docker compose up -d
@@ -180,6 +200,12 @@ jobs:
             echo "Services failed to become ready within timeout!"
             exit 1
           fi
+
+      - name: Verify internal gRPC authorization from API Gateway
+        run: docker compose exec -T api-gateway php /app/scripts/test_internal_rpc.php
+
+      - name: Verify internal gRPC authorization from AuthService
+        run: docker compose exec -T auth-service php /app/scripts/test_internal_rpc.php --caller=auth-service
 
       - name: Run End-to-End Tests
         run: make e2e

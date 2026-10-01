@@ -7,12 +7,12 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       MYSQL_DATABASE: auth_db
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "${MYSQL_BIND_ADDRESS:-127.0.0.1}:${MYSQL_PORT:-3306}:3306"
     volumes:
       - ./infra/docker/mysql/init:/docker-entrypoint-initdb.d:ro
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" -e 'SELECT 1' >/dev/null 2>&1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
     command: redis-server --save "" --appendonly no
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -39,9 +39,9 @@ services:
     hostname: rabbitmq
     restart: unless-stopped
     ports:
-      - "5672:5672"
-      - "5552:5552"
-      - "15672:15672"
+      - "${RABBITMQ_BIND_ADDRESS:-127.0.0.1}:5672:5672"
+      - "${RABBITMQ_BIND_ADDRESS:-127.0.0.1}:5552:5552"
+      - "${RABBITMQ_BIND_ADDRESS:-127.0.0.1}:15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
@@ -144,10 +144,12 @@ services:
     restart: unless-stopped
     working_dir: /app
     command: rr serve -c infra/roadrunner/auth.yaml
-    ports:
-      - "50051:50051"
+    expose:
+      - "50051"
     environment:
       - SERVICE_NAME=auth-service
+      - INTERNAL_RPC_GATEWAY_AUTH_TOKEN=${INTERNAL_RPC_GATEWAY_AUTH_TOKEN:?Set INTERNAL_RPC_GATEWAY_AUTH_TOKEN in .env}
+      - GRPC_USER_SERVICE_TOKEN=${INTERNAL_RPC_AUTH_USER_TOKEN:?Set INTERNAL_RPC_AUTH_USER_TOKEN in .env}
       - APP_ENV=${APP_ENV:-production}
       # Snowflake service slot (0-31). Replicas of this service must use
       # distinct values; WorkerId::resolve() spreads rr worker processes
@@ -198,10 +200,12 @@ services:
     restart: unless-stopped
     working_dir: /app
     command: rr serve -c infra/roadrunner/user.yaml
-    ports:
-      - "50052:50052"
+    expose:
+      - "50052"
     environment:
       - SERVICE_NAME=user-service
+      - INTERNAL_RPC_GATEWAY_USER_TOKEN=${INTERNAL_RPC_GATEWAY_USER_TOKEN:?Set INTERNAL_RPC_GATEWAY_USER_TOKEN in .env}
+      - INTERNAL_RPC_AUTH_USER_TOKEN=${INTERNAL_RPC_AUTH_USER_TOKEN:?Set INTERNAL_RPC_AUTH_USER_TOKEN in .env}
       # Snowflake service slot (0-31). See auth-service note above.
       - WORKER_ID=2
       - MYSQL_HOST=mysql
@@ -256,6 +260,8 @@ services:
       - "8787:8787"
     environment:
       - SERVICE_NAME=api-gateway
+      - GRPC_AUTH_TOKEN=${INTERNAL_RPC_GATEWAY_AUTH_TOKEN:?Set INTERNAL_RPC_GATEWAY_AUTH_TOKEN in .env}
+      - GRPC_USER_TOKEN=${INTERNAL_RPC_GATEWAY_USER_TOKEN:?Set INTERNAL_RPC_GATEWAY_USER_TOKEN in .env}
       - APP_ENV=${APP_ENV:-production}
       - GRPC_AUTH_SERVICE=auth-service:50051
       - GRPC_USER_SERVICE=user-service:50052
@@ -270,6 +276,7 @@ services:
       - GRPC_SOCIAL_BIND_TIMEOUT_MS=${GRPC_SOCIAL_BIND_TIMEOUT_MS:-1000}
       - SOCIAL_LOGIN_RATE_LIMIT=${SOCIAL_LOGIN_RATE_LIMIT:-30}
       - SOCIAL_LOGIN_RATE_WINDOW_SECONDS=${SOCIAL_LOGIN_RATE_WINDOW_SECONDS:-60}
+      - SOCIAL_TRUSTED_PROXY_CIDRS=${SOCIAL_TRUSTED_PROXY_CIDRS:-}
     volumes:
       - .:/app
     depends_on:

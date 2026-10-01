@@ -56,10 +56,6 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
 
     public function testConcurrentReserveReturnsOneIdentityRow(): void
     {
-        if (!function_exists('pcntl_fork')) {
-            $this->markTestSkipped('pcntl is not available');
-        }
-
         $identity = $this->identity('concurrent-openid', 'concurrent-unionid');
         $prefix = tempnam(sys_get_temp_dir(), 'social-reserve-');
         if ($prefix === false) {
@@ -70,8 +66,8 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         $readyPaths = [$prefix . '-1-ready', $prefix . '-2-ready'];
         $resultPaths = [$prefix . '-1-result', $prefix . '-2-result'];
         $startPath = $prefix . '-start';
-        $children = [];
-        $reapedChildren = [];
+        /** @var array<int, array{process: resource, pipes: array<int, resource>}> $workers */
+        $workers = [];
         $this->pdo->exec(
             'CREATE TRIGGER social_identity_reserve_delay
              BEFORE INSERT ON social_identities
@@ -80,31 +76,48 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
                  DO SLEEP(0.1);
              END'
         );
-        // PDO connections must not be inherited across fork: the child would
-        // close the duplicated connection descriptor when it exits.
-        unset($this->pdo);
-
-        foreach ([0, 1] as $index) {
-            $pid = pcntl_fork();
-            if ($pid === -1) {
-                $this->fail('Unable to fork the concurrent reserve worker');
-            }
-            if ($pid === 0) {
-                $this->runConcurrentReserveWorker($identity, $readyPaths[$index], $resultPaths[$index], $startPath);
-            }
-            $children[] = $pid;
-        }
 
         try {
+            $workerScript = __DIR__ . '/fixtures/PdoSocialIdentityReserveWorker.php';
+            foreach ([0, 1] as $index) {
+                $pipes = [];
+                $process = proc_open(
+                    [
+                        PHP_BINARY,
+                        $workerScript,
+                        $readyPaths[$index],
+                        $resultPaths[$index],
+                        $startPath,
+                        $identity->openId,
+                        $identity->unionId ?? '',
+                        $identity->providerAppId,
+                        (string)($index + 1),
+                    ],
+                    [
+                        0 => ['pipe', 'r'],
+                        1 => ['pipe', 'w'],
+                        2 => ['pipe', 'w'],
+                    ],
+                    $pipes,
+                    dirname(__DIR__, 2),
+                    null,
+                    ['bypass_shell' => true],
+                );
+                if (!is_resource($process)) {
+                    throw new RuntimeException('Unable to start concurrent reserve worker');
+                }
+                fclose($pipes[0]);
+                stream_set_blocking($pipes[1], false);
+                stream_set_blocking($pipes[2], false);
+                $workers[] = [
+                    'process' => $process,
+                    'pipes' => $pipes,
+                ];
+            }
+
             $this->waitForPaths($readyPaths);
             file_put_contents($startPath, 'start');
-
-            foreach ($children as $child) {
-                pcntl_waitpid($child, $status);
-                $reapedChildren[$child] = true;
-                $this->assertSame(0, pcntl_wexitstatus($status));
-            }
-            $this->pdo = $this->connectTestDatabase((string)getenv('SOCIAL_TEST_MYSQL_DATABASE'));
+            $this->waitForReserveWorkers($workers, 5.0);
 
             $results = array_map(
                 static fn(string $path): string => trim((string)file_get_contents($path)),
@@ -120,15 +133,10 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
             $this->assertSame($firstId, $secondId);
             $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
         } finally {
-            // Release children even when the ready barrier fails, then reap
-            // them before the fixture table is torn down.
+            // Release workers even when the ready barrier fails, then terminate
+            // and reap them before the fixture table is torn down.
             file_put_contents($startPath, 'start');
-            foreach ($children as $child) {
-                if (isset($reapedChildren[$child])) {
-                    continue;
-                }
-                pcntl_waitpid($child, $status);
-            }
+            $this->stopReserveWorkers($workers);
             foreach ($readyPaths as $path) {
                 @unlink($path);
             }
@@ -138,9 +146,6 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
             @unlink($startPath);
             @unlink($prefix);
             $this->pdo->exec('DROP TRIGGER IF EXISTS social_identity_reserve_delay');
-            if (!isset($this->pdo)) {
-                $this->pdo = $this->connectTestDatabase((string)getenv('SOCIAL_TEST_MYSQL_DATABASE'));
-            }
         }
     }
 
@@ -180,6 +185,111 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
             $unionId,
             $this->pdo->query('SELECT subject_id FROM social_identities')->fetchColumn(),
         );
+    }
+
+    public function testUnionActiveAndOpenIdPendingKeepTheActiveUnionRow(): void
+    {
+        $repository = $this->repository();
+        $this->insertIdentity(
+            id: '4101',
+            providerAppId: 'wechat-other-app',
+            subjectType: 'unionid',
+            subjectId: 'active-unionid',
+            openId: 'active-other-openid',
+            unionId: 'active-unionid',
+            userId: '4100',
+            status: 1,
+        );
+        $this->insertIdentity(
+            id: '4102',
+            providerAppId: 'wechat-main-app',
+            subjectType: 'openid',
+            subjectId: 'active-openid',
+            openId: 'active-openid',
+            unionId: null,
+            userId: null,
+            status: 0,
+        );
+
+        $canonical = $repository->findByExternalIdentity(
+            $this->identity('active-openid', 'active-unionid', 'wechat-main-app'),
+        );
+
+        $this->assertNotNull($canonical);
+        $this->assertSame('4101', $canonical->id);
+        $this->assertSame('4100', $canonical->userId);
+        $this->assertSame(1, $canonical->status);
+        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+    }
+
+    public function testUnionPendingAndOpenIdActiveTransferTheUserToTheUnionRow(): void
+    {
+        $repository = $this->repository();
+        $this->insertIdentity(
+            id: '4201',
+            providerAppId: 'wechat-other-app',
+            subjectType: 'unionid',
+            subjectId: 'pending-unionid',
+            openId: 'pending-other-openid',
+            unionId: 'pending-unionid',
+            userId: null,
+            status: 0,
+        );
+        $this->insertIdentity(
+            id: '4202',
+            providerAppId: 'wechat-main-app',
+            subjectType: 'openid',
+            subjectId: 'pending-openid',
+            openId: 'pending-openid',
+            unionId: null,
+            userId: '4200',
+            status: 1,
+        );
+
+        $canonical = $repository->findByExternalIdentity(
+            $this->identity('pending-openid', 'pending-unionid', 'wechat-main-app'),
+        );
+
+        $this->assertNotNull($canonical);
+        $this->assertSame('4201', $canonical->id);
+        $this->assertSame('4200', $canonical->userId);
+        $this->assertSame(1, $canonical->status);
+        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+    }
+
+    public function testBothPendingRowsMergeToTheUnionRow(): void
+    {
+        $repository = $this->repository();
+        $this->insertIdentity(
+            id: '4301',
+            providerAppId: 'wechat-other-app',
+            subjectType: 'unionid',
+            subjectId: 'both-pending-unionid',
+            openId: 'both-pending-other-openid',
+            unionId: 'both-pending-unionid',
+            userId: null,
+            status: 0,
+        );
+        $this->insertIdentity(
+            id: '4302',
+            providerAppId: 'wechat-main-app',
+            subjectType: 'openid',
+            subjectId: 'both-pending-openid',
+            openId: 'both-pending-openid',
+            unionId: null,
+            userId: null,
+            status: 0,
+        );
+
+        $canonical = $repository->findByExternalIdentity(
+            $this->identity('both-pending-openid', 'both-pending-unionid', 'wechat-main-app'),
+        );
+
+        $this->assertNotNull($canonical);
+        $this->assertSame('4301', $canonical->id);
+        $this->assertNull($canonical->userId);
+        $this->assertSame(0, $canonical->status);
+        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
     }
 
     public function testSameUserLegacyUnionAndOpenIdRowsAreMergedAndOpenIdRowRemoved(): void
@@ -256,6 +366,42 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         $this->assertSame(2, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
     }
 
+    public function testDisabledIdentityStateWinsWhenRowsAreMerged(): void
+    {
+        $repository = $this->repository();
+        $this->pdo->exec('ALTER TABLE social_identities DROP INDEX uniq_user_provider');
+
+        $this->insertIdentity(
+            id: '5101',
+            providerAppId: 'wechat-other-app',
+            subjectType: 'unionid',
+            subjectId: 'disabled-unionid',
+            openId: 'disabled-other-openid',
+            unionId: 'disabled-unionid',
+            userId: '5100',
+            status: 1,
+        );
+        $this->insertIdentity(
+            id: '5102',
+            providerAppId: 'wechat-main-app',
+            subjectType: 'openid',
+            subjectId: 'disabled-openid',
+            openId: 'disabled-openid',
+            unionId: null,
+            userId: '5100',
+            status: 2,
+        );
+
+        $canonical = $repository->findByExternalIdentity(
+            $this->identity('disabled-openid', 'disabled-unionid', 'wechat-main-app'),
+        );
+
+        $this->assertNotNull($canonical);
+        $this->assertSame('5100', $canonical->userId);
+        $this->assertSame(2, $canonical->status);
+        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+    }
+
     private function repository(): PdoSocialIdentityRepository
     {
         return new PdoSocialIdentityRepository($this->pdo, new Snowflake(random_int(1, 1023)));
@@ -330,32 +476,102 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         ]);
     }
 
-    private function runConcurrentReserveWorker(
-        ExternalIdentity $identity,
-        string $readyPath,
-        string $resultPath,
-        string $startPath,
-    ): never {
-        try {
-            $database = (string)getenv('SOCIAL_TEST_MYSQL_DATABASE');
-            $pdo = $this->connectTestDatabase($database);
-            file_put_contents($readyPath, 'ready');
-            $deadline = microtime(true) + 3.0;
-            while (!is_file($startPath) && microtime(true) < $deadline) {
-                usleep(10000);
+    /**
+     * @param array<int, array{process: resource, pipes: array<int, resource>}> $workers
+     */
+    private function waitForReserveWorkers(array &$workers, float $timeoutSeconds): void
+    {
+        $deadline = microtime(true) + $timeoutSeconds;
+        $statuses = [];
+        while (microtime(true) < $deadline) {
+            $allExited = true;
+            foreach ($workers as $index => $worker) {
+                // PHP 8.2 only reports the exit code on the first status read.
+                if (isset($statuses[$index]) && !$statuses[$index]['running']) {
+                    continue;
+                }
+                $status = proc_get_status($worker['process']);
+                $statuses[$index] = $status;
+                $this->drainWorkerOutput($worker['pipes']);
+                if ($status['running']) {
+                    $allExited = false;
+                }
             }
-            if (!is_file($startPath)) {
-                throw new RuntimeException('Timed out waiting for reserve barrier');
+            if ($allExited) {
+                break;
             }
-
-            $reserved = (new PdoSocialIdentityRepository($pdo, new Snowflake(random_int(1, 1023))))
-                ->reserve($identity);
-            file_put_contents($resultPath, 'ok|' . $reserved->id);
-        } catch (Throwable $e) {
-            file_put_contents($resultPath, 'error|' . $e::class . '|' . $e->getCode());
+            usleep(10000);
         }
 
-        exit(0);
+        foreach ($workers as $index => $worker) {
+            $status = $statuses[$index] ?? proc_get_status($worker['process']);
+            if ($status['running']) {
+                throw new RuntimeException('Concurrent reserve workers exceeded the timeout');
+            }
+            if ($status['exitcode'] !== 0) {
+                throw new RuntimeException('Concurrent reserve worker exited unexpectedly');
+            }
+            $this->closeReserveWorker($worker);
+            unset($workers[$index]);
+        }
+    }
+
+    /**
+     * @param array<int, array{process: resource, pipes: array<int, resource>}> $workers
+     */
+    private function stopReserveWorkers(array &$workers): void
+    {
+        foreach ($workers as $worker) {
+            $status = proc_get_status($worker['process']);
+            if ($status['running']) {
+                proc_terminate($worker['process']);
+            }
+        }
+
+        $deadline = microtime(true) + 1.0;
+        while (microtime(true) < $deadline) {
+            $running = false;
+            foreach ($workers as $worker) {
+                $this->drainWorkerOutput($worker['pipes']);
+                if (proc_get_status($worker['process'])['running']) {
+                    $running = true;
+                }
+            }
+            if (!$running) {
+                break;
+            }
+            usleep(10000);
+        }
+
+        foreach ($workers as $worker) {
+            if (proc_get_status($worker['process'])['running']) {
+                proc_terminate($worker['process'], 9);
+            }
+            $this->closeReserveWorker($worker);
+        }
+        $workers = [];
+    }
+
+    /** @param array<int, resource> $pipes */
+    private function drainWorkerOutput(array $pipes): void
+    {
+        foreach ([1, 2] as $index) {
+            if (isset($pipes[$index]) && is_resource($pipes[$index])) {
+                stream_get_contents($pipes[$index]);
+            }
+        }
+    }
+
+    /** @param array{process: resource, pipes: array<int, resource>} $worker */
+    private function closeReserveWorker(array $worker): void
+    {
+        $this->drainWorkerOutput($worker['pipes']);
+        foreach ([1, 2] as $index) {
+            if (isset($worker['pipes'][$index]) && is_resource($worker['pipes'][$index])) {
+                fclose($worker['pipes'][$index]);
+            }
+        }
+        proc_close($worker['process']);
     }
 
     /** @param array<string> $paths */
