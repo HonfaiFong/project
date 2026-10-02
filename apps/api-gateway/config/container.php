@@ -9,6 +9,7 @@ use Apps\ApiGateway\Controller\PersonaController;
 use Apps\ApiGateway\Controller\UserController;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
+use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
 use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
 use Psr\Container\ContainerInterface;
@@ -18,6 +19,7 @@ $trustedProxyCidrs = array_values(array_filter(
     array_map('trim', explode(',', (string)(getenv('SOCIAL_TRUSTED_PROXY_CIDRS') ?: ''))),
     static fn (string $cidr): bool => $cidr !== '',
 ));
+$trustedProxyClientIpResolver = new TrustedProxyClientIpResolver($trustedProxyCidrs);
 if (trim((string)(getenv('REDIS_HOST') ?: '')) !== '') {
     $redis = null;
     $socialLoginRateLimitCounter = static function (string $key, int $ttl) use (&$redis): int {
@@ -57,6 +59,7 @@ LUA, [$key, (string)$ttl], 1);
 }
 
 return (new Webman\Container())->addDefinitions([
+    TrustedProxyClientIpResolver::class => static fn (): TrustedProxyClientIpResolver => $trustedProxyClientIpResolver,
     AuthServiceClient::class => static fn (): AuthServiceClient => new AuthServiceClient(
         target: getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051',
         timeoutMs: (int)(getenv('GRPC_AUTH_TIMEOUT_MS') ?: 300),
@@ -74,7 +77,9 @@ return (new Webman\Container())->addDefinitions([
         $c->get(AuthServiceClient::class), $c->get(UserServiceClient::class)
     ),
     AuthController::class => static fn (ContainerInterface $c): AuthController => new AuthController(
-        $c->get(AuthServiceClient::class), $c->get(CreateWsTicketAction::class)
+        $c->get(AuthServiceClient::class),
+        $c->get(CreateWsTicketAction::class),
+        $c->get(TrustedProxyClientIpResolver::class),
     ),
     UserController::class => static fn (ContainerInterface $c): UserController => new UserController(
         $c->get(UserServiceClient::class)
@@ -94,5 +99,6 @@ return (new Webman\Container())->addDefinitions([
         limit: (int)(getenv('SOCIAL_LOGIN_RATE_LIMIT') ?: 30),
         windowSeconds: (int)(getenv('SOCIAL_LOGIN_RATE_WINDOW_SECONDS') ?: 60),
         trustedProxyCidrs: $trustedProxyCidrs,
+        clientIpResolver: $trustedProxyClientIpResolver,
     ),
 ]);

@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone mysql-ready redis-ready seed e2e logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone mysql-ready redis-ready seed e2e e2e-social logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -16,7 +16,7 @@ proto:
 
 lint:
 	@echo "Running PHP syntax checks..."
-	@find packages services apps contracts tests -name "*.php" -print0 | xargs -0 -n1 php -l > /dev/null
+	@find packages services apps contracts scripts tests -name "*.php" -print0 | xargs -0 -n1 php -l > /dev/null
 	@echo "Running Go vet..."
 	@go vet -mod=mod ./...
 	@echo "All lint checks passed!"
@@ -124,6 +124,10 @@ phpstan: analyse
 
 e2e:
 	bash scripts/e2e_test.sh
+	bash scripts/social_e2e_test.sh
+
+e2e-social:
+	bash scripts/social_e2e_test.sh
 
 logs:
 	docker compose logs -f

@@ -123,11 +123,30 @@ $isDevelopment = in_array($appEnvironment, ['local', 'development', 'dev', 'test
 $enableWeChat = filter_var(getenv('ENABLE_WECHAT_LOGIN') ?: 'false', FILTER_VALIDATE_BOOL);
 $enableQq = filter_var(getenv('ENABLE_QQ_LOGIN') ?: 'false', FILTER_VALIDATE_BOOL);
 $socialLoginEnabled = $enableWeChat || $enableQq;
+$officialWeChatTokenEndpoint = 'https://api.weixin.qq.com/sns/oauth2/access_token';
+$officialQqTokenEndpoint = 'https://graph.qq.com/oauth2.0/token';
+$officialQqOpenIdEndpoint = 'https://graph.qq.com/oauth2.0/me';
+$weChatTokenEndpoint = trim((string)(getenv('WECHAT_TOKEN_ENDPOINT') ?: ''));
+$qqTokenEndpoint = trim((string)(getenv('QQ_TOKEN_ENDPOINT') ?: ''));
+$qqOpenIdEndpoint = trim((string)(getenv('QQ_OPEN_ID_ENDPOINT') ?: ''));
+$allowInsecureOAuthHttp = filter_var(
+    getenv('SOCIAL_OAUTH_ALLOW_INSECURE_HTTP') ?: 'false',
+    FILTER_VALIDATE_BOOL
+);
+if (!$isDevelopment && $allowInsecureOAuthHttp) {
+    throw new RuntimeException('SOCIAL_OAUTH_ALLOW_INSECURE_HTTP is only allowed in local, development, or testing environments');
+}
+if (!$isDevelopment && (($weChatTokenEndpoint !== '' && $weChatTokenEndpoint !== $officialWeChatTokenEndpoint)
+    || ($qqTokenEndpoint !== '' && $qqTokenEndpoint !== $officialQqTokenEndpoint)
+    || ($qqOpenIdEndpoint !== '' && $qqOpenIdEndpoint !== $officialQqOpenIdEndpoint))) {
+    throw new RuntimeException('OAuth endpoint overrides are only allowed in local, development, or testing environments');
+}
 
 $oauthHttpClient = new GuzzleOAuthHttpClient(
     new Client(),
     (int)(getenv('SOCIAL_HTTP_CONNECT_TIMEOUT_MS') ?: 1000),
     (int)(getenv('SOCIAL_HTTP_TIMEOUT_MS') ?: 3000),
+    allowInsecureHttp: $allowInsecureOAuthHttp,
 );
 $socialProviders = [];
 if ($enableWeChat) {
@@ -136,6 +155,7 @@ if ($enableWeChat) {
         appId: trim((string)getenv('WECHAT_APP_ID')),
         appSecret: trim((string)getenv('WECHAT_APP_SECRET')),
         identityNamespace: trim((string)(getenv('WECHAT_IDENTITY_NAMESPACE') ?: 'wechat-main')),
+        tokenEndpoint: $weChatTokenEndpoint !== '' ? $weChatTokenEndpoint : $officialWeChatTokenEndpoint,
     );
 }
 if ($enableQq) {
@@ -145,6 +165,8 @@ if ($enableQq) {
         appKey: trim((string)getenv('QQ_APP_KEY')),
         redirectUri: trim((string)(getenv('QQ_REDIRECT_URI') ?: '')),
         identityNamespace: trim((string)(getenv('QQ_IDENTITY_NAMESPACE') ?: 'qq-main')),
+        tokenEndpoint: $qqTokenEndpoint !== '' ? $qqTokenEndpoint : $officialQqTokenEndpoint,
+        openIdEndpoint: $qqOpenIdEndpoint !== '' ? $qqOpenIdEndpoint : $officialQqOpenIdEndpoint,
     );
 }
 

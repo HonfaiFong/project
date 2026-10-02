@@ -19,6 +19,7 @@ final class WeChatOAuthProvider implements SocialAuthProviderInterface
         private readonly string $appId,
         private readonly string $appSecret,
         private readonly string $identityNamespace = 'wechat-main',
+        private readonly string $tokenEndpoint = self::TOKEN_ENDPOINT,
     ) {
         if ($this->appId === '' || $this->appSecret === '') {
             throw new RuntimeException(
@@ -43,7 +44,7 @@ final class WeChatOAuthProvider implements SocialAuthProviderInterface
             );
         }
 
-        $body = $this->httpClient->get(self::TOKEN_ENDPOINT, [
+        $body = $this->httpClient->get($this->tokenEndpoint, [
             'appid'      => $this->appId,
             'secret'     => $this->appSecret,
             'code'       => $code,

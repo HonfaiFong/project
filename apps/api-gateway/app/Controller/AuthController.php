@@ -7,16 +7,21 @@ namespace Apps\ApiGateway\Controller;
 use Apps\ApiGateway\Action\CreateWsTicketAction;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Http\GatewayRequest;
+use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Webman\Http\Response;
 
 final class AuthController
 {
+    private readonly TrustedProxyClientIpResolver $clientIpResolver;
+
     public function __construct(
         private readonly AuthServiceClient $authClient,
-        private readonly CreateWsTicketAction $createWsTicketAction
+        private readonly CreateWsTicketAction $createWsTicketAction,
+        ?TrustedProxyClientIpResolver $clientIpResolver = null,
     ) {
+        $this->clientIpResolver = $clientIpResolver ?? new TrustedProxyClientIpResolver();
     }
 
     public function login(GatewayRequest $request): Response
@@ -99,7 +104,7 @@ final class AuthController
 
         $device = $this->resolveDevice($request, $body);
         $result = $this->authClient->sendSocialPhoneCode($bindToken, $phone, [
-            'ip'          => $request->getRealIp(),
+            'ip'          => $this->clientIpResolver->resolve($request),
             'device_uuid' => $device['device_uuid'] ?? null,
         ]);
 

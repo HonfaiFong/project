@@ -100,6 +100,14 @@ MySQL、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 
 
 生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`ENABLE_DEV_SMS=false` 且固定验证码为空。当前没有生产短信适配器，QQ/微信开关必须保持关闭；强行开启时 AuthService 拒绝启动。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
 
+内部 gRPC 当前明确使用明文传输：`UnaryGrpcClient` 使用 `ChannelCredentials::createInsecure()`，RoadRunner 未配置 TLS。请求、手机号、会话数据和 `x-service-token` 都可能被能够监听内部网络的主体读取。当前部署仅适用于单机、受控且隔离的 Compose 网络；不得发布 Auth/User RPC 端口，不得把不可信容器接入该网络。应用层 token 和方法白名单提供调用授权，不提供传输机密性。
+
+跨主机、共享集群或不可信网络部署前，必须同时配置服务端 TLS 与客户端 CA/服务名验证；采用 mTLS 时还应校验客户端证书身份，并保留现有调用方及方法授权。证书和三个独立 RPC 凭证应由密钥管理系统注入，禁止写入镜像、Git 或日志。建立定期轮换、到期告警和泄露后的紧急撤销流程。当前每个调用方只接受一个 token，尚不支持双凭证无缝轮换：应在维护窗口停止相关调用方流量，替换服务端与客户端凭证并重启 worker，运行 `scripts/test_internal_rpc.php` 验证新凭证成功、旧凭证失败后恢复流量。未来无停机轮换需要有时限的双凭证接受窗口，待调用方全部切换后撤销旧凭证；TLS/mTLS 与双凭证窗口均为后续能力，当前未实现。
+
+已签发 JWT 的用户状态策略：AuthService 每次 `VerifyToken` 验签及撤销检查后，先校验设备仍属于 JWT 中的用户，再通过已授权的 `UserService.GetUser` 读取主库用户状态，不缓存 active 状态。封禁（非 active）或软/硬删除后，下一次受保护 HTTP 请求即拒绝旧 JWT，刷新与新登录同样拒绝；数据库或用户目录超时、不可用时也拒绝访问。因此每次认证新增一次 Auth DB 设备归属查询和一次内部 RPC/用户主库查询，部署时需要为数据库及 UserService 的容量和可用性留出预算。此策略是状态暂停：解封后，尚未到期且未被登出撤销的 JWT 可恢复访问；删除后的 ID 不得复用。已完成认证的在途请求不被回滚，已建立的 WebSocket 连接或先前签发的短期 WS ticket 不属于 JWT 校验路径，尚无封禁广播断连能力。
+
+设备隔离迁移 `0006_device_user_scope.sql` 必须在暂停所有 AuthService 会话写入、备份 `devices`/`refresh_tokens` 后执行，再部署本次 Repository 与 JWT 校验代码、重启全部 worker 后恢复流量。它保留现有设备 ID 和当前归属，先撤销设备缺失或用户归属错配的历史 refresh token，再建立 `(user_id, device_uuid)` 唯一索引并删除旧 UUID 全局唯一索引。历史设备行被覆盖前的归属无法可靠重建，因此不把错配 token 迁给新设备；受影响用户需重新登录。旧 JWT 的设备归属不符时同样被拒绝，正确归属的会话继续有效。MySQL DDL 隐式提交，迁移不能依赖事务回滚；迁移失败时保持暂停状态，修复并重跑后确认索引与错配 token 撤销结果。禁止在新索引上回滚运行旧 UUID 查询代码。
+
 Snowflake Worker ID 说明：MVP 阶段 `compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 `pid % 32` 消散，在单容器小并发阶段可正常工作。注意：`pid % 32` 在数学上无法杜绝跨进程碰撞，在生产环境横向扩容（多 Pod × 多 RoadRunner Worker）前必须切换为基于 Redis `SET NX` 租约分发的动态 WorkerId Allocator（0-1023）并定时续期。
 
 ---
@@ -163,10 +171,29 @@ buf lint
 
 ## 8. 端到端 E2E 验证
 
-运行完整的 Phase 1 业务流测试（注册/登录 -> 获取主账号资料 -> 创建分身 Persona -> 列出分身 -> 修改分身资料 -> 获取 WS Ticket -> 刷新 Token）：
+`make e2e` 运行 Phase 1 业务流及社交登录 HTTP → gRPC → MySQL/Redis 测试。社交测试复用开发短信发送器作为 Fake SMS，通过独立 `fake-oauth` 服务模拟 QQ/微信上游；不调用真实 OAuth 或短信平台。在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
+
 ```bash
+export APP_ENV=testing ENABLE_WECHAT_LOGIN=true ENABLE_QQ_LOGIN=true
+export ENABLE_DEV_SMS=true DEV_SMS_CODE=123456 SMS_CODE_PEPPER=e2e-only-sms-code-pepper
+export WECHAT_APP_ID=e2e-wechat-app WECHAT_APP_SECRET=e2e-wechat-secret
+export QQ_APP_ID=e2e-qq-app QQ_APP_KEY=e2e-qq-key QQ_REDIRECT_URI=http://e2e.test/callback
+export SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=true
+export WECHAT_TOKEN_ENDPOINT=http://fake-oauth:8081/sns/oauth2/access_token
+export QQ_TOKEN_ENDPOINT=http://fake-oauth:8081/oauth2.0/token
+export QQ_OPEN_ID_ENDPOINT=http://fake-oauth:8081/oauth2.0/me
+make up
+docker compose --profile e2e up -d fake-oauth
 make e2e
 ```
+
+测试会创建用户/会话并修改测试用户状态，应只使用专用测试环境。endpoint 覆盖和 HTTP 开关在生产环境会被启动检查拒绝。仅运行社交部分：
+
+```bash
+make e2e-social
+```
+
+MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TEST_REDIS_*` 和 `RABBITMQ_INTEGRATION=1` 等连接参数，MySQL 测试库名称必须以 `social_test_` 开头。使用 `vendor/bin/phpunit --fail-on-skipped` 验证全套实际执行；缺少基础设施产生的跳过不代表通过。
 
 ---
 

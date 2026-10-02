@@ -15,13 +15,19 @@ final class GuzzleOAuthHttpClient implements OAuthHttpClientInterface
         private readonly int $connectTimeoutMs = 1000,
         private readonly int $timeoutMs = 3000,
         private readonly int $maxBodyBytes = 65536,
+        private readonly bool $allowInsecureHttp = false,
     ) {
     }
 
     public function get(string $url, array $query = []): string
     {
         $parts = parse_url($url);
-        if (($parts['scheme'] ?? '') !== 'https' || ($parts['host'] ?? '') === '') {
+        $scheme = strtolower((string)($parts['scheme'] ?? ''));
+        $host = strtolower((string)($parts['host'] ?? ''));
+        $testingHttp = $this->allowInsecureHttp
+            && in_array(strtolower(trim((string)(getenv('APP_ENV') ?: 'production'))), ['local', 'development', 'dev', 'testing'], true)
+            && $scheme === 'http';
+        if (($scheme !== 'https' && !$testingHttp) || $host === '') {
             throw $this->upstreamError();
         }
 
