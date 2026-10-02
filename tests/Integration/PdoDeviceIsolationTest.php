@@ -57,6 +57,10 @@ final class PdoDeviceIsolationTest extends TestCase
         $this->insertRefreshToken('3002', '2999', '1001', str_repeat('b', 64), null);
         $this->insertRefreshToken('3003', '2998', '9999', str_repeat('c', 64), null);
         $this->insertRefreshToken('3004', '2997', '1001', str_repeat('d', 64), '2026-01-01 00:00:00.000');
+        $this->insertDevice('1003', '1001', 'migrated-user-device');
+        $this->insertDevice('1004', '1002', 'migrated-device-owner');
+        $this->insertRefreshToken('3005', '1001', '1004', str_repeat('e', 64), null);
+        $this->insertRefreshToken('3006', '1002', '1004', str_repeat('f', 64), null);
 
         $this->applyDeviceMigration();
 
@@ -65,11 +69,18 @@ final class PdoDeviceIsolationTest extends TestCase
         $this->assertNotNull($this->refreshTokenRevokedAt(str_repeat('b', 64)));
         $this->assertNotNull($this->refreshTokenRevokedAt(str_repeat('c', 64)));
         $this->assertSame('2026-01-01 00:00:00.000', $this->refreshTokenRevokedAt(str_repeat('d', 64)));
+        $this->assertNotNull($this->refreshTokenRevokedAt(str_repeat('e', 64)));
+        $this->assertNull($this->refreshTokenRevokedAt(str_repeat('f', 64)));
 
         $repository = $this->repository();
         $this->assertNotNull($repository->findRefreshToken(str_repeat('a', 64)));
         $this->assertNull($repository->findRefreshToken(str_repeat('b', 64)));
         $this->assertNull($repository->findRefreshToken(str_repeat('c', 64)));
+        $this->assertNull($repository->findRefreshToken(str_repeat('e', 64)));
+        $this->assertNotNull($repository->findRefreshToken(str_repeat('f', 64)));
+        $this->assertNull(
+            $repository->rotateRefreshToken(str_repeat('e', 64), str_repeat('g', 64), '2099-01-01 00:00:00.000')
+        );
 
         $snapshot = $this->refreshTokenRows();
         $this->applyDeviceMigration();

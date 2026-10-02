@@ -43,6 +43,11 @@ final class SocialAuthRepositoryFake implements AuthRepositoryInterface
         ?string $pushToken,
         ?string $ip
     ): Device {
+        $key = $userId . ':' . $deviceUuid;
+        if (isset($this->devices[$key])) {
+            return $this->devices[$key];
+        }
+
         $device = new Device(
             id: 'device-' . (count($this->devices) + 1),
             userId: $userId,
@@ -52,7 +57,7 @@ final class SocialAuthRepositoryFake implements AuthRepositoryInterface
             pushToken: $pushToken,
             lastIp: $ip,
         );
-        $this->devices[$deviceUuid] = $device;
+        $this->devices[$key] = $device;
 
         return $device;
     }
@@ -504,6 +509,22 @@ final class FakeSocialAuthProvider implements SocialAuthProviderInterface
 
 final class SocialAuthServiceTest extends TestCase
 {
+    public function testFakeRepositoryKeepsSameDeviceUuidSeparateAcrossUsers(): void
+    {
+        $repository = new SocialAuthRepositoryFake();
+
+        $first = $repository->findOrCreateDevice('10001', 'shared-device', 'ios', '1.0.0', null, null);
+        $second = $repository->findOrCreateDevice('10002', 'shared-device', 'android', '2.0.0', null, null);
+        $retry = $repository->findOrCreateDevice('10001', 'shared-device', 'ios', '1.0.0', null, null);
+
+        $this->assertNotSame($first->id, $second->id);
+        $this->assertSame($first->id, $retry->id);
+        $this->assertCount(2, $repository->devices);
+        $this->assertTrue($repository->deviceBelongsToUser('10001', $first->id));
+        $this->assertFalse($repository->deviceBelongsToUser('10002', $first->id));
+        $this->assertTrue($repository->deviceBelongsToUser('10002', $second->id));
+    }
+
     public function testFirstSocialLoginOnlyReturnsAOneTimeBindToken(): void
     {
         $fixture = $this->fixture(SocialProvider::WECHAT);

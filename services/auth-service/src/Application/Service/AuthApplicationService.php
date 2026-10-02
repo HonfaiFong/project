@@ -392,13 +392,23 @@ final class AuthApplicationService
     }
 
     /**
+     * @phpstan-impure Reads current revocation and user state on every call.
      * @return array{valid: bool, user_id?: string, device_id?: string}
      */
     public function verifyToken(string $token): array
     {
         try {
             $payload = $this->jwtCodec->decode($token);
+        } catch (RuntimeException) {
+            return ['valid' => false];
+        }
 
+        $userId = (string)($payload['sub'] ?? '');
+        if ($userId === '' || $userId === '0') {
+            return ['valid' => false];
+        }
+
+        try {
             if ($this->accessTokenRevocationStore?->isRevoked(
                 hash('sha256', $token),
                 (string)($payload['device_id'] ?? ''),
@@ -407,27 +417,36 @@ final class AuthApplicationService
                 return ['valid' => false];
             }
 
-            // Legacy sessions may reference a device that was reassigned by
-            // the old UUID-only lookup. Never accept another user's device.
-            if (!$this->authRepo->deviceBelongsToUser(
-                (string)$payload['sub'],
-                (string)($payload['device_id'] ?? '')
-            )) {
+            // Reject legacy sessions whose device was reassigned to another user.
+            if (!$this->authRepo->deviceBelongsToUser($userId, (string)($payload['device_id'] ?? ''))) {
+                return ['valid' => false];
+            }
+        } catch (\Throwable $e) {
+            throw new RuntimeException(
+                ErrorCode::SERVICE_UNAVAILABLE->message(),
+                ErrorCode::SERVICE_UNAVAILABLE->value,
+                $e,
+            );
+        }
+
+        try {
+            $this->assertUserCanAuthenticate($userId);
+        } catch (\Throwable $e) {
+            if (in_array($e->getCode(), [ErrorCode::USER_NOT_FOUND->value, ErrorCode::USER_BANNED->value], true)) {
                 return ['valid' => false];
             }
 
-            // Check the authoritative status on every request: an already-issued
-            // JWT must not keep a banned or deleted user authenticated.
-            $this->assertUserCanAuthenticate((string)$payload['sub']);
-
-            return [
-                'valid'     => true,
-                'user_id'   => (string)$payload['sub'],
-                'device_id' => (string)($payload['device_id'] ?? ''),
-            ];
-        } catch (\Throwable) {
-            return ['valid' => false];
+            $error = $e->getCode() === ErrorCode::RPC_TIMEOUT->value
+                ? ErrorCode::RPC_TIMEOUT
+                : ErrorCode::SERVICE_UNAVAILABLE;
+            throw new RuntimeException($error->message(), $error->value, $e);
         }
+
+        return [
+            'valid'     => true,
+            'user_id'   => $userId,
+            'device_id' => (string)($payload['device_id'] ?? ''),
+        ];
     }
 
     public function createWsTicket(string $userId, string $personaId, string $deviceId): array

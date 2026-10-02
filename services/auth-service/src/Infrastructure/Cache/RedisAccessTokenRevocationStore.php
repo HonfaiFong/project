@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Services\AuthService\Infrastructure\Cache;
 
+use Contracts\Errors\ErrorCode;
 use Redis;
+use RuntimeException;
 use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 
 final class RedisAccessTokenRevocationStore implements AccessTokenRevocationStoreInterface
@@ -32,16 +34,21 @@ final class RedisAccessTokenRevocationStore implements AccessTokenRevocationStor
 
     public function isRevoked(string $tokenHash, string $deviceId, int $issuedAt): bool
     {
-        if ($this->redis->exists(self::TOKEN_KEY_PREFIX . $tokenHash)) {
-            return true;
+        // A missing key is false inside the result array; a failed command is not an array.
+        $values = $this->redis->mGet([
+            self::TOKEN_KEY_PREFIX . $tokenHash,
+            self::DEVICE_KEY_PREFIX . $deviceId,
+        ]);
+        if (!is_array($values) || count($values) !== 2) {
+            throw new RuntimeException(
+                ErrorCode::SERVICE_UNAVAILABLE->message(),
+                ErrorCode::SERVICE_UNAVAILABLE->value,
+            );
         }
 
-        if ($deviceId === '') {
-            return false;
-        }
+        [$tokenRevoked, $deviceRevokedAt] = array_values($values);
 
-        $revokedAt = $this->redis->get(self::DEVICE_KEY_PREFIX . $deviceId);
-
-        return $revokedAt !== false && $issuedAt <= (int)$revokedAt;
+        return $tokenRevoked !== false
+            || ($deviceId !== '' && $deviceRevokedAt !== false && $issuedAt <= (int)$deviceRevokedAt);
     }
 }

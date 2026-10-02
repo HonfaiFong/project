@@ -78,8 +78,15 @@ jobs:
         run: buf lint
 
       - name: Buf Breaking
-        if: github.event_name == 'pull_request'
-        run: buf breaking --against ".git#ref=${{ github.event.pull_request.base.sha }}"
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master'))
+        env:
+          BUF_BREAKING_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$BUF_BREAKING_REF" = "0000000000000000000000000000000000000000" ]; then
+            echo "Skipping Buf Breaking because this push has no previous commit to compare."
+            exit 0
+          fi
+          buf breaking --against ".git#ref=$BUF_BREAKING_REF"
 
       - name: Run Lint
         run: make lint
@@ -87,7 +94,7 @@ jobs:
       - name: Run Static Analysis
         run: make analyse
 
-      - name: Run Tests
+      - name: Run Unit and Go Tests
         run: make test
 
       - name: Run Go Race Detector

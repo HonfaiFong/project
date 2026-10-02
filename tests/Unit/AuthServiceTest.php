@@ -14,6 +14,7 @@ use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
 use Contracts\Gen\Auth\V1\DeviceInfo;
 use Contracts\Gen\Auth\V1\LoginRequest;
+use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
 use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
 use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
@@ -323,7 +324,9 @@ final class AuthServiceTest extends TestCase
         $login = $this->loginForStatusTest();
         $this->userDirectory->unavailable = true;
 
-        $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(ErrorCode::SERVICE_UNAVAILABLE->value);
+        $this->authService->verifyToken($login['access_token']);
     }
 
     public function testIssuedTokenIsRejectedWhenItsDeviceBelongsToAnotherUser(): void
@@ -348,6 +351,66 @@ final class AuthServiceTest extends TestCase
             'platform' => 'ios',
             'app_version' => '1.0.0',
         ]);
+    }
+
+    public function testPreviouslyIssuedJwtRejectsEveryInactiveStatusAndRecoversAfterUnban(): void
+    {
+        $login = $this->authService->login('+8613800000000', 'dev-1234', [
+            'device_uuid' => 'uuid-123',
+            'platform'    => 'ios',
+            'app_version' => '1.0.0',
+        ]);
+        $token = $login['access_token'];
+        $this->assertTrue($this->authService->verifyToken($token)['valid']);
+
+        foreach ([0, 2, 3, 99] as $status) {
+            $this->userDirectory->status = $status;
+            $this->assertSame(['valid' => false], $this->authService->verifyToken($token));
+        }
+
+        $this->userDirectory->status = UserDirectoryInterface::STATUS_ACTIVE;
+        $this->assertTrue($this->authService->verifyToken($token)['valid']);
+    }
+
+    public function testPreviouslyIssuedJwtRejectsDeletedUserThroughGrpc(): void
+    {
+        $login = $this->authService->login('+8613800000000', 'dev-1234', [
+            'device_uuid' => 'uuid-123',
+            'platform'    => 'ios',
+            'app_version' => '1.0.0',
+        ]);
+        $this->assertTrue($this->authService->verifyToken($login['access_token'])['valid']);
+        $this->userDirectory->deleted = true;
+        $this->assertSame(['valid' => false], $this->authService->verifyToken($login['access_token']));
+
+        $service = new RoadRunnerAuthService($this->authService, new JsonLogger('test-auth'));
+        $response = $service->VerifyToken(new Context(['metadata' => []]), new VerifyTokenRequest([
+            'access_token' => $login['access_token'],
+        ]));
+
+        $this->assertFalse($response->getValid());
+        $this->assertSame('0', (string)$response->getUserId());
+        $this->assertSame('0', (string)$response->getDeviceId());
+    }
+
+    public function testPreviouslyIssuedJwtFailsClosedWhenUserServiceIsUnavailable(): void
+    {
+        $login = $this->authService->login('+8613800000000', 'dev-1234', [
+            'device_uuid' => 'uuid-123',
+            'platform'    => 'ios',
+            'app_version' => '1.0.0',
+        ]);
+        $this->assertTrue($this->authService->verifyToken($login['access_token'])['valid']);
+        $this->userDirectory->unavailable = true;
+        try {
+            $this->authService->verifyToken($login['access_token']);
+            $this->fail('Expected an unavailable service error');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, $e->getCode());
+        }
+
+        $this->userDirectory->unavailable = false;
+        $this->assertTrue($this->authService->verifyToken($login['access_token'])['valid']);
     }
 
     public function testCreateWsTicketGeneratesValidSignature(): void

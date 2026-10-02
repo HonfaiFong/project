@@ -18,6 +18,28 @@ use const Grpc\STATUS_DEADLINE_EXCEEDED;
 
 final class AuthServiceClientTimeoutTest extends TestCase
 {
+    public function testUnavailableTransportWithoutTrailerReturnsSafeHttp503(): void
+    {
+        foreach ([\Grpc\STATUS_UNAVAILABLE, STATUS_DEADLINE_EXCEEDED] as $status) {
+            $grpc = $this->createMock(UnaryGrpcClient::class);
+            $grpc->method('call')->willThrowException(new GrpcCallException($status, null, 'private backend:50051 connection failed'));
+            $client = new AuthServiceClient(client: $grpc);
+            try {
+                $client->verifyToken('token');
+                $this->fail('Expected dependency failure');
+            } catch (\RuntimeException $e) {
+                $expected = $status === STATUS_DEADLINE_EXCEEDED ? ErrorCode::RPC_TIMEOUT : ErrorCode::SERVICE_UNAVAILABLE;
+                $this->assertSame($expected->value, $e->getCode());
+                $request = new \Apps\ApiGateway\Http\GatewayRequest("GET /api/v1/me HTTP/1.1\r\nHost: localhost\r\n\r\n");
+                $handler = new \Apps\ApiGateway\Http\GatewayExceptionHandler(new \Psr\Log\NullLogger(), false);
+                $response = $handler->render($request, $e);
+                $this->assertSame(503, $response->getStatusCode());
+                $this->assertSame($expected->message(), json_decode($response->rawBody(), true)['message']);
+                $this->assertStringNotContainsString('private backend', $response->rawBody());
+            }
+        }
+    }
+
     public function testSocialLoginDeadlineCannotBeConfiguredAtOrBelowTheHttpTimeout(): void
     {
         $this->expectException(InvalidArgumentException::class);

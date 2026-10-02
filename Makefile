@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone mysql-ready redis-ready seed e2e e2e-social logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone mysql-ready redis-ready seed e2e e2e-social logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -21,11 +21,17 @@ lint:
 	@go vet -mod=mod ./...
 	@echo "All lint checks passed!"
 
-test:
-	@echo "Running PHP Unit Tests..."
-	@vendor/bin/phpunit
+test: test-unit
 	@echo "Running Go Tests..."
 	@go test -mod=mod ./...
+
+test-unit:
+	@echo "Running PHP Unit Tests..."
+	@vendor/bin/phpunit --testsuite Unit --fail-on-skipped
+
+test-integration:
+	@echo "Running PHP Integration Tests..."
+	@vendor/bin/phpunit --testsuite Integration --fail-on-skipped
 
 infra-up:
 	docker compose up -d mysql redis rabbitmq

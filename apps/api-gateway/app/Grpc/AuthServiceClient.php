@@ -263,7 +263,11 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
             default => ErrorCode::SERVICE_UNAVAILABLE->value,
         };
 
-        return new RuntimeException($e->getMessage(), $code, $e);
+        $message = in_array($code, [ErrorCode::SERVICE_UNAVAILABLE->value, ErrorCode::RPC_TIMEOUT->value], true)
+            ? ErrorCode::from($code)->message()
+            : $e->getMessage();
+
+        return new RuntimeException($message, $code, $e);
     }
 
     private function device(array $deviceInfo): DeviceInfo

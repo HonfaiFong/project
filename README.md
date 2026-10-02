@@ -104,7 +104,7 @@ MySQL、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 
 
 跨主机、共享集群或不可信网络部署前，必须同时配置服务端 TLS 与客户端 CA/服务名验证；采用 mTLS 时还应校验客户端证书身份，并保留现有调用方及方法授权。证书和三个独立 RPC 凭证应由密钥管理系统注入，禁止写入镜像、Git 或日志。建立定期轮换、到期告警和泄露后的紧急撤销流程。当前每个调用方只接受一个 token，尚不支持双凭证无缝轮换：应在维护窗口停止相关调用方流量，替换服务端与客户端凭证并重启 worker，运行 `scripts/test_internal_rpc.php` 验证新凭证成功、旧凭证失败后恢复流量。未来无停机轮换需要有时限的双凭证接受窗口，待调用方全部切换后撤销旧凭证；TLS/mTLS 与双凭证窗口均为后续能力，当前未实现。
 
-已签发 JWT 的用户状态策略：AuthService 每次 `VerifyToken` 验签及撤销检查后，先校验设备仍属于 JWT 中的用户，再通过已授权的 `UserService.GetUser` 读取主库用户状态，不缓存 active 状态。封禁（非 active）或软/硬删除后，下一次受保护 HTTP 请求即拒绝旧 JWT，刷新与新登录同样拒绝；数据库或用户目录超时、不可用时也拒绝访问。因此每次认证新增一次 Auth DB 设备归属查询和一次内部 RPC/用户主库查询，部署时需要为数据库及 UserService 的容量和可用性留出预算。此策略是状态暂停：解封后，尚未到期且未被登出撤销的 JWT 可恢复访问；删除后的 ID 不得复用。已完成认证的在途请求不被回滚，已建立的 WebSocket 连接或先前签发的短期 WS ticket 不属于 JWT 校验路径，尚无封禁广播断连能力。
+已签发 JWT 的用户状态策略：AuthService 每次 `VerifyToken` 验签及撤销检查后，先校验设备仍属于 JWT 中的用户，再通过已授权的 `UserService.GetUser` 读取主库用户状态，不缓存 active 状态。封禁（非 active）或软/硬删除后，下一次受保护 HTTP 请求即拒绝旧 JWT，刷新与新登录同样拒绝；Redis、数据库或用户目录超时、不可用时拒绝访问并返回 HTTP 503（`SERVICE_UNAVAILABLE` / `RPC_TIMEOUT`），不会将基础设施故障报告为凭证失效的 401。因此每次认证新增一次 Auth DB 设备归属查询和一次内部 RPC/用户主库查询，部署时需要为数据库及 UserService 的容量和可用性留出预算。此策略是状态暂停：解封后，尚未到期且未被登出撤销的 JWT 可恢复访问；删除后的 ID 不得复用。已完成认证的在途请求不被回滚，已建立的 WebSocket 连接或先前签发的短期 WS ticket 不属于 JWT 校验路径，尚无封禁广播断连能力。
 
 设备隔离迁移 `0006_device_user_scope.sql` 必须在暂停所有 AuthService 会话写入、备份 `devices`/`refresh_tokens` 后执行，再部署本次 Repository 与 JWT 校验代码、重启全部 worker 后恢复流量。它保留现有设备 ID 和当前归属，先撤销设备缺失或用户归属错配的历史 refresh token，再建立 `(user_id, device_uuid)` 唯一索引并删除旧 UUID 全局唯一索引。历史设备行被覆盖前的归属无法可靠重建，因此不把错配 token 迁给新设备；受影响用户需重新登录。旧 JWT 的设备归属不符时同样被拒绝，正确归属的会话继续有效。MySQL DDL 隐式提交，迁移不能依赖事务回滚；迁移失败时保持暂停状态，修复并重跑后确认索引与错配 token 撤销结果。禁止在新索引上回滚运行旧 UUID 查询代码。
 
@@ -193,7 +193,7 @@ make e2e
 make e2e-social
 ```
 
-MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TEST_REDIS_*` 和 `RABBITMQ_INTEGRATION=1` 等连接参数，MySQL 测试库名称必须以 `social_test_` 开头。使用 `vendor/bin/phpunit --fail-on-skipped` 验证全套实际执行；缺少基础设施产生的跳过不代表通过。
+MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TEST_REDIS_*` 和 `RABBITMQ_INTEGRATION=1` 等连接参数，MySQL 测试库名称必须以 `social_test_` 开头。`make test` 执行 Unit 套件（禁止 skipped）和 Go tests；准备好上述依赖后，使用 `make test-integration` 执行 Integration 套件（禁止 skipped）。也可使用 `vendor/bin/phpunit --fail-on-skipped` 验证全套实际执行；缺少基础设施产生的跳过不代表通过。CI 的 MySQL/Redis 和 RabbitMQ 测试在各自依赖就绪后分步执行，E2E 失败同样阻止 CI 通过。
 
 ---
 
