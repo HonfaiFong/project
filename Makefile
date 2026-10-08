@@ -16,7 +16,7 @@ proto:
 
 lint:
 	@echo "Running PHP syntax checks..."
-	@find packages services apps contracts scripts tests -name "*.php" -print0 | xargs -0 -n1 php -l > /dev/null
+	@find packages services apps contracts scripts tests database phinx.php -name "*.php" -print0 | xargs -0 -n1 php -l > /dev/null
 	@echo "Running Go vet..."
 	@go vet -mod=mod ./...
 	@echo "All lint checks passed!"
@@ -81,8 +81,7 @@ rebuild-runtime:
 	docker compose build --no-cache php-runtime
 
 migrate:
-	@echo "Applying baseline schema (idempotent)..."
-	docker compose exec -T mysql sh -c 'exec mysql -uroot -p"$$MYSQL_ROOT_PASSWORD"' < infra/docker/mysql/init/01-databases.sql
+	@echo "Applying database migrations with Phinx..."
 	bash scripts/run_migrations.sh
 	@$(MAKE) preflight-phone
 

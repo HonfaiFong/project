@@ -136,7 +136,7 @@ make proto
 
 ## 6. 数据库设计与迁移
 
-数据库初始化基线位于 `infra/docker/mysql/init/01-databases.sql`，容器启动时自动挂载执行；增量变更放 `infra/docker/mysql/migrations/`，由 `scripts/run_migrations.sh` 按 `meta.schema_migrations` 表追踪、每个文件只应用一次：
+数据库初始化基线位于 `infra/docker/mysql/init/01-databases.sql`，容器首次启动时自动挂载执行。后续结构变更使用 Phinx，迁移文件放在 `database/migrations/`，由 `meta.phinxlog` 追踪。历史 `infra/docker/mysql/migrations/0001` 至 `0006` SQL 和 `meta.schema_migrations` 保留，由首次 Phinx 迁移接管；未完成的旧迁移按实际字段/索引补齐，已完成记录不重放。
 - `auth_db`: 存储 `devices`, `refresh_tokens`, `outbox_events`
 - `user_db`: 存储 `users`, `personas`, `outbox_events`
 - `content_db`: 存储 `posts`, `post_media`, `comments`, `outbox_events`
@@ -144,10 +144,24 @@ make proto
 - `chat_db`: 存储 `conversations`, `conversation_members`, `outbox_events`
 - `message_db`: 存储 `messages`, `outbox_events` (预置 ShardRouter 槽位)
 
-手动重新执行基线并应用增量迁移：
+安装 Composer 依赖后应用待执行迁移（使用现有 PHP runtime 镜像）：
 ```bash
 make migrate
 ```
+
+查看状态、新建迁移：
+```bash
+bash scripts/run_migrations.sh status
+bash scripts/run_migrations.sh create CreateExampleTable
+```
+
+`phinx.php` 在同一 PDO 会话中取得 MySQL `GET_LOCK` 后执行 Phinx，Docker 入口和直接使用 `vendor/bin/phinx --configuration=phinx.php` 均受此锁保护。等待超时通过 `MYSQL_MIGRATION_LOCK_TIMEOUT` 设置（默认 30 秒，范围 0–300），超时后退出，连接关闭时释放锁。历史 SQL 不再新增或修改；已合并的 Phinx 迁移也保持不变，修正通过新的迁移完成。MySQL 多条 DDL 无法由事务整体回滚，新迁移需考虑部分成功后的重跑；本次接管和身份排序规则迁移均可恢复执行，禁止自动回滚删除既有数据。
+
+社交身份的应用 ID、命名空间和外部 subject/openid/unionid 使用 `utf8mb4_bin` 比较，区分大小写，保留字段长度、可空性和既有唯一键。部署时需要具备对应数据库 DDL 权限的迁移账号，迁移可能等待表元数据锁，应在合适的发布窗口执行。
+
+本机直接运行 Phinx 时，显式提供 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD` 环境变量（配置不自动读取 `.env`）。`MYSQL_SCHEMA_PREFIX` 可为隔离测试添加库名前缀，默认空；集成测试仅使用随机 `social_test_` 前缀的独立数据库。
+
+配置加载会连接数据库并初始化 `meta`，`status` 也可能初始化 Phinx 记录表。首次旧 Schema 接管需要查询实际表结构，尚不支持全新库上的完整 `--dry-run`；`--fake` 保留 Phinx 原有的只标记版本语义，不能用于实际部署变更。
 
 ---
 
@@ -213,7 +227,7 @@ MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TE
 | `make test` | 执行全套单元测试 |
 | `make e2e` | 执行端到端接口冒烟测试 |
 | `make logs` | 查看所有容器运行日志 |
-| `make migrate` | 应用基线 Schema 与增量迁移 |
+| `make migrate` | 使用 Phinx 接管历史 Schema 并应用待执行迁移 |
 | `make clean` | 停止并清除本地数据卷 |
 
 ---
@@ -268,7 +282,7 @@ Outbox 的 `aggregate_id` 标识事件所属实体；`event_key` 单独保存流
 ## 13. 故障排查 (Troubleshooting)
 
 1. **容器未就绪 / MySQL 连接拒绝**:
-   MySQL 容器首次初始化需载入数据表，可通过 `docker compose logs -f mysql` 观察健康检查状态，或执行 `make migrate` 重新校验（会重放基线并补齐 `infra/docker/mysql/migrations/` 下的增量迁移）。
+   MySQL 容器首次初始化需载入数据表，可通过 `docker compose logs -f mysql` 观察健康检查状态，再执行 `make migrate` 应用待执行的 Phinx 迁移；首次接管会补齐未完成的历史 SQL 迁移。
 2. **WebSocket 无法连接**:
    确认已先调用 `POST /api/v1/ws/ticket` 获取合法 Ticket；Ticket 有效期 60 秒且**单次使用**（同一 Ticket 二次握手会被网关拒绝），需在 60 秒内通过 `/ws?ticket=<ticket>` 建立连接。
 3. **日志排查**:

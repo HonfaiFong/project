@@ -197,7 +197,7 @@ jobs:
 
       - name: Run MySQL and Redis integration tests
         timeout-minutes: 5
-        run: vendor/bin/phpunit tests/Integration/PdoSocialIdentityRepositoryTest.php tests/Integration/PdoDeviceIsolationTest.php tests/Integration/RedisSocialAuthSupportTest.php tests/Integration/UserPhoneMigrationTest.php --fail-on-skipped
+        run: vendor/bin/phpunit tests/Integration/PdoSocialIdentityRepositoryTest.php tests/Integration/PdoDeviceIsolationTest.php tests/Integration/RedisSocialAuthSupportTest.php tests/Integration/UserPhoneMigrationTest.php tests/Integration/PhinxMigrationTest.php --fail-on-skipped
         env:
           SOCIAL_TEST_MYSQL_DATABASE: social_test_auth
           SOCIAL_TEST_MYSQL_HOST: 127.0.0.1

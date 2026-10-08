@@ -11,6 +11,8 @@ parameters:
         - apps
         - services
         - packages
+        - database
+        - phinx.php
         - contracts/errors
         - contracts/events
         - tests

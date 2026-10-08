@@ -138,6 +138,23 @@ services:
       dockerfile: infra/docker/php/Dockerfile
     image: project-php-runtime:rabbitmq
 
+  database-migrate:
+    image: project-php-runtime:rabbitmq
+    profiles:
+      - migration
+    working_dir: /app
+    entrypoint: ["php", "vendor/bin/phinx", "--configuration=phinx.php"]
+    command: ["migrate"]
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_MIGRATION_LOCK_TIMEOUT: ${MYSQL_MIGRATION_LOCK_TIMEOUT:-30}
+      MYSQL_SCHEMA_PREFIX: ${MYSQL_SCHEMA_PREFIX:-}
+    volumes:
+      - .:/app
+
   fake-oauth:
     image: project-php-runtime:rabbitmq
     profiles:
