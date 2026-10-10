@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use Apps\ApiGateway\Grpc\AuthServiceClient;
-use Contracts\Gen\Auth\V1\BindSocialPhoneResponse;
-use Contracts\Gen\Auth\V1\SendSocialPhoneCodeResponse;
+use Contracts\Gen\Auth\V1\BindSocialIdentityResponse;
+use Contracts\Gen\Auth\V1\LoginResponse;
 use Contracts\Gen\Auth\V1\SocialLoginResponse;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use Contracts\Errors\ErrorCode;
@@ -50,11 +50,21 @@ final class AuthServiceClientTimeoutTest extends TestCase
         );
     }
 
+    public function testSocialBindDeadlineCannotBeConfiguredAtOrBelowTheHttpTimeout(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        new AuthServiceClient(
+            socialBindTimeoutMs: 6000,
+            socialHttpTimeoutMs: 3000,
+        );
+    }
+
     public function testSocialRpcDeadlinesRemainLongerThanTheOAuthHttpTimeout(): void
     {
         $timeouts = [];
         $grpc = $this->createMock(UnaryGrpcClient::class);
-        $grpc->expects($this->exactly(4))
+        $grpc->expects($this->exactly(3))
             ->method('call')
             ->willReturnCallback(function (string $method, mixed $request, string $responseClass, int $timeoutMs) use (&$timeouts): object {
                 $timeouts[$method] = $timeoutMs;
@@ -62,9 +72,15 @@ final class AuthServiceClientTimeoutTest extends TestCase
                 if ($method === '/auth.v1.AuthService/SocialLogin') {
                     usleep(500_000);
                     return new SocialLoginResponse([
-                        'state' => 2,
-                        'bind_token' => 'bind-token',
-                        'bind_token_expires_at' => '1770000000',
+                        'state' => 1,
+                        'login' => new LoginResponse([
+                            'user_id' => '42',
+                            'access_token' => 'access-token',
+                            'refresh_token' => 'refresh-token',
+                            'access_token_expires_at' => '1770000000',
+                            'refresh_token_expires_at' => '1770003600',
+                            'is_new_user' => true,
+                        ]),
                     ]);
                 }
 
@@ -72,40 +88,30 @@ final class AuthServiceClientTimeoutTest extends TestCase
                     return new VerifyTokenResponse(['valid' => true, 'user_id' => '42', 'device_id' => '7']);
                 }
 
-                if ($method === '/auth.v1.AuthService/SendSocialPhoneCode') {
-                    return new SendSocialPhoneCodeResponse(['expires_in' => 300, 'resend_after' => 60]);
-                }
-
-                return new BindSocialPhoneResponse();
+                return new BindSocialIdentityResponse(['user_id' => '42', 'provider' => 1]);
             });
 
         $client = new AuthServiceClient(
             target: '127.0.0.1:1',
             timeoutMs: 300,
             socialLoginTimeoutMs: 7000,
-            socialPhoneCodeTimeoutMs: 5000,
-            socialBindTimeoutMs: 1000,
+            socialBindTimeoutMs: 7000,
             socialHttpTimeoutMs: 3000,
             client: $grpc,
         );
 
         $result = $client->socialLogin('wechat', 'oauth-code', ['device_uuid' => 'device-1']);
         $verified = $client->verifyToken('access-token');
-        $client->sendSocialPhoneCode('bind-token', '+8613800000000');
+        $bound = $client->bindSocialIdentity('wechat', 'oauth-code', 'access-token');
 
-        $this->assertSame('phone_binding_required', $result['state']);
+        $this->assertSame('authenticated', $result['state']);
+        $this->assertSame('42', $result['login']['user_id']);
+        $this->assertTrue($result['login']['is_new_user']);
         $this->assertTrue($verified['valid']);
+        $this->assertSame(['user_id' => '42', 'provider' => 'wechat'], $bound);
         $this->assertSame(7000, $timeouts['/auth.v1.AuthService/SocialLogin']);
         $this->assertSame(300, $timeouts['/auth.v1.AuthService/VerifyToken']);
-        $this->assertSame(5000, $timeouts['/auth.v1.AuthService/SendSocialPhoneCode']);
-
-        try {
-            $client->bindSocialPhone('bind-token', '+8613800000000', '123456', ['device_uuid' => 'device-1']);
-        } catch (\RuntimeException) {
-            // The mock response intentionally has no login payload; the deadline was already captured.
-        }
-
-        $this->assertSame(1000, $timeouts['/auth.v1.AuthService/BindSocialPhone']);
+        $this->assertSame(7000, $timeouts['/auth.v1.AuthService/BindSocialIdentity']);
     }
 
     public function testAThreeHundredMillisecondSocialDeadlineCannotSurviveTheSimulatedHalfSecondExchange(): void

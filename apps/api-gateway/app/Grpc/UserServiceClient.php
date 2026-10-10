@@ -40,13 +40,15 @@ use const Grpc\STATUS_RESOURCE_EXHAUSTED;
 
 final class UserServiceClient implements HealthCheckClient, PersonaLookup
 {
-    private ?UnaryGrpcClient $client = null;
+    private ?UnaryGrpcClient $client;
 
     public function __construct(
         private readonly ?string $target = null,
         private readonly int $timeoutMs = 150,
         private readonly ?string $serviceToken = null,
+        ?UnaryGrpcClient $client = null,
     ) {
+        $this->client = $client;
     }
 
     public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
@@ -179,7 +181,7 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
     private function call(string $method, Message $request, string $responseClass): Message
     {
         $client = $this->client ??= new UnaryGrpcClient(
-            $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052'),
+            $this->target ?: config('gateway.grpc.user.target', 'user-service:50052'),
             $this->serviceToken,
         );
 

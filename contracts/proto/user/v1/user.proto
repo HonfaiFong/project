@@ -29,6 +29,16 @@ message FindOrCreateByPhoneResponse {
   bool is_new_user = 2;
 }
 
+message FindOrCreateBySocialIdentityRequest {
+  string registration_key = 1;
+  string register_channel = 2;
+}
+
+message FindOrCreateBySocialIdentityResponse {
+  UserProfile user = 1;
+  bool is_new_user = 2;
+}
+
 message GetUserRequest {
   uint64 user_id = 1;
 }
@@ -57,6 +67,7 @@ message UpdateUserResponse {
 
 service UserService {
   rpc FindOrCreateByPhone(FindOrCreateByPhoneRequest) returns (FindOrCreateByPhoneResponse);
+  rpc FindOrCreateBySocialIdentity(FindOrCreateBySocialIdentityRequest) returns (FindOrCreateBySocialIdentityResponse);
   rpc GetUser(GetUserRequest) returns (GetUserResponse);
   rpc BatchGetUsers(BatchGetUsersRequest) returns (BatchGetUsersResponse);
   rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse);

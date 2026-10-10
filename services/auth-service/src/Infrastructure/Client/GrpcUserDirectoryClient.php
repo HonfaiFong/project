@@ -7,6 +7,8 @@ namespace Services\AuthService\Infrastructure\Client;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\User\V1\FindOrCreateByPhoneRequest;
 use Contracts\Gen\User\V1\FindOrCreateByPhoneResponse;
+use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityRequest;
+use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityResponse;
 use Contracts\Gen\User\V1\GetUserRequest;
 use Contracts\Gen\User\V1\GetUserResponse;
 use Packages\GrpcCommon\GrpcCallException;
@@ -43,6 +45,42 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
                     'register_channel' => $registerChannel,
                 ]),
                 FindOrCreateByPhoneResponse::class,
+                $this->timeoutMs
+            );
+        } catch (GrpcCallException $e) {
+            $code = $e->appErrorCode ?? match ($e->grpcStatus) {
+                STATUS_DEADLINE_EXCEEDED => ErrorCode::RPC_TIMEOUT->value,
+                STATUS_NOT_FOUND => ErrorCode::USER_NOT_FOUND->value,
+                default => ErrorCode::SERVICE_UNAVAILABLE->value,
+            };
+            throw new RuntimeException($e->getMessage(), $code, $e);
+        }
+
+        $user = $response->getUser();
+        $userId = $user !== null ? (string)$user->getId() : '0';
+
+        return [
+            'user_id'     => $userId,
+            'is_new_user' => $response->getIsNewUser(),
+        ];
+    }
+
+    public function findOrCreateBySocialIdentity(string $registrationKey, string $registerChannel): array
+    {
+        $client = $this->client ??= new UnaryGrpcClient(
+            $this->target ?: (getenv('GRPC_USER_SERVICE') ?: 'user-service:50052'),
+            $this->serviceToken,
+        );
+
+        try {
+            /** @var FindOrCreateBySocialIdentityResponse $response */
+            $response = $client->call(
+                '/user.v1.UserService/FindOrCreateBySocialIdentity',
+                new FindOrCreateBySocialIdentityRequest([
+                    'registration_key' => $registrationKey,
+                    'register_channel' => $registerChannel,
+                ]),
+                FindOrCreateBySocialIdentityResponse::class,
                 $this->timeoutMs
             );
         } catch (GrpcCallException $e) {

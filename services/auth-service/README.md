@@ -1,7 +1,9 @@
 # AuthService
 
 ## 1. Responsibility
-- User authentication via Phone / SMS / Password / OAuth.
+- WeChat / QQ OAuth login with automatic registration, without phone or SMS.
+- Authenticated binding of another provider identity; no account transfer or merge.
+- Phone credential login is limited to local, development, and testing.
 - JWT Access Token generation and validation.
 - Refresh Token management, rotation, and revocation.
 - Device tracking and registration.
@@ -13,10 +15,14 @@
 - Tables:
   - `devices`
   - `refresh_tokens`
+  - `social_identities`
+  - `social_identity_aliases`
   - `outbox_events`
 
 ## 3. gRPC API
-- `auth.v1.AuthService/Login`
+- `auth.v1.AuthService/Login` (development only)
+- `auth.v1.AuthService/SocialLogin`
+- `auth.v1.AuthService/BindSocialIdentity`
 - `auth.v1.AuthService/RefreshToken`
 - `auth.v1.AuthService/Logout`
 - `auth.v1.AuthService/VerifyToken`
@@ -32,6 +38,7 @@
 
 ## 6. Dependencies
 - MySQL (`auth_db`)
+- Persistence uses Illuminate Eloquent models for devices, refresh tokens, social identities, and aliases. Run `composer install` and restart PHP workers after dependency updates.
 - Redis (session cache and token blacklist)
 - UserService over internal gRPC (`GRPC_USER_SERVICE_TOKEN` authenticates Auth→User)
 
@@ -75,3 +82,21 @@ refresh token can also be used again. No JWT claim/schema migration is required,
 so already-issued tokens receive the same checks after deployment. Requests that
 already passed verification and existing WebSocket connections are not terminated
 by this check; short-lived WS tickets have their own validation lifecycle.
+
+## 10. Social registration recovery
+
+Before calling UserService, Auth persists status `3` (registering) on the reserved
+identity. UserService receives the opaque key `social:<identity-id>` and commits
+the User, default Persona, registration key, and outbox events in one transaction.
+Repeated calls reuse that account. A timeout leaves the identity resumable on a
+new OAuth authorization; manual binding cannot claim an identity already registering.
+Status `0` means unbound, `1` active, and `2` disabled; historical numeric values stay intact.
+
+Openid aliases preserve all verified app/openid mappings when resolving a canonical
+unionid, including disabled identities. A later authorization without unionid still
+resolves the same identity. Reconciliation retains a registering row's ID and rejects
+conflicting registration intents or different account owners.
+
+Apply migrations `20261009000000` and `20261009000100` before deploying the updated
+UserService, AuthService, and Gateway with their generated contracts. The retired
+phone-binding RPCs remain declared for wire compatibility and always reject callers.

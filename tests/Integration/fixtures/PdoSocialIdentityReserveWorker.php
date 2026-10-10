@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 require dirname(__DIR__, 3) . '/vendor/autoload.php';
 
+use Packages\Database\EloquentConnection;
 use Packages\IdGenerator\Snowflake;
 use Services\AuthService\Domain\Auth\ExternalIdentity;
 use Services\AuthService\Domain\Auth\SocialProvider;
-use Services\AuthService\Infrastructure\Repository\PdoSocialIdentityRepository;
+use Services\AuthService\Infrastructure\Repository\EloquentSocialIdentityRepository;
 
 if ($argc < 8) {
     exit(2);
@@ -34,15 +35,30 @@ try {
             PDO::ATTR_TIMEOUT => 2,
         ],
     );
-    file_put_contents($readyPath, 'ready');
+    $connection = EloquentConnection::fromPdo($pdo);
+    // Replaces the removed BEFORE INSERT trigger: the worker parks directly
+    // before its social_identities insert until the test releases the start
+    // file, so both workers have already missed the pre-check select when the
+    // database unique key decides the race. The deadline keeps a lost release
+    // from blocking the worker forever.
+    $released = false;
+    $connection->beforeExecuting(static function (string $query) use ($readyPath, $startPath, &$released): void {
+        if ($released || !str_starts_with($query, 'insert into `social_identities`')) {
+            return;
+        }
 
-    $deadline = microtime(true) + 3.0;
-    while (!is_file($startPath) && microtime(true) < $deadline) {
-        usleep(10000);
-    }
-    if (!is_file($startPath)) {
-        throw new RuntimeException('Timed out waiting for reserve barrier');
-    }
+        $released = true;
+        file_put_contents($readyPath, 'ready');
+
+        $deadline = microtime(true) + 5.0;
+        while (!is_file($startPath) && microtime(true) < $deadline) {
+            usleep(10000);
+        }
+        if (!is_file($startPath)) {
+            throw new RuntimeException('Timed out waiting for the reserve insert barrier');
+        }
+        usleep(100_000);
+    });
 
     $identity = new ExternalIdentity(
         provider: SocialProvider::WECHAT,
@@ -51,7 +67,7 @@ try {
         openId: $argv[4],
         unionId: $argv[5] !== '' ? $argv[5] : null,
     );
-    $reserved = (new PdoSocialIdentityRepository($pdo, new Snowflake((int)$argv[7])))
+    $reserved = (new EloquentSocialIdentityRepository($pdo, new Snowflake((int)$argv[7])))
         ->reserve($identity);
     file_put_contents($resultPath, 'ok|' . $reserved->id);
 } catch (Throwable $e) {

@@ -1,0 +1,3 @@
+# Protobuf metadata contains binary descriptor bytes in PHP string literals.
+[contracts/gen/php/Contracts/Gen/GPBMetadata/**/*.php]
+charset = latin1

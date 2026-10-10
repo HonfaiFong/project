@@ -8,7 +8,10 @@ use Services\AuthService\Domain\Auth\SocialProvider;
 
 final readonly class SocialIdentity
 {
-    public const STATUS_PENDING_PHONE = 0;
+    public const STATUS_PENDING = 0;
+    /** @deprecated Legacy name retained for historical callers. */
+    public const STATUS_PENDING_PHONE = self::STATUS_PENDING;
+    public const STATUS_REGISTERING = 3;
     public const STATUS_ACTIVE = 1;
     public const STATUS_DISABLED = 2;
 

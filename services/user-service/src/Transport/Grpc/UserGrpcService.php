@@ -13,6 +13,8 @@ use Contracts\Gen\User\V1\CreatePersonaRequest;
 use Contracts\Gen\User\V1\CreatePersonaResponse;
 use Contracts\Gen\User\V1\FindOrCreateByPhoneRequest;
 use Contracts\Gen\User\V1\FindOrCreateByPhoneResponse;
+use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityRequest;
+use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityResponse;
 use Contracts\Gen\User\V1\GetPersonaRequest;
 use Contracts\Gen\User\V1\GetPersonaResponse;
 use Contracts\Gen\User\V1\GetUserRequest;
@@ -64,6 +66,27 @@ final class UserGrpcService implements UserServiceInterface
             );
 
             return (new FindOrCreateByPhoneResponse())
+                ->setUser($this->toUserProfile($result['user']))
+                ->setIsNewUser((bool)$result['is_new_user']);
+        });
+    }
+
+    public function FindOrCreateBySocialIdentity(
+        ContextInterface $ctx,
+        FindOrCreateBySocialIdentityRequest $in
+    ): FindOrCreateBySocialIdentityResponse {
+        return $this->call($ctx, 'FindOrCreateBySocialIdentity', function () use ($in): FindOrCreateBySocialIdentityResponse {
+            $registrationKey = trim($in->getRegistrationKey());
+            if ($registrationKey === '') {
+                throw GRPCException::create('registration_key is required', StatusCode::INVALID_ARGUMENT);
+            }
+
+            $result = $this->userService->findOrCreateUserBySocialIdentity(
+                $registrationKey,
+                trim($in->getRegisterChannel()) !== '' ? trim($in->getRegisterChannel()) : 'default',
+            );
+
+            return (new FindOrCreateBySocialIdentityResponse())
                 ->setUser($this->toUserProfile($result['user']))
                 ->setIsNewUser((bool)$result['is_new_user']);
         });

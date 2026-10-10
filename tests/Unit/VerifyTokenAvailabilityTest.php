@@ -27,7 +27,7 @@ use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
-use Services\AuthService\Infrastructure\Repository\PdoAuthRepository;
+use Services\AuthService\Infrastructure\Repository\EloquentAuthRepository;
 use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
 use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
@@ -76,8 +76,9 @@ final class VerifyTokenAvailabilityTest extends TestCase
 
         if ($failure === 'mysql') {
             $pdo = $this->createMock(PDO::class);
+            $pdo->method('getAttribute')->with(PDO::ATTR_DRIVER_NAME)->willReturn('mysql');
             $pdo->method('prepare')->willThrowException(new PDOException('database connection lost', 2006));
-            $repository = new PdoAuthRepository($pdo, new Snowflake());
+            $repository = new EloquentAuthRepository($pdo, new Snowflake());
         } elseif (in_array($failure, ['redis', 'redis-false'], true)) {
             $redis = $this->createMock(Redis::class);
             if ($failure === 'redis') {

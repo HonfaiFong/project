@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../../vendor/autoload.php';
 
 use Packages\Outbox\OutboxRelay;
+use Packages\Database\EloquentConnection;
 use Packages\Outbox\OutboxRepository;
 use Packages\Outbox\RabbitMqEventPublisher;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
@@ -36,6 +37,10 @@ for (;;) {
         error_log('Outbox relay failed: ' . $exception->getMessage());
         sleep(5);
     } finally {
+        if (isset($pdo)) {
+            EloquentConnection::forget($pdo);
+            unset($relay, $pdo);
+        }
         if (isset($channel)) {
             try { $channel->close(); } catch (Throwable) {}
             unset($channel);

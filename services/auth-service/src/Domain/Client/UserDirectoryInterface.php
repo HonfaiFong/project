@@ -13,6 +13,9 @@ interface UserDirectoryInterface
      */
     public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array;
 
+    /** @return array{user_id: string, is_new_user: bool} */
+    public function findOrCreateBySocialIdentity(string $registrationKey, string $registerChannel): array;
+
     /**
      * @return array{user_id: string, status: int}
      */

@@ -14,20 +14,22 @@ use Webman\Http\Request;
 use Webman\Http\Response;
 use Webman\MiddlewareInterface;
 
-final class SocialLoginRateLimitMiddleware implements MiddlewareInterface
+final readonly class SocialLoginRateLimitMiddleware implements MiddlewareInterface
 {
-    private readonly TrustedProxyClientIpResolver $clientIpResolver;
+    private TrustedProxyClientIpResolver $clientIpResolver;
 
     /**
      * @param Closure(string, int): int|null $counter
      * @param list<string> $trustedProxyCidrs
+     * @param string $environment 'development' or 'production'
      */
     public function __construct(
-        private readonly ?Closure $counter = null,
-        private readonly int $limit = 30,
-        private readonly int $windowSeconds = 60,
+        private ?Closure $counter = null,
+        private int $limit = 30,
+        private int $windowSeconds = 60,
         array $trustedProxyCidrs = [],
         ?TrustedProxyClientIpResolver $clientIpResolver = null,
+        private string $environment = 'production',
     ) {
         if ($this->limit < 1 || $this->windowSeconds < 1) {
             throw new InvalidArgumentException('Social login rate limit settings must be positive');
@@ -76,8 +78,6 @@ final class SocialLoginRateLimitMiddleware implements MiddlewareInterface
 
     private function isProduction(): bool
     {
-        $environment = strtolower(trim((string)(getenv('APP_ENV') ?: 'production')));
-
-        return !in_array($environment, ['local', 'development', 'dev', 'testing'], true);
+        return $this->environment !== 'development';
     }
 }

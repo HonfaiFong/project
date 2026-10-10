@@ -15,6 +15,10 @@ interface SocialIdentityRepositoryInterface
 
     public function findById(string $id): ?SocialIdentity;
 
+    public function beginRegistration(string $identityId): SocialIdentity;
+
+    public function completeRegistration(string $identityId, string $userId): SocialIdentity;
+
     public function bindToUser(string $identityId, string $userId): SocialIdentity;
 
     public function touchLastLogin(string $identityId): void;

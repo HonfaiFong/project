@@ -156,6 +156,11 @@ final class AuthUserDirectoryFake implements UserDirectoryInterface
         ];
     }
 
+    public function findOrCreateBySocialIdentity(string $registrationKey, string $registerChannel): array
+    {
+        return ['user_id' => '20001', 'is_new_user' => false];
+    }
+
     public function findById(string $userId): array
     {
         if ($this->unavailable) {
@@ -195,8 +200,22 @@ final class AuthServiceTest extends TestCase
             wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
             credentialVerifier: new LoginCredentialVerifier('local', 'dev-1234', null, true),
             userDirectory: $this->userDirectory,
+            phoneLoginEnabled: true,
             accessTokenRevocationStore: $this->revocationStore
         );
+    }
+
+    public function testPhoneLoginIsDisabledByDefaultEvenWithValidDevelopmentCredentials(): void
+    {
+        $service = new AuthApplicationService(
+            authRepo: $this->repo,
+            jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
+            wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
+            credentialVerifier: new LoginCredentialVerifier('local', 'dev-1234', null, true),
+            userDirectory: $this->userDirectory,
+        );
+        $this->expectExceptionCode(ErrorCode::AUTH_UNAUTHORIZED->value);
+        $service->login('+8613800000000', 'dev-1234', ['device_uuid' => 'device', 'platform' => 'ios', 'app_version' => '1']);
     }
 
     public function testLoginAuthenticatesAndResolvesUser(): void

@@ -41,6 +41,7 @@ enum SocialProvider {
 enum SocialLoginState {
   SOCIAL_LOGIN_STATE_UNSPECIFIED = 0;
   SOCIAL_LOGIN_STATE_AUTHENTICATED = 1;
+  // Deprecated: registration no longer asks clients for a phone binding step.
   SOCIAL_LOGIN_STATE_PHONE_BINDING_REQUIRED = 2;
 }
 
@@ -76,6 +77,20 @@ message BindSocialPhoneRequest {
 
 message BindSocialPhoneResponse {
   LoginResponse login = 1;
+}
+
+// Binds the provider identity behind `code` to the user authenticated by
+// `access_token`. The Gateway never trusts a body user_id: the user identity
+// comes from the verified access token only.
+message BindSocialIdentityRequest {
+  SocialProvider provider = 1;
+  string code = 2;
+  string access_token = 3;
+}
+
+message BindSocialIdentityResponse {
+  uint64 user_id = 1;
+  SocialProvider provider = 2;
 }
 
 message RefreshTokenRequest {
@@ -123,8 +138,15 @@ message CreateWsTicketResponse {
 service AuthService {
   rpc Login(LoginRequest) returns (LoginResponse);
   rpc SocialLogin(SocialLoginRequest) returns (SocialLoginResponse);
-  rpc SendSocialPhoneCode(SendSocialPhoneCodeRequest) returns (SendSocialPhoneCodeResponse);
-  rpc BindSocialPhone(BindSocialPhoneRequest) returns (BindSocialPhoneResponse);
+  // Deprecated phone-binding flow: retained for wire compatibility. The
+  // transport rejects both RPCs with AUTH_UNAUTHORIZED.
+  rpc SendSocialPhoneCode(SendSocialPhoneCodeRequest) returns (SendSocialPhoneCodeResponse) {
+    option deprecated = true;
+  }
+  rpc BindSocialPhone(BindSocialPhoneRequest) returns (BindSocialPhoneResponse) {
+    option deprecated = true;
+  }
+  rpc BindSocialIdentity(BindSocialIdentityRequest) returns (BindSocialIdentityResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse);

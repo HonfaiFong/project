@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Apps\ApiGateway\Action\CreateWsTicketAction;
+use Apps\ApiGateway\Action\PersonaLookup;
+use Apps\ApiGateway\Action\WsTicketClient;
 use Apps\ApiGateway\Controller\AuthController;
 use Apps\ApiGateway\Controller\HealthController;
 use Apps\ApiGateway\Controller\PersonaController;
@@ -11,29 +13,31 @@ use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
+use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
 use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
-use Psr\Container\ContainerInterface;
+use Illuminate\Container\Container;
+use Illuminate\Contracts\Validation\Factory;
+use Illuminate\Translation\ArrayLoader;
+use Illuminate\Translation\Translator;
+use Illuminate\Validation\Factory as ValidationFactory;
 
+$settings = config('gateway');
 $socialLoginRateLimitCounter = null;
-$trustedProxyCidrs = array_values(array_filter(
-    array_map('trim', explode(',', (string)(getenv('SOCIAL_TRUSTED_PROXY_CIDRS') ?: ''))),
-    static fn (string $cidr): bool => $cidr !== '',
-));
+$trustedProxyCidrs = $settings['trusted_proxy_cidrs'];
 $trustedProxyClientIpResolver = new TrustedProxyClientIpResolver($trustedProxyCidrs);
-if (trim((string)(getenv('REDIS_HOST') ?: '')) !== '') {
+$redisSettings = $settings['redis'];
+if ($redisSettings['host'] !== '') {
     $redis = null;
-    $socialLoginRateLimitCounter = static function (string $key, int $ttl) use (&$redis): int {
+    $socialLoginRateLimitCounter = static function (string $key, int $ttl) use (&$redis, $redisSettings): int {
         if ($redis === null) {
             $redis = new Redis();
-            $host = trim((string)getenv('REDIS_HOST'));
-            $port = (int)(getenv('REDIS_PORT') ?: 6379);
-            if (!$redis->connect($host, $port, 1.0)) {
+            if (!$redis->connect($redisSettings['host'], $redisSettings['port'], $redisSettings['connect_timeout'])) {
                 $redis = null;
                 throw new RuntimeException('Gateway Redis connection failed');
             }
-            $redis->setOption(Redis::OPT_READ_TIMEOUT, 1.0);
+            $redis->setOption(Redis::OPT_READ_TIMEOUT, $redisSettings['read_timeout']);
 
-            $password = trim((string)(getenv('REDIS_PASSWORD') ?: ''));
+            $password = $redisSettings['password'];
             if ($password !== '' && !$redis->auth($password)) {
                 $redis = null;
                 throw new RuntimeException('Gateway Redis authentication failed');
@@ -51,54 +55,52 @@ LUA, [$key, (string)$ttl], 1);
             }
 
             return $count;
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             $redis = null;
             throw $e;
         }
     };
 }
 
-return (new Webman\Container())->addDefinitions([
-    TrustedProxyClientIpResolver::class => static fn (): TrustedProxyClientIpResolver => $trustedProxyClientIpResolver,
-    AuthServiceClient::class => static fn (): AuthServiceClient => new AuthServiceClient(
-        target: getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051',
-        timeoutMs: (int)(getenv('GRPC_AUTH_TIMEOUT_MS') ?: 300),
-        socialLoginTimeoutMs: (int)(getenv('GRPC_SOCIAL_LOGIN_TIMEOUT_MS') ?: 7000),
-        socialPhoneCodeTimeoutMs: (int)(getenv('GRPC_SOCIAL_PHONE_CODE_TIMEOUT_MS') ?: 5000),
-        socialBindTimeoutMs: (int)(getenv('GRPC_SOCIAL_BIND_TIMEOUT_MS') ?: 1000),
-        socialHttpTimeoutMs: (int)(getenv('SOCIAL_HTTP_TIMEOUT_MS') ?: 3000),
-        serviceToken: trim((string)(getenv('GRPC_AUTH_TOKEN') ?: '')) ?: null,
-    ),
-    UserServiceClient::class => static fn (): UserServiceClient => new UserServiceClient(
-        target: getenv('GRPC_USER_SERVICE') ?: 'user-service:50052',
-        serviceToken: trim((string)(getenv('GRPC_USER_TOKEN') ?: '')) ?: null,
-    ),
-    CreateWsTicketAction::class => static fn (ContainerInterface $c): CreateWsTicketAction => new CreateWsTicketAction(
-        $c->get(AuthServiceClient::class), $c->get(UserServiceClient::class)
-    ),
-    AuthController::class => static fn (ContainerInterface $c): AuthController => new AuthController(
-        $c->get(AuthServiceClient::class),
-        $c->get(CreateWsTicketAction::class),
-        $c->get(TrustedProxyClientIpResolver::class),
-    ),
-    UserController::class => static fn (ContainerInterface $c): UserController => new UserController(
-        $c->get(UserServiceClient::class)
-    ),
-    PersonaController::class => static fn (ContainerInterface $c): PersonaController => new PersonaController(
-        $c->get(UserServiceClient::class)
-    ),
-    HealthController::class => static fn (ContainerInterface $c): HealthController => new HealthController([
-        'auth_service' => $c->get(AuthServiceClient::class),
-        'user_service' => $c->get(UserServiceClient::class),
-    ]),
-    AuthMiddleware::class => static fn (ContainerInterface $c): AuthMiddleware => new AuthMiddleware(
-        $c->get(AuthServiceClient::class)
-    ),
-    SocialLoginRateLimitMiddleware::class => static fn (): SocialLoginRateLimitMiddleware => new SocialLoginRateLimitMiddleware(
-        counter: $socialLoginRateLimitCounter,
-        limit: (int)(getenv('SOCIAL_LOGIN_RATE_LIMIT') ?: 30),
-        windowSeconds: (int)(getenv('SOCIAL_LOGIN_RATE_WINDOW_SECONDS') ?: 60),
-        trustedProxyCidrs: $trustedProxyCidrs,
-        clientIpResolver: $trustedProxyClientIpResolver,
-    ),
-]);
+$container = new Container();
+$container->instance(TrustedProxyClientIpResolver::class, $trustedProxyClientIpResolver);
+$container->singleton(Factory::class, static fn (Container $container): ValidationFactory => new ValidationFactory(
+    new Translator(new ArrayLoader(), 'en'),
+    $container,
+));
+$container->singleton(AuthServiceClient::class, static fn (): AuthServiceClient => new AuthServiceClient(
+    target: $settings['grpc']['auth']['target'],
+    timeoutMs: $settings['grpc']['auth']['timeout_ms'],
+    socialLoginTimeoutMs: $settings['grpc']['auth']['social_login_timeout_ms'],
+    socialBindTimeoutMs: $settings['grpc']['auth']['social_bind_timeout_ms'],
+    socialHttpTimeoutMs: $settings['grpc']['auth']['social_http_timeout_ms'],
+    serviceToken: $settings['grpc']['auth']['service_token'],
+));
+$container->singleton(UserServiceClient::class, static fn (): UserServiceClient => new UserServiceClient(
+    target: $settings['grpc']['user']['target'],
+    serviceToken: $settings['grpc']['user']['service_token'],
+));
+$container->alias(AuthServiceClient::class, WsTicketClient::class);
+$container->alias(UserServiceClient::class, PersonaLookup::class);
+
+foreach ([CreateWsTicketAction::class, AuthController::class, UserController::class, PersonaController::class, AuthMiddleware::class] as $class) {
+    $container->singleton($class);
+}
+
+$container->singleton(HealthController::class, static fn (Container $container): HealthController => new HealthController([
+    'auth_service' => $container->get(AuthServiceClient::class),
+    'user_service' => $container->get(UserServiceClient::class),
+]));
+$container->singleton(AppEnvironmentMiddleware::class, static fn (): AppEnvironmentMiddleware => new AppEnvironmentMiddleware(
+    environment: $settings['environment'],
+));
+$container->singleton(SocialLoginRateLimitMiddleware::class, static fn (): SocialLoginRateLimitMiddleware => new SocialLoginRateLimitMiddleware(
+    counter: $socialLoginRateLimitCounter,
+    limit: $settings['social_login_rate_limit']['limit'],
+    windowSeconds: $settings['social_login_rate_limit']['window_seconds'],
+    trustedProxyCidrs: $trustedProxyCidrs,
+    clientIpResolver: $trustedProxyClientIpResolver,
+    environment: $settings['environment'],
+));
+
+return $container;

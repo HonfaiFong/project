@@ -11,9 +11,9 @@ use Apps\ApiGateway\Response\PersonaPresenter;
 use Contracts\Errors\ErrorCode;
 use Webman\Http\Response;
 
-final class PersonaController
+final readonly class PersonaController
 {
-    public function __construct(private readonly UserServiceClient $userClient)
+    public function __construct(private UserServiceClient $userClient)
     {
     }
 
@@ -32,27 +32,26 @@ final class PersonaController
 
     public function create(GatewayRequest $request): Response
     {
-        $body = (array)$request->post();
         $userId = $request->authContext['user_id'];
         if ($userId === '') {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 
-        $nickname = trim((string)($body['nickname'] ?? ''));
+        $nickname = trim((string)$request->post('nickname', ''));
         if ($nickname === '') {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'nickname is required');
         }
 
-        $type = (int)($body['type'] ?? 1);
-        $avatarKey = !empty($body['avatar_key']) ? (string)$body['avatar_key'] : null;
-        $bio = !empty($body['bio']) ? (string)$body['bio'] : null;
+        $type = (int)$request->post('type', 1);
+        $avatarKey = $request->post('avatar_key') ? (string)$request->post('avatar_key') : null;
+        $bio = $request->post('bio') ? (string)$request->post('bio') : null;
 
         $res = $this->userClient->createPersona($userId, $type, $nickname, $avatarKey, $bio);
 
         return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []), 201);
     }
 
-    public function get(GatewayRequest $request, string $personaId): Response
+    public function get(string $personaId): Response
     {
         if ($personaId === '') {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'persona_id is required');
@@ -64,15 +63,14 @@ final class PersonaController
 
     public function update(GatewayRequest $request, string $personaId): Response
     {
-        $body = (array)$request->post();
         $userId = $request->authContext['user_id'];
         if ($userId === '') {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 
-        $nickname = isset($body['nickname']) ? (string)$body['nickname'] : null;
-        $avatarKey = isset($body['avatar_key']) ? (string)$body['avatar_key'] : null;
-        $bio = isset($body['bio']) ? (string)$body['bio'] : null;
+        $nickname = $request->post('nickname') !== null ? (string)$request->post('nickname') : null;
+        $avatarKey = $request->post('avatar_key') !== null ? (string)$request->post('avatar_key') : null;
+        $bio = $request->post('bio') !== null ? (string)$request->post('bio') : null;
 
         $res = $this->userClient->updatePersona($personaId, $userId, $nickname, $avatarKey, $bio);
         return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []));

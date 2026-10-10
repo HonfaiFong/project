@@ -6,6 +6,8 @@ namespace Services\AuthService\Transport\Grpc;
 
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Auth\V1\AuthServiceInterface;
+use Contracts\Gen\Auth\V1\BindSocialIdentityRequest;
+use Contracts\Gen\Auth\V1\BindSocialIdentityResponse;
 use Contracts\Gen\Auth\V1\CreateWsTicketRequest;
 use Contracts\Gen\Auth\V1\CreateWsTicketResponse;
 use Contracts\Gen\Auth\V1\DeviceInfo;
@@ -17,6 +19,7 @@ use Contracts\Gen\Auth\V1\SendSocialPhoneCodeRequest;
 use Contracts\Gen\Auth\V1\SendSocialPhoneCodeResponse;
 use Contracts\Gen\Auth\V1\SocialLoginRequest;
 use Contracts\Gen\Auth\V1\SocialLoginResponse;
+use Contracts\Gen\Auth\V1\SocialLoginState;
 use Contracts\Gen\Auth\V1\LogoutRequest;
 use Contracts\Gen\Auth\V1\LogoutResponse;
 use Contracts\Gen\Auth\V1\RefreshTokenRequest;
@@ -33,6 +36,7 @@ use Spiral\RoadRunner\GRPC\ContextInterface;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
 use Spiral\RoadRunner\GRPC\ResponseTrailers;
 use Spiral\RoadRunner\GRPC\StatusCode;
+use RuntimeException;
 use Throwable;
 
 final class RoadRunnerAuthService implements AuthServiceInterface
@@ -90,25 +94,18 @@ final class RoadRunnerAuthService implements AuthServiceInterface
     public function SocialLogin(ContextInterface $ctx, SocialLoginRequest $in): SocialLoginResponse
     {
         return $this->call($ctx, 'SocialLogin', function () use ($in): SocialLoginResponse {
-            $result = $this->authService->socialLogin(
+            $login = $this->authService->socialLogin(
                 $this->socialProvider($in->getProvider()),
                 trim($in->getCode()),
                 $this->deviceInfo($in->getDevice()),
             );
 
-            $response = new SocialLoginResponse([
-                'state' => $result['state'] === 'authenticated' ? 1 : 2,
+            // Social login now always registers or resumes the user and returns
+            // a session; the phone-binding-required state is retired.
+            return new SocialLoginResponse([
+                'state' => SocialLoginState::SOCIAL_LOGIN_STATE_AUTHENTICATED,
+                'login' => $this->loginResponse($login['login']),
             ]);
-
-            if ($result['state'] === 'authenticated') {
-                $response->setLogin($this->loginResponse($result['login']));
-            } else {
-                $response
-                    ->setBindToken((string)$result['bind_token'])
-                    ->setBindTokenExpiresAt((int)$result['bind_token_expires_at']);
-            }
-
-            return $response;
         });
     }
 
@@ -116,37 +113,33 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         ContextInterface $ctx,
         SendSocialPhoneCodeRequest $in
     ): SendSocialPhoneCodeResponse {
-        return $this->call($ctx, 'SendSocialPhoneCode', function () use ($ctx, $in): SendSocialPhoneCodeResponse {
-            $result = $this->authService->sendSocialPhoneCode(
-                trim($in->getBindToken()),
-                trim($in->getPhone()),
-                [
-                    'ip'          => $this->metadataValue($ctx, 'x-client-ip'),
-                    'device_uuid' => $this->metadataValue($ctx, 'x-device-id'),
-                ],
-            );
-
-            return new SendSocialPhoneCodeResponse([
-                'expires_in'   => $result['expires_in'],
-                'resend_after' => $result['resend_after'],
-            ]);
-        });
+        // The phone-binding flow was replaced by authenticated social login
+        // (BindSocialIdentity). The RPC stays declared for wire compatibility
+        // and is rejected before any application or OAuth call.
+        throw $this->rejectedLegacyRpc($ctx, 'SendSocialPhoneCode');
     }
 
     public function BindSocialPhone(
         ContextInterface $ctx,
         BindSocialPhoneRequest $in
     ): BindSocialPhoneResponse {
-        return $this->call($ctx, 'BindSocialPhone', function () use ($in): BindSocialPhoneResponse {
-            $result = $this->authService->bindSocialPhone(
-                trim($in->getBindToken()),
-                trim($in->getPhone()),
+        throw $this->rejectedLegacyRpc($ctx, 'BindSocialPhone');
+    }
+
+    public function BindSocialIdentity(
+        ContextInterface $ctx,
+        BindSocialIdentityRequest $in
+    ): BindSocialIdentityResponse {
+        return $this->call($ctx, 'BindSocialIdentity', function () use ($in): BindSocialIdentityResponse {
+            $result = $this->authService->bindSocialIdentity(
+                $this->socialProvider($in->getProvider()),
                 trim($in->getCode()),
-                $this->deviceInfo($in->getDevice()),
+                $in->getAccessToken(),
             );
 
-            return new BindSocialPhoneResponse([
-                'login' => $this->loginResponse($result['login']),
+            return new BindSocialIdentityResponse([
+                'user_id'  => $this->uint64((string)$result['user_id'], 'user_id'),
+                'provider' => $this->socialProviderValue((string)$result['provider']),
             ]);
         });
     }
@@ -289,6 +282,39 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             2 => SocialProvider::QQ,
             default => throw GRPCException::create('social provider is required', StatusCode::INVALID_ARGUMENT),
         };
+    }
+
+    private function socialProviderValue(string $provider): int
+    {
+        return match ($provider) {
+            SocialProvider::WECHAT->value => 1,
+            SocialProvider::QQ->value => 2,
+            default => throw new RuntimeException(
+                ErrorCode::SERVICE_UNAVAILABLE->message(),
+                ErrorCode::SERVICE_UNAVAILABLE->value
+            ),
+        };
+    }
+
+    /**
+     * Rejects a retired RPC without touching the application service.
+     *
+     * The response trailers are set inline because this failure never reaches
+     * call()'s error mapping; a missing trailer would let the gateway fall back
+     * to the transport status instead of the business code.
+     */
+    private function rejectedLegacyRpc(ContextInterface $ctx, string $method): GRPCException
+    {
+        // Authorize first: an unknown caller must not learn which RPCs exist.
+        $this->authorizer?->authorize($ctx, $method);
+
+        $this->logger->warning("Rejected deprecated Auth gRPC call: {$method}", ['method' => $method]);
+        $this->attachAppErrorTrailer($ctx, ErrorCode::AUTH_UNAUTHORIZED->value);
+
+        return GRPCException::create(
+            ErrorCode::AUTH_UNAUTHORIZED->message(),
+            StatusCode::UNAUTHENTICATED
+        );
     }
 
     /** @param array<string, mixed> $result */

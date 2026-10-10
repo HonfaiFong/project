@@ -14,6 +14,8 @@
   - `outbox_events`
 
 ## 3. gRPC API
+- `user.v1.UserService/FindOrCreateByPhone`
+- `user.v1.UserService/FindOrCreateBySocialIdentity`
 - `user.v1.UserService/GetUser`
 - `user.v1.UserService/BatchGetUsers`
 - `user.v1.UserService/UpdateUser`
@@ -33,10 +35,23 @@
 
 ## 6. Dependencies
 - MySQL (`user_db`)
+- Persistence uses Illuminate Eloquent models. Users, personas, and Outbox events share one connection and transaction; run `composer install` and restart PHP workers after dependency updates.
 - Redis (Persona and User caching)
 - Internal gRPC callers use separate Gateway→User and Auth→User tokens. AuthService
-  is limited to `FindOrCreateByPhone` and `GetUser`; Gateway handles the public
+  is limited to `FindOrCreateByPhone`, `FindOrCreateBySocialIdentity` and `GetUser`; Gateway handles the public
   UserService operations.
+
+## 6.1 Social registration keys
+
+`FindOrCreateBySocialIdentity` receives the caller-owned `registration_key`
+(`social:` + `social_identities.id` for social logins) and stores it on the user
+row it creates in the same transaction as the default persona and the outbox
+events. The key is opaque here: the OAuth subject id is never sent to this
+service. A repeat or retried call resolves to the same user; the unique
+`users.social_registration_key` index (migration
+`20261009000000_add_user_social_registration_key`) is what serializes
+concurrent registrations, and a banned or soft-deleted account blocks
+re-registration instead of granting a second account.
 
 ## 7. Local Run
 ```bash

@@ -22,6 +22,15 @@ interface UserServiceInterface extends GRPC\ServiceInterface
 
     /**
     * @param GRPC\ContextInterface $ctx
+    * @param FindOrCreateBySocialIdentityRequest $in
+    * @return FindOrCreateBySocialIdentityResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function FindOrCreateBySocialIdentity(GRPC\ContextInterface $ctx, FindOrCreateBySocialIdentityRequest $in): FindOrCreateBySocialIdentityResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
     * @param GetUserRequest $in
     * @return GetUserResponse
     *

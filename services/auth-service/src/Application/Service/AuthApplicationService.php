@@ -11,12 +11,8 @@ use Services\AuthService\Domain\Auth\SocialProvider;
 use Services\AuthService\Domain\Auth\CredentialVerifierInterface;
 use Services\AuthService\Domain\Client\UserDirectoryInterface;
 use Services\AuthService\Domain\Entity\SocialIdentity;
-use Services\AuthService\Domain\Phone\PhoneVerificationServiceInterface;
-use Services\AuthService\Domain\Phone\VerificationScene;
 use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
-use Services\AuthService\Domain\Repository\DistributedLockInterface;
-use Services\AuthService\Domain\Repository\SocialBindSessionStoreInterface;
 use Services\AuthService\Domain\Repository\SocialIdentityRepositoryInterface;
 use Services\AuthService\Infrastructure\OAuth\SocialAuthProviderRegistry;
 use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
@@ -35,13 +31,8 @@ final class AuthApplicationService
         private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null,
         private readonly ?SocialAuthProviderRegistry $socialProviderRegistry = null,
         private readonly ?SocialIdentityRepositoryInterface $socialIdentityRepository = null,
-        private readonly ?SocialBindSessionStoreInterface $socialBindSessionStore = null,
-        private readonly ?PhoneVerificationServiceInterface $phoneVerificationService = null,
-        private readonly ?DistributedLockInterface $distributedLock = null,
         private readonly ?PhoneNormalizer $phoneNormalizer = null,
-        private readonly int $socialBindTokenTtl = 600,
-        private readonly int $smsCodeTtl = 300,
-        private readonly int $smsResendInterval = 60,
+        private readonly bool $phoneLoginEnabled = false,
     ) {
     }
 
@@ -58,6 +49,10 @@ final class AuthApplicationService
         array $deviceInfo,
         ?string $password = null
     ): array {
+        if (!$this->phoneLoginEnabled) {
+            throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
+        }
+
         $phone = $this->normalizePhone($phone);
         $this->credentialVerifier->verify($phone, [
             'code'     => $code,
@@ -76,10 +71,10 @@ final class AuthApplicationService
     }
 
     /**
-     * Verifies a QQ/WeChat authorization code without creating a local User.
+     * Verifies OAuth and resumes an idempotent registration before issuing a session.
      *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
-     * @return array{state: string, bind_token?: string, bind_token_expires_at?: int, login?: array<string, mixed>}
+     * @return array{state: string, login: array<string, mixed>}
      */
     public function socialLogin(
         SocialProvider $provider,
@@ -113,149 +108,59 @@ final class AuthApplicationService
             return $this->authenticatedSocialLogin($identity, $deviceInfo);
         }
 
-        return [
-            'state' => 'phone_binding_required',
-        ] + $this->socialBindSessionStore->issue($identity->id, $this->socialBindTokenTtl);
-    }
-
-    /**
-     * @param array{ip?: ?string, device_uuid?: ?string} $context
-     * @return array{expires_in: int, resend_after: int}
-     */
-    public function sendSocialPhoneCode(
-        string $bindToken,
-        string $phone,
-        array $context = []
-    ): array {
-        $this->requireSocialDependencies();
-
-        $session = $this->socialBindSessionStore->verify($bindToken);
-        if ($session === null) {
-            throw new RuntimeException(
-                ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->message(),
-                ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->value
-            );
+        // Persist intent before the RPC: a timeout must never let a manual bind
+        // steal an identity whose UserService transaction may already have committed.
+        $identity = $this->socialIdentityRepository->beginRegistration($identity->id);
+        if ($identity->isActive()) {
+            return $this->authenticatedSocialLogin($identity, $deviceInfo);
         }
 
-        $identity = $this->socialIdentityRepository->findById($session->socialIdentityId);
-        if ($identity === null || !$identity->isPendingPhone()) {
-            throw new RuntimeException(
-                ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->message(),
-                ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value
-            );
-        }
-
-        $phone = $this->normalizePhone($phone);
-        $this->socialBindSessionStore->setPhone($bindToken, $phone);
-        $this->phoneVerificationService->send(
-            phone: $phone,
-            scene: VerificationScene::SOCIAL_BIND_PHONE,
-            contextId: $identity->id,
-            context: $context,
+        $user = $this->userDirectory->findOrCreateBySocialIdentity(
+            'social:' . $identity->id,
+            $identity->provider->value,
         );
+        $userId = (string)$user['user_id'];
+        if ($userId === '' || $userId === '0') {
+            throw new RuntimeException(ErrorCode::USER_NOT_FOUND->message(), ErrorCode::USER_NOT_FOUND->value);
+        }
+        $this->assertUserCanAuthenticate($userId);
+        $identity = $this->socialIdentityRepository->completeRegistration($identity->id, $userId);
+        $login = $this->issueTokenForUser($userId, $deviceInfo, (bool)$user['is_new_user']);
+        $this->socialIdentityRepository->touchLastLogin($identity->id);
 
-        return [
-            'expires_in'   => $this->smsCodeTtl,
-            'resend_after' => $this->smsResendInterval,
-        ];
+        return ['state' => 'authenticated', 'login' => $login];
     }
 
-    /**
-     * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
-     * @return array{state: string, login: array<string, mixed>}
-     */
-    public function bindSocialPhone(
-        string $bindToken,
-        string $phone,
-        string $code,
-        array $deviceInfo
-    ): array {
+    /** @return array{user_id: string, provider: string} */
+    public function bindSocialIdentity(SocialProvider $provider, string $code, string $accessToken): array
+    {
         $this->requireSocialDependencies();
-
-        $session = $this->socialBindSessionStore->verify($bindToken);
-        if ($session === null) {
-            throw new RuntimeException(
-                ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->message(),
-                ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->value
-            );
+        $session = $this->verifyToken($accessToken);
+        if (!$session['valid']) {
+            throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
-
-        $identity = $this->socialIdentityRepository->findById($session->socialIdentityId);
-        if ($identity === null || $identity->isDisabled()) {
-            throw new RuntimeException(
-                ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->message(),
-                ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value
-            );
+        $userId = $session['user_id'];
+        $externalIdentity = $this->socialProviderRegistry->get($provider)->authenticate($code);
+        $identity = $this->socialIdentityRepository->reserve($externalIdentity);
+        // Recheck after the external request, which may have taken several seconds.
+        if (!$this->verifyToken($accessToken)['valid']) {
+            throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
+        $this->socialIdentityRepository->bindToUser($identity->id, $userId);
 
-        $phone = $this->normalizePhone($phone);
-        if (!$session->phoneVerified) {
-            $this->socialBindSessionStore->assertPhone($bindToken, $phone);
-            $this->phoneVerificationService->verify(
-                phone: $phone,
-                code: $code,
-                scene: VerificationScene::SOCIAL_BIND_PHONE,
-                contextId: $identity->id,
-                bindToken: $bindToken,
-            );
-            $session = $this->socialBindSessionStore->markPhoneVerified($bindToken, $phone);
-        } else {
-            $session = $this->socialBindSessionStore->assertPhone($bindToken, $phone);
-        }
+        return ['user_id' => $userId, 'provider' => $provider->value];
+    }
 
-        $lockKey = 'auth:social:finalize:' . $identity->id;
-        $lockOwner = $this->distributedLock->acquire($lockKey, 10);
-        if ($lockOwner === null) {
-            throw new RuntimeException(
-                ErrorCode::IDEMPOTENCY_CONFLICT->message(),
-                ErrorCode::IDEMPOTENCY_CONFLICT->value
-            );
-        }
+    /** @deprecated Phone binding is no longer a public authentication flow. */
+    public function sendSocialPhoneCode(string $bindToken, string $phone, array $context = []): array
+    {
+        throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
+    }
 
-        try {
-            $identity = $this->socialIdentityRepository->findById($identity->id);
-            if ($identity === null || $identity->isDisabled()) {
-                throw new RuntimeException(
-                    ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->message(),
-                    ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value
-                );
-            }
-
-            if ($identity->isActive()) {
-                $result = $this->authenticatedSocialLogin($identity, $deviceInfo);
-                $this->socialBindSessionStore->consume($bindToken);
-
-                return $result;
-            }
-
-            $userResult = $this->userDirectory->findOrCreateByPhone(
-                $session->verifiedPhone ?? $phone,
-                $identity->provider->value,
-            );
-            $userId = (string)$userResult['user_id'];
-            if ($userId === '' || $userId === '0') {
-                throw new RuntimeException(
-                    ErrorCode::USER_NOT_FOUND->message(),
-                    ErrorCode::USER_NOT_FOUND->value
-                );
-            }
-
-            $this->socialIdentityRepository->bindToUser($identity->id, $userId);
-            $login = $this->issueTokenForUser(
-                $userId,
-                $deviceInfo,
-                (bool)$userResult['is_new_user']
-            );
-
-            $this->socialBindSessionStore->consume($bindToken);
-
-            return [
-                'state' => 'authenticated',
-                'login' => $login,
-            ];
-        } finally {
-            $this->distributedLock->release($lockKey, $lockOwner);
-        }
+    /** @deprecated Phone binding is no longer a public authentication flow. */
+    public function bindSocialPhone(string $bindToken, string $phone, string $code, array $deviceInfo): array
+    {
+        throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
     }
 
     /**
@@ -478,9 +383,6 @@ final class AuthApplicationService
         if (
             $this->socialProviderRegistry === null
             || $this->socialIdentityRepository === null
-            || $this->socialBindSessionStore === null
-            || $this->phoneVerificationService === null
-            || $this->distributedLock === null
         ) {
             throw new RuntimeException(
                 ErrorCode::SERVICE_UNAVAILABLE->message(),

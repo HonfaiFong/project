@@ -17,18 +17,17 @@ final class ApiResponse
     {
         $trace ??= TraceContext::current();
 
-        $body = json_encode([
+        return json([
             'code'       => 0,
             'message'    => 'ok',
             'request_id' => $trace->requestId,
             'data'       => $data,
-        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-
-        return new Response($httpStatus, [
-                'Content-Type' => 'application/json',
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            ->withStatus($httpStatus)
+            ->withHeaders([
                 'X-Request-Id' => $trace->requestId,
                 'X-Trace-Id'   => $trace->traceId,
-            ], $body);
+            ]);
     }
 
     /**
@@ -43,22 +42,18 @@ final class ApiResponse
     ): Response {
         $trace ??= TraceContext::current();
 
-        if ($httpStatus === null) {
-            $enum = ErrorCode::tryFrom($code);
-            $httpStatus = $enum ? $enum->httpStatus() : 500;
-        }
+        $httpStatus ??= ErrorCode::tryFrom($code)?->httpStatus() ?? 500;
 
-        $body = json_encode([
+        return json([
             'code'       => $code,
             'message'    => $message,
             'request_id' => $trace->requestId,
             'details'    => $details,
-        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-
-        return new Response($httpStatus, [
-                'Content-Type' => 'application/json',
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            ->withStatus($httpStatus)
+            ->withHeaders([
                 'X-Request-Id' => $trace->requestId,
                 'X-Trace-Id'   => $trace->traceId,
-            ], $body);
+            ]);
     }
 }

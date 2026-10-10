@@ -5,18 +5,24 @@ declare(strict_types=1);
 namespace Tests\Integration;
 
 use Contracts\Errors\ErrorCode;
+use Illuminate\Database\Schema\Blueprint;
+use Packages\Database\EloquentConnection;
 use Packages\IdGenerator\Snowflake;
 use PDO;
+use Random\RandomException;
 use RuntimeException;
 use Services\AuthService\Domain\Auth\ExternalIdentity;
 use Services\AuthService\Domain\Auth\SocialProvider;
-use Services\AuthService\Infrastructure\Repository\PdoSocialIdentityRepository;
+use Services\AuthService\Infrastructure\Model\SocialIdentity as SocialIdentityModel;
+use Services\AuthService\Infrastructure\Repository\EloquentSocialIdentityRepository;
 use Tests\TestCase;
 use Throwable;
 
-final class PdoSocialIdentityRepositoryTest extends TestCase
+final class EloquentSocialIdentityRepositoryTest extends TestCase
 {
     private PDO $pdo;
+
+    private SocialIdentityModel $identities;
 
     protected function setUp(): void
     {
@@ -34,23 +40,59 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
             $this->markTestSkipped('MySQL integration service is not available: ' . $e->getMessage());
         }
 
-        $this->pdo->exec('DROP TABLE IF EXISTS social_identities');
-        $migrationPath = __DIR__ . '/../../infra/docker/mysql/migrations/0005_social_identities.sql';
-        $migration = file_get_contents($migrationPath);
-        if ($migration === false) {
-            throw new RuntimeException('Unable to read the social identities migration');
-        }
-        $createTableOffset = strpos($migration, 'CREATE TABLE');
-        if ($createTableOffset === false) {
-            throw new RuntimeException('Social identities migration has no CREATE TABLE statement');
-        }
-        $this->pdo->exec(substr($migration, $createTableOffset));
+        // Post-migration production shape: the identity identifiers are
+        // case-sensitive (utf8mb4_bin) and the aliases table keeps its
+        // composite primary key plus the identity foreign key.
+        $schema = EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder();
+        $schema->dropIfExists('social_identity_aliases');
+        $schema->dropIfExists('social_identities');
+        $schema->create('social_identities', static function (Blueprint $table): void {
+            $table->engine('InnoDB');
+            $table->charset('utf8mb4');
+            $table->collation('utf8mb4_unicode_ci');
+            $table->unsignedBigInteger('id')->primary();
+            $table->unsignedBigInteger('user_id')->nullable();
+            $table->string('provider', 16);
+            $table->string('provider_app_id', 64)->collation('utf8mb4_bin');
+            $table->string('identity_namespace', 64)->collation('utf8mb4_bin');
+            $table->string('subject_type', 16);
+            $table->string('subject_id', 128)->collation('utf8mb4_bin');
+            $table->string('openid', 128)->collation('utf8mb4_bin');
+            $table->string('unionid', 128)->nullable()->collation('utf8mb4_bin');
+            $table->smallInteger('status')->default(0);
+            $table->dateTime('bound_at', 3)->nullable();
+            $table->dateTime('last_login_at', 3)->nullable();
+            $table->dateTime('created_at', 3);
+            $table->dateTime('updated_at', 3);
+            $table->unique(['provider', 'identity_namespace', 'subject_type', 'subject_id'], 'uniq_social_subject');
+            $table->unique(['provider', 'provider_app_id', 'openid'], 'uniq_provider_openid');
+            $table->unique(['user_id', 'provider'], 'uniq_user_provider');
+            $table->index('user_id', 'idx_social_user');
+            $table->index('status', 'idx_social_status');
+        });
+        $schema->create('social_identity_aliases', static function (Blueprint $table): void {
+            $table->engine('InnoDB');
+            $table->charset('utf8mb4');
+            $table->collation('utf8mb4_bin');
+            $table->string('provider', 16);
+            $table->string('provider_app_id', 64);
+            $table->string('openid', 128);
+            $table->unsignedBigInteger('social_identity_id');
+            $table->primary(['provider', 'provider_app_id', 'openid']);
+            $table->index('social_identity_id', 'idx_social_alias_identity');
+            $table->foreign('social_identity_id')->references('id')->on('social_identities');
+        });
+
+        $this->identities = EloquentConnection::model(SocialIdentityModel::class, $this->pdo);
     }
 
     protected function tearDown(): void
     {
         if (isset($this->pdo)) {
-            $this->pdo->exec('DROP TABLE IF EXISTS social_identities');
+            $schema = EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder();
+            $schema->dropIfExists('social_identity_aliases');
+            $schema->dropIfExists('social_identities');
+            EloquentConnection::forget($this->pdo);
         }
     }
 
@@ -68,16 +110,10 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         $startPath = $prefix . '-start';
         /** @var array<int, array{process: resource, pipes: array<int, resource>}> $workers */
         $workers = [];
-        $this->pdo->exec(
-            'CREATE TRIGGER social_identity_reserve_delay
-             BEFORE INSERT ON social_identities
-             FOR EACH ROW
-             BEGIN
-                 DO SLEEP(0.1);
-             END'
-        );
-
         try {
+            // Each worker parks immediately before its social_identities
+            // insert inside the Eloquent beforeExecuting hook, so the unique
+            // key - not the pre-check read - has to serialize them.
             $workerScript = __DIR__ . '/fixtures/PdoSocialIdentityReserveWorker.php';
             foreach ([0, 1] as $index) {
                 $pipes = [];
@@ -117,7 +153,7 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
 
             $this->waitForPaths($readyPaths);
             file_put_contents($startPath, 'start');
-            $this->waitForReserveWorkers($workers, 5.0);
+            $this->waitForReserveWorkers($workers);
 
             $results = array_map(
                 static fn(string $path): string => trim((string)file_get_contents($path)),
@@ -131,7 +167,7 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
             [, $secondId] = explode('|', $results[1], 2);
             $this->assertSame('ok', $firstStatus);
             $this->assertSame($firstId, $secondId);
-            $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+            $this->assertSame(1, $this->identities->newQuery()->count());
         } finally {
             // Release workers even when the ready barrier fails, then terminate
             // and reap them before the fixture table is torn down.
@@ -145,10 +181,10 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
             }
             @unlink($startPath);
             @unlink($prefix);
-            $this->pdo->exec('DROP TRIGGER IF EXISTS social_identity_reserve_delay');
         }
     }
 
+    /** @throws Throwable */
     public function testSecondIdentityForSameUserAndProviderReturnsStableConflict(): void
     {
         $repository = $this->repository();
@@ -165,6 +201,65 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         }
     }
 
+    /** @throws Throwable */
+    public function testRegistrationIntentResumesAndCannotBeStolenByManualBinding(): void
+    {
+        $repo = new EloquentSocialIdentityRepository($this->pdo, new Snowflake(1));
+        $identity = $repo->reserve($this->identity('registration-openid'));
+        $intent = $repo->beginRegistration($identity->id);
+        $this->assertSame(3, $intent->status);
+        $this->assertSame($intent->id, $repo->beginRegistration($identity->id)->id);
+        try {
+            $repo->bindToUser($identity->id, '10002');
+            $this->fail('Manual bind stole a durable registration intent');
+        } catch (RuntimeException $e) {
+            $this->assertSame(ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value, $e->getCode());
+        }
+        $bound = $repo->completeRegistration($identity->id, '10001');
+        $this->assertSame('10001', $bound->userId);
+        $this->assertSame('10001', $repo->completeRegistration($identity->id, '10001')->userId);
+        $this->assertSame('10001', $repo->beginRegistration($identity->id)->userId);
+    }
+
+    /** @throws Throwable */
+    public function testManualBindingWinsBeforeRegistrationIntentWithoutCreatingAUser(): void
+    {
+        $repo = new EloquentSocialIdentityRepository($this->pdo, new Snowflake(1));
+        $identity = $repo->reserve($this->identity('manual-openid'));
+        $repo->bindToUser($identity->id, '10001');
+        $this->assertSame('10001', $repo->beginRegistration($identity->id)->userId);
+        $this->expectExceptionCode(ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value);
+        $repo->completeRegistration($identity->id, '10002');
+    }
+
+    /** @throws Throwable */
+    public function testUnionPromotionPreservesRegistrationKey(): void
+    {
+        $repo = new EloquentSocialIdentityRepository($this->pdo, new Snowflake(1));
+        $identity = $repo->reserve($this->identity('registration-promotion'));
+        $repo->beginRegistration($identity->id);
+        $promoted = $repo->findByExternalIdentity($this->identity('registration-promotion', 'registration-union'));
+        $this->assertSame($identity->id, $promoted->id);
+        $this->assertSame(3, $promoted->status);
+        $this->assertSame('10001', $repo->completeRegistration($identity->id, '10001')->userId);
+    }
+
+    /** @throws Throwable */
+    public function testRegistrationIntentSurvivesAnExistingPendingUnionRow(): void
+    {
+        $repo = $this->repository();
+        $union = $repo->reserve($this->identity('union-app-openid', 'new-unionid', 'other-app'));
+        $open = $repo->reserve($this->identity('recover-openid'));
+        $repo->beginRegistration($open->id);
+        $canonical = $repo->findByExternalIdentity($this->identity('recover-openid', 'new-unionid'));
+        $this->assertSame($open->id, $canonical->id);
+        $this->assertSame(3, $canonical->status);
+        $this->assertNull($repo->findById($union->id));
+        $this->assertSame($open->id, $repo->findByExternalIdentity($this->identity('union-app-openid', providerAppId: 'other-app'))->id);
+        $this->assertSame('10001', $repo->completeRegistration($open->id, '10001')->userId);
+    }
+
+    /** @throws Throwable */
     public function testOpenIdOnlyRowIsPromotedToUnionIdInPlace(): void
     {
         $repository = $this->repository();
@@ -180,13 +275,14 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         $this->assertSame('unionid', $promoted->subjectType);
         $this->assertSame($unionId, $promoted->subjectId);
         $this->assertSame($unionId, $promoted->unionId);
-        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+        $this->assertSame(1, $this->identities->newQuery()->count());
         $this->assertSame(
             $unionId,
-            $this->pdo->query('SELECT subject_id FROM social_identities')->fetchColumn(),
+            $this->identities->newQuery()->value('subject_id'),
         );
     }
 
+    /** @throws Throwable */
     public function testUnionActiveAndOpenIdPendingKeepTheActiveUnionRow(): void
     {
         $repository = $this->repository();
@@ -212,16 +308,17 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         );
 
         $canonical = $repository->findByExternalIdentity(
-            $this->identity('active-openid', 'active-unionid', 'wechat-main-app'),
+            $this->identity('active-openid', 'active-unionid'),
         );
 
         $this->assertNotNull($canonical);
         $this->assertSame('4101', $canonical->id);
         $this->assertSame('4100', $canonical->userId);
         $this->assertSame(1, $canonical->status);
-        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+        $this->assertSame(1, $this->identities->newQuery()->count());
     }
 
+    /** @throws Throwable */
     public function testUnionPendingAndOpenIdActiveTransferTheUserToTheUnionRow(): void
     {
         $repository = $this->repository();
@@ -247,16 +344,17 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         );
 
         $canonical = $repository->findByExternalIdentity(
-            $this->identity('pending-openid', 'pending-unionid', 'wechat-main-app'),
+            $this->identity('pending-openid', 'pending-unionid'),
         );
 
         $this->assertNotNull($canonical);
         $this->assertSame('4201', $canonical->id);
         $this->assertSame('4200', $canonical->userId);
         $this->assertSame(1, $canonical->status);
-        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+        $this->assertSame(1, $this->identities->newQuery()->count());
     }
 
+    /** @throws Throwable */
     public function testBothPendingRowsMergeToTheUnionRow(): void
     {
         $repository = $this->repository();
@@ -282,23 +380,29 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         );
 
         $canonical = $repository->findByExternalIdentity(
-            $this->identity('both-pending-openid', 'both-pending-unionid', 'wechat-main-app'),
+            $this->identity('both-pending-openid', 'both-pending-unionid'),
         );
 
         $this->assertNotNull($canonical);
         $this->assertSame('4301', $canonical->id);
         $this->assertNull($canonical->userId);
         $this->assertSame(0, $canonical->status);
-        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+        $this->assertSame(1, $this->identities->newQuery()->count());
     }
 
+    /** @throws Throwable */
     public function testSameUserLegacyUnionAndOpenIdRowsAreMergedAndOpenIdRowRemoved(): void
     {
         $repository = $this->repository();
         // Legacy duplicate rows could exist before uniq_user_provider was added.
         // Drop only that invariant while preparing the fixture, then restore it
         // after reconciliation proves that one canonical row remains.
-        $this->pdo->exec('ALTER TABLE social_identities DROP INDEX uniq_user_provider');
+        EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder()->table(
+            'social_identities',
+            static function (Blueprint $table): void {
+                $table->dropUnique('uniq_user_provider');
+            },
+        );
         $this->insertIdentity(
             id: '2001',
             providerAppId: 'wechat-other-app',
@@ -320,16 +424,22 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
             status: 1,
         );
         $canonical = $repository->findByExternalIdentity(
-            $this->identity('merge-openid', 'merge-unionid', 'wechat-main-app'),
+            $this->identity('merge-openid', 'merge-unionid'),
         );
 
         $this->assertNotNull($canonical);
         $this->assertSame('2001', $canonical->id);
-        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
-        $this->assertSame('2001', (string)$this->pdo->query('SELECT id FROM social_identities')->fetchColumn());
-        $this->pdo->exec('ALTER TABLE social_identities ADD UNIQUE KEY uniq_user_provider (user_id, provider)');
+        $this->assertSame(1, $this->identities->newQuery()->count());
+        $this->assertSame('2001', (string)$this->identities->newQuery()->value('id'));
+        EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder()->table(
+            'social_identities',
+            static function (Blueprint $table): void {
+                $table->unique(['user_id', 'provider'], 'uniq_user_provider');
+            },
+        );
     }
 
+    /** @throws Throwable */
     public function testDifferentUsersForUnionAndOpenIdRowsReturnConflictAndRemainUnchanged(): void
     {
         $repository = $this->repository();
@@ -356,20 +466,26 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
 
         try {
             $repository->findByExternalIdentity(
-                $this->identity('conflict-openid', 'conflict-unionid', 'wechat-main-app'),
+                $this->identity('conflict-openid', 'conflict-unionid'),
             );
             $this->fail('Expected a unionid/openid identity conflict');
         } catch (RuntimeException $e) {
             $this->assertSame(ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value, $e->getCode());
         }
 
-        $this->assertSame(2, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+        $this->assertSame(2, $this->identities->newQuery()->count());
     }
 
+    /** @throws Throwable */
     public function testDisabledIdentityStateWinsWhenRowsAreMerged(): void
     {
         $repository = $this->repository();
-        $this->pdo->exec('ALTER TABLE social_identities DROP INDEX uniq_user_provider');
+        EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder()->table(
+            'social_identities',
+            static function (Blueprint $table): void {
+                $table->dropUnique('uniq_user_provider');
+            },
+        );
 
         $this->insertIdentity(
             id: '5101',
@@ -393,18 +509,46 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         );
 
         $canonical = $repository->findByExternalIdentity(
-            $this->identity('disabled-openid', 'disabled-unionid', 'wechat-main-app'),
+            $this->identity('disabled-openid', 'disabled-unionid'),
         );
 
         $this->assertNotNull($canonical);
         $this->assertSame('5100', $canonical->userId);
         $this->assertSame(2, $canonical->status);
-        $this->assertSame(1, (int)$this->pdo->query('SELECT COUNT(*) FROM social_identities')->fetchColumn());
+        $openidOnly = $repository->findByExternalIdentity($this->identity('disabled-openid'));
+        $this->assertSame($canonical->id, $openidOnly->id);
+        $this->assertSame(2, $openidOnly->status);
+        $this->assertSame(1, $this->identities->newQuery()->count());
     }
 
-    private function repository(): PdoSocialIdentityRepository
+    /** @throws Throwable */
+    public function testNewAppOpenIdRemainsMappedWithoutUnionIdForEveryCanonicalState(): void
     {
-        return new PdoSocialIdentityRepository($this->pdo, new Snowflake(random_int(1, 1023)));
+        $repo = $this->repository();
+        foreach ([0, 1, 2, 3] as $status) {
+            $id = (string)(8100 + $status);
+            $this->insertIdentity(
+                id: $id,
+                providerAppId: 'other-app',
+                subjectType: 'unionid',
+                subjectId: 'canonical-union-' . $status,
+                openId: 'other-openid-' . $status,
+                unionId: 'canonical-union-' . $status,
+                userId: in_array($status, [1, 2], true) ? (string)(9100 + $status) : null,
+                status: $status,
+            );
+            $resolved = $repo->findByExternalIdentity($this->identity('new-app-openid-' . $status, 'canonical-union-' . $status));
+            $this->assertSame($id, $resolved->id);
+            $openidOnly = $repo->findByExternalIdentity($this->identity('new-app-openid-' . $status));
+            $this->assertSame($id, $openidOnly->id);
+            $this->assertSame($status, $openidOnly->status);
+        }
+    }
+
+    /** @throws RandomException */
+    private function repository(): EloquentSocialIdentityRepository
+    {
+        return new EloquentSocialIdentityRepository($this->pdo, new Snowflake(random_int(1, 1023)));
     }
 
     private function connectTestDatabase(string $database): PDO
@@ -451,15 +595,7 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
         int $status,
     ): void {
         $now = gmdate('Y-m-d H:i:s.v');
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO social_identities
-             (id, user_id, provider, provider_app_id, identity_namespace, subject_type, subject_id,
-              openid, unionid, status, bound_at, last_login_at, created_at, updated_at)
-             VALUES
-             (:id, :user_id, :provider, :provider_app_id, :identity_namespace, :subject_type, :subject_id,
-              :openid, :unionid, :status, :bound_at, NULL, :created_at, :updated_at)'
-        );
-        $stmt->execute([
+        $this->identities->newQuery()->create([
             'id' => $id,
             'user_id' => $userId,
             'provider' => SocialProvider::WECHAT->value,
@@ -471,6 +607,7 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
             'unionid' => $unionId,
             'status' => $status,
             'bound_at' => $userId === null ? null : $now,
+            'last_login_at' => null,
             'created_at' => $now,
             'updated_at' => $now,
         ]);
@@ -479,9 +616,9 @@ final class PdoSocialIdentityRepositoryTest extends TestCase
     /**
      * @param array<int, array{process: resource, pipes: array<int, resource>}> $workers
      */
-    private function waitForReserveWorkers(array &$workers, float $timeoutSeconds): void
+    private function waitForReserveWorkers(array &$workers): void
     {
-        $deadline = microtime(true) + $timeoutSeconds;
+        $deadline = microtime(true) + 5.0;
         $statuses = [];
         while (microtime(true) < $deadline) {
             $allExited = true;

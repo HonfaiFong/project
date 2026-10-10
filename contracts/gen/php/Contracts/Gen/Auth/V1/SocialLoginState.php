@@ -20,6 +20,8 @@ class SocialLoginState
      */
     const SOCIAL_LOGIN_STATE_AUTHENTICATED = 1;
     /**
+     * Deprecated: registration no longer asks clients for a phone binding step.
+     *
      * Generated from protobuf enum <code>SOCIAL_LOGIN_STATE_PHONE_BINDING_REQUIRED = 2;</code>
      */
     const SOCIAL_LOGIN_STATE_PHONE_BINDING_REQUIRED = 2;

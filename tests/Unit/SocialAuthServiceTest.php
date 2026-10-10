@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use Contracts\Errors\ErrorCode;
-use Packages\Phone\PhoneNormalizer;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Services\AuthService\Domain\Auth\ExternalIdentity;
 use Services\AuthService\Domain\Auth\SocialAuthProviderInterface;
@@ -13,13 +12,8 @@ use Services\AuthService\Domain\Auth\SocialProvider;
 use Services\AuthService\Domain\Client\UserDirectoryInterface;
 use Services\AuthService\Domain\Entity\Device;
 use Services\AuthService\Domain\Entity\RefreshToken;
-use Services\AuthService\Domain\Entity\SocialBindSession;
 use Services\AuthService\Domain\Entity\SocialIdentity;
-use Services\AuthService\Domain\Phone\PhoneVerificationServiceInterface;
-use Services\AuthService\Domain\Phone\VerificationScene;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
-use Services\AuthService\Domain\Repository\DistributedLockInterface;
-use Services\AuthService\Domain\Repository\SocialBindSessionStoreInterface;
 use Services\AuthService\Domain\Repository\SocialIdentityRepositoryInterface;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
 use Services\AuthService\Infrastructure\OAuth\SocialAuthProviderRegistry;
@@ -126,8 +120,12 @@ final class SocialAuthRepositoryFake implements AuthRepositoryInterface
 
 final class SocialUserDirectoryFake implements UserDirectoryInterface
 {
-    /** @var array<array{phone: string, register_channel: string}> */
+    /** @var array<array<string, string>> */
     public array $calls = [];
+
+    public int $status = self::STATUS_ACTIVE;
+    public bool $loseReply = false;
+    private array $registrations = [];
 
     public int $failuresRemaining = 0;
 
@@ -154,11 +152,28 @@ final class SocialUserDirectoryFake implements UserDirectoryInterface
         return $this->result;
     }
 
+    public function findOrCreateBySocialIdentity(string $registrationKey, string $registerChannel): array
+    {
+        $this->calls[] = ['registration_key' => $registrationKey, 'register_channel' => $registerChannel];
+        if ($this->failuresRemaining > 0) {
+            $this->failuresRemaining--;
+            throw new \RuntimeException('Unavailable', ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
+        $new = !isset($this->registrations[$registrationKey]);
+        $this->registrations[$registrationKey] ??= $this->result;
+        if ($this->loseReply) {
+            $this->loseReply = false;
+            throw new \RuntimeException('Reply lost after commit', ErrorCode::RPC_TIMEOUT->value);
+        }
+
+        return ['user_id' => $this->registrations[$registrationKey]['user_id'], 'is_new_user' => $new];
+    }
+
     public function findById(string $userId): array
     {
         return [
             'user_id' => $userId,
-            'status'  => self::STATUS_ACTIVE,
+            'status'  => $this->status,
         ];
     }
 }
@@ -223,7 +238,38 @@ final class SocialIdentityRepositoryFake implements SocialIdentityRepositoryInte
         return $this->identities[$id] ?? null;
     }
 
+    public bool $failCompletion = false;
+
+    public function beginRegistration(string $identityId): SocialIdentity
+    {
+        $identity = $this->identities[$identityId];
+        if ($identity->isActive()) {
+            return $identity;
+        }
+        if ($identity->isDisabled()) {
+            throw new \RuntimeException('Conflict', ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value);
+        }
+        $properties = get_object_vars($identity);
+        $properties['status'] = SocialIdentity::STATUS_REGISTERING;
+
+        return $this->identities[$identityId] = new SocialIdentity(...$properties);
+    }
+
+    public function completeRegistration(string $identityId, string $userId): SocialIdentity
+    {
+        if ($this->failCompletion) {
+            $this->failCompletion = false;
+            throw new \RuntimeException('Unavailable', ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
+        return $this->bind($identityId, $userId, SocialIdentity::STATUS_REGISTERING);
+    }
+
     public function bindToUser(string $identityId, string $userId): SocialIdentity
+    {
+        return $this->bind($identityId, $userId, SocialIdentity::STATUS_PENDING);
+    }
+
+    private function bind(string $identityId, string $userId, int $expectedStatus): SocialIdentity
     {
         $identity = $this->identities[$identityId] ?? null;
         if ($identity === null) {
@@ -241,6 +287,10 @@ final class SocialIdentityRepositoryFake implements SocialIdentityRepositoryInte
                 ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->message(),
                 ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value
             );
+        }
+
+        if ($identity->status !== $expectedStatus) {
+            throw new \RuntimeException('Conflict', ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value);
         }
 
         foreach ($this->identities as $other) {
@@ -309,187 +359,6 @@ final class SocialIdentityRepositoryFake implements SocialIdentityRepositoryInte
     }
 }
 
-final class SocialBindSessionStoreFake implements SocialBindSessionStoreInterface
-{
-    /** @var array<string, SocialBindSession> */
-    private array $sessions = [];
-
-    /** @var array<string, string> */
-    private array $currentByIdentity = [];
-
-    private int $sequence = 0;
-
-    public function issue(string $socialIdentityId, int $ttlSeconds): array
-    {
-        $this->sequence++;
-        $token = 'bind-token-' . $this->sequence;
-        $tokenHash = hash('sha256', $token);
-        $now = time();
-        $session = new SocialBindSession(
-            tokenHash: $tokenHash,
-            socialIdentityId: $socialIdentityId,
-            expiresAt: $now + $ttlSeconds,
-            issuedAt: $now,
-        );
-        $this->sessions[$tokenHash] = $session;
-        $this->currentByIdentity[$socialIdentityId] = $tokenHash;
-
-        return [
-            'bind_token'            => $token,
-            'bind_token_expires_at' => $session->expiresAt,
-        ];
-    }
-
-    public function verify(string $bindToken): ?SocialBindSession
-    {
-        $tokenHash = hash('sha256', trim($bindToken));
-        $session = $this->sessions[$tokenHash] ?? null;
-        if ($session === null || ($this->currentByIdentity[$session->socialIdentityId] ?? null) !== $tokenHash) {
-            return null;
-        }
-        if ($session->expiresAt < time()) {
-            return null;
-        }
-
-        return $session;
-    }
-
-    public function setPhone(string $bindToken, string $phone): SocialBindSession
-    {
-        $session = $this->requireSession($bindToken);
-        $phoneHash = hash('sha256', $phone);
-        if ($session->phoneHash !== null && !hash_equals($session->phoneHash, $phoneHash)) {
-            throw new \RuntimeException(
-                ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED->message(),
-                ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED->value
-            );
-        }
-
-        return $this->save($session, phoneHash: $phoneHash);
-    }
-
-    public function assertPhone(string $bindToken, string $phone): SocialBindSession
-    {
-        $session = $this->requireSession($bindToken);
-        if ($session->phoneHash === null || !hash_equals($session->phoneHash, hash('sha256', $phone))) {
-            throw new \RuntimeException(
-                ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED->message(),
-                ErrorCode::AUTH_SOCIAL_BIND_PHONE_CHANGED->value
-            );
-        }
-
-        return $session;
-    }
-
-    public function markPhoneVerified(string $bindToken, string $phone): SocialBindSession
-    {
-        $session = $this->setPhone($bindToken, $phone);
-
-        return $this->save($session, phoneVerified: true, verifiedPhone: $phone);
-    }
-
-    public function consume(string $bindToken): void
-    {
-        $session = $this->verify($bindToken);
-        if ($session === null) {
-            return;
-        }
-
-        unset($this->sessions[$session->tokenHash]);
-        if (($this->currentByIdentity[$session->socialIdentityId] ?? null) === $session->tokenHash) {
-            unset($this->currentByIdentity[$session->socialIdentityId]);
-        }
-    }
-
-    private function requireSession(string $bindToken): SocialBindSession
-    {
-        $session = $this->verify($bindToken);
-        if ($session === null) {
-            throw new \RuntimeException(
-                ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->message(),
-                ErrorCode::AUTH_SOCIAL_BIND_TOKEN_INVALID->value
-            );
-        }
-
-        return $session;
-    }
-
-    private function save(
-        SocialBindSession $session,
-        ?string $phoneHash = null,
-        ?bool $phoneVerified = null,
-        ?string $verifiedPhone = null
-    ): SocialBindSession {
-        $updated = new SocialBindSession(
-            tokenHash: $session->tokenHash,
-            socialIdentityId: $session->socialIdentityId,
-            expiresAt: $session->expiresAt,
-            phoneHash: $phoneHash ?? $session->phoneHash,
-            phoneVerified: $phoneVerified ?? $session->phoneVerified,
-            verifiedPhone: $verifiedPhone ?? $session->verifiedPhone,
-            issuedAt: $session->issuedAt,
-        );
-        $this->sessions[$session->tokenHash] = $updated;
-
-        return $updated;
-    }
-}
-
-final class SocialPhoneVerificationFake implements PhoneVerificationServiceInterface
-{
-    /** @var array<array{phone: string, scene: VerificationScene, context_id: string, context: array}> */
-    public array $sent = [];
-
-    public int $verifyCalls = 0;
-
-    public function __construct(private readonly SocialBindSessionStoreFake $bindStore)
-    {
-    }
-
-    public function send(string $phone, VerificationScene $scene, string $contextId, array $context = []): void
-    {
-        $this->sent[] = [
-            'phone'       => $phone,
-            'scene'       => $scene,
-            'context_id'  => $contextId,
-            'context'     => $context,
-        ];
-    }
-
-    public function verify(string $phone, string $code, VerificationScene $scene, string $contextId, ?string $bindToken = null): void
-    {
-        $this->verifyCalls++;
-        if ($code !== '123456') {
-            throw new \RuntimeException(
-                ErrorCode::AUTH_SMS_CODE_INVALID->message(),
-                ErrorCode::AUTH_SMS_CODE_INVALID->value
-            );
-        }
-        if ($bindToken !== null) {
-            $this->bindStore->markPhoneVerified($bindToken, $phone);
-        }
-    }
-}
-
-final class SocialLockFake implements DistributedLockInterface
-{
-    public int $acquires = 0;
-
-    public int $releases = 0;
-
-    public function acquire(string $key, int $ttlSeconds): string
-    {
-        $this->acquires++;
-
-        return 'lock-owner';
-    }
-
-    public function release(string $key, string $owner): void
-    {
-        $this->releases++;
-    }
-}
-
 final class FakeSocialAuthProvider implements SocialAuthProviderInterface
 {
     public function __construct(private readonly ExternalIdentity $identity)
@@ -525,174 +394,151 @@ final class SocialAuthServiceTest extends TestCase
         $this->assertTrue($repository->deviceBelongsToUser('10002', $second->id));
     }
 
-    public function testFirstSocialLoginOnlyReturnsAOneTimeBindToken(): void
+    public function testFirstWeChatAndQqLoginsRegisterWithoutPhoneOrSms(): void
     {
-        $fixture = $this->fixture(SocialProvider::WECHAT);
-
-        $result = $fixture['service']->socialLogin(
-            SocialProvider::WECHAT,
-            'wechat-code',
-            $this->device(),
-        );
-
-        $this->assertSame('phone_binding_required', $result['state']);
-        $this->assertArrayHasKey('bind_token', $result);
-        $this->assertArrayNotHasKey('login', $result);
-        $this->assertCount(0, $fixture['authRepo']->tokens);
-        $this->assertNull($fixture['identityRepo']->findById('identity-1')?->userId);
-    }
-
-    public function testPendingLoginRotatesThePreviousBindToken(): void
-    {
-        $fixture = $this->fixture(SocialProvider::WECHAT);
-        $first = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
-        $second = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
-
-        $this->assertNotSame($first['bind_token'], $second['bind_token']);
-        $this->assertNull($fixture['bindStore']->verify($first['bind_token']));
-        $this->assertNotNull($fixture['bindStore']->verify($second['bind_token']));
-    }
-
-    public function testActiveSocialIdentityIssuesTheNormalSessionDirectly(): void
-    {
-        $fixture = $this->fixture(SocialProvider::QQ, ['user_id' => '10001', 'is_new_user' => false], true);
-
-        $result = $fixture['service']->socialLogin(SocialProvider::QQ, 'code', $this->device());
-
-        $this->assertSame('authenticated', $result['state']);
-        $this->assertArrayHasKey('login', $result);
-        $this->assertArrayNotHasKey('bind_token', $result);
-        $this->assertSame('10001', $result['login']['user_id']);
-        $this->assertCount(1, $fixture['authRepo']->tokens);
-        $this->assertSame(0, $fixture['phone']->verifyCalls);
-    }
-
-    public function testVerifiedExistingPhoneBindsWeChatWithoutCreatingAnotherUser(): void
-    {
-        $fixture = $this->fixture(SocialProvider::WECHAT, ['user_id' => '10001', 'is_new_user' => false]);
-        $login = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
-
-        $fixture['service']->sendSocialPhoneCode(
-            $login['bind_token'],
-            '13800000000',
-            ['ip' => '203.0.113.10', 'device_uuid' => 'device-1'],
-        );
-        $result = $fixture['service']->bindSocialPhone(
-            $login['bind_token'],
-            '13800000000',
-            '123456',
-            $this->device(),
-        );
-
-        $this->assertSame('10001', $result['login']['user_id']);
-        $this->assertFalse($result['login']['is_new_user']);
-        $this->assertSame(
-            [['phone' => '+8613800000000', 'register_channel' => 'wechat']],
-            $fixture['userDirectory']->calls,
-        );
-        $boundIdentity = $fixture['identityRepo']->findById('identity-1');
-        $this->assertNotNull($boundIdentity);
-        $this->assertSame(SocialIdentity::STATUS_ACTIVE, $boundIdentity->status);
-        $this->assertSame('10001', $boundIdentity->userId);
-        $this->assertCount(1, $fixture['authRepo']->tokens);
-        $this->assertSame(1, $fixture['phone']->verifyCalls);
-    }
-
-    public function testNewPhoneThroughQqCreatesUserWithQqRegisterChannel(): void
-    {
-        $fixture = $this->fixture(SocialProvider::QQ, ['user_id' => '10002', 'is_new_user' => true]);
-        $login = $fixture['service']->socialLogin(SocialProvider::QQ, 'code', $this->device());
-        $fixture['service']->sendSocialPhoneCode($login['bind_token'], '+8613900000000');
-
-        $result = $fixture['service']->bindSocialPhone(
-            $login['bind_token'],
-            '+8613900000000',
-            '123456',
-            $this->device(),
-        );
-
-        $this->assertTrue($result['login']['is_new_user']);
-        $this->assertSame(
-            [['phone' => '+8613900000000', 'register_channel' => 'qq']],
-            $fixture['userDirectory']->calls,
-        );
-    }
-
-    public function testWeChatAndQqCanConvergeOnTheSameExistingUser(): void
-    {
-        $qqIdentity = new ExternalIdentity(
-            provider: SocialProvider::QQ,
-            providerAppId: 'qq-app',
-            identityNamespace: 'qq-main',
-            openId: 'qq-openid',
-        );
-        $fixture = $this->fixture(
-            SocialProvider::WECHAT,
-            ['user_id' => '10001', 'is_new_user' => false],
-            additionalIdentities: [$qqIdentity],
-        );
-
-        $wechat = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'wechat-code', $this->device());
-        $fixture['service']->sendSocialPhoneCode($wechat['bind_token'], '13800000000');
-        $fixture['service']->bindSocialPhone($wechat['bind_token'], '13800000000', '123456', $this->device());
-
-        $qq = $fixture['service']->socialLogin(SocialProvider::QQ, 'qq-code', $this->device());
-        $fixture['service']->sendSocialPhoneCode($qq['bind_token'], '13800000000');
-        $result = $fixture['service']->bindSocialPhone($qq['bind_token'], '13800000000', '123456', $this->device());
-
-        $this->assertSame('10001', $result['login']['user_id']);
-        $this->assertCount(2, $fixture['identityRepo']->identities);
-        $this->assertSame(
-            ['wechat', 'qq'],
-            array_column($fixture['userDirectory']->calls, 'register_channel'),
-        );
-        $this->assertSame('10001', $fixture['identityRepo']->findById('identity-1')?->userId);
-        $this->assertSame('10001', $fixture['identityRepo']->findById('identity-2')?->userId);
-    }
-
-    public function testAlreadyBoundProviderCannotBeOverwritten(): void
-    {
-        $fixture = $this->fixture(SocialProvider::WECHAT, ['user_id' => '10001', 'is_new_user' => false]);
-        $fixture['identityRepo']->seed($this->identity(
-            SocialProvider::WECHAT,
-            'existing-wechat',
-            'existing-identity',
-            '10001',
-            SocialIdentity::STATUS_ACTIVE,
-        ));
-
-        $login = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'new-code', $this->device());
-        $fixture['service']->sendSocialPhoneCode($login['bind_token'], '13800000000');
-
-        try {
-            $fixture['service']->bindSocialPhone($login['bind_token'], '13800000000', '123456', $this->device());
-            $this->fail('Expected provider conflict');
-        } catch (\RuntimeException $e) {
-            $this->assertSame(ErrorCode::AUTH_SOCIAL_PROVIDER_ALREADY_BOUND->value, $e->getCode());
+        foreach ([SocialProvider::WECHAT, SocialProvider::QQ] as $provider) {
+            $fixture = $this->fixture($provider, ['user_id' => '10001', 'is_new_user' => true]);
+            $result = $fixture['service']->socialLogin($provider, 'code', $this->device());
+            $this->assertSame('authenticated', $result['state']);
+            $this->assertTrue($result['login']['is_new_user']);
+            $this->assertSame('10001', $result['login']['user_id']);
+            $this->assertSame([['registration_key' => 'social:identity-1', 'register_channel' => $provider->value]], $fixture['userDirectory']->calls);
+            $this->assertCount(1, $fixture['authRepo']->tokens);
         }
-
-        $this->assertSame('10001', $fixture['identityRepo']->findById('existing-identity')?->userId);
     }
 
-    public function testVerifiedPhoneCanResumeAfterUserServiceFailure(): void
+    public function testRepeatedLoginReusesUserWithoutRegistrationRpc(): void
     {
         $fixture = $this->fixture(SocialProvider::WECHAT);
-        $login = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
-        $fixture['service']->sendSocialPhoneCode($login['bind_token'], '13800000000');
-        $fixture['userDirectory']->failuresRemaining = 1;
+        $first = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code1', $this->device());
+        $second = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code2', $this->device());
+        $this->assertSame($first['login']['user_id'], $second['login']['user_id']);
+        $this->assertFalse($second['login']['is_new_user']);
+        $this->assertCount(1, $fixture['userDirectory']->calls);
+    }
 
+    public function testLoginResumesAfterUserServiceCommittedButReplyWasLost(): void
+    {
+        $fixture = $this->fixture(SocialProvider::WECHAT);
+        $fixture['userDirectory']->loseReply = true;
         try {
-            $fixture['service']->bindSocialPhone($login['bind_token'], '13800000000', '123456', $this->device());
-            $this->fail('Expected the first UserService call to fail');
+            $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code1', $this->device());
+            $this->fail('Expected timeout');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::RPC_TIMEOUT->value, $e->getCode());
+        }
+        $this->assertSame(SocialIdentity::STATUS_REGISTERING, $fixture['identityRepo']->findById('identity-1')->status);
+        $this->assertCount(0, $fixture['authRepo']->tokens);
+        $result = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code2', $this->device());
+        $this->assertSame('10001', $result['login']['user_id']);
+        $this->assertSame($fixture['userDirectory']->calls[0], $fixture['userDirectory']->calls[1]);
+    }
+
+    public function testLoginResumesAfterAuthBindingFailure(): void
+    {
+        $fixture = $this->fixture(SocialProvider::QQ);
+        $fixture['identityRepo']->failCompletion = true;
+        try {
+            $fixture['service']->socialLogin(SocialProvider::QQ, 'code1', $this->device());
+            $this->fail('Expected binding failure');
         } catch (\RuntimeException $e) {
             $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, $e->getCode());
         }
-
-        $result = $fixture['service']->bindSocialPhone($login['bind_token'], '13800000000', '', $this->device());
-
+        $result = $fixture['service']->socialLogin(SocialProvider::QQ, 'code2', $this->device());
         $this->assertSame('10001', $result['login']['user_id']);
-        $this->assertSame(1, $fixture['phone']->verifyCalls);
-        $this->assertCount(2, $fixture['userDirectory']->calls);
+        $this->assertSame($fixture['userDirectory']->calls[0], $fixture['userDirectory']->calls[1]);
+    }
+
+    public function testLoggedInUserCanBindQqThenLoginAsSameUser(): void
+    {
+        $fixture = $this->bindingFixture();
+        $wechat = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
+        $bound = $fixture['service']->bindSocialIdentity(SocialProvider::QQ, 'qq-code', $wechat['login']['access_token']);
+        $this->assertSame(['user_id' => '10001', 'provider' => 'qq'], $bound);
+        $qq = $fixture['service']->socialLogin(SocialProvider::QQ, 'another-code', $this->device());
+        $this->assertSame('10001', $qq['login']['user_id']);
+        $this->assertCount(1, $fixture['userDirectory']->calls);
+    }
+
+    public function testAnotherUsersIdentityCannotBeTransferred(): void
+    {
+        $fixture = $this->bindingFixture();
+        $login = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
+        $fixture['identityRepo']->seed($this->identity(SocialProvider::QQ, 'qq-openid', 'qq-owned', '10002', SocialIdentity::STATUS_ACTIVE));
+        try {
+            $fixture['service']->bindSocialIdentity(SocialProvider::QQ, 'code', $login['login']['access_token']);
+            $this->fail('Expected conflict');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value, $e->getCode());
+        }
+        $this->assertSame('10002', $fixture['identityRepo']->findById('qq-owned')->userId);
+    }
+
+    public function testRegisteringIdentityCannotBeClaimedByManualBinding(): void
+    {
+        $fixture = $this->bindingFixture();
+        $login = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
+        $fixture['identityRepo']->seed($this->identity(SocialProvider::QQ, 'qq-openid', 'qq-registering', null, SocialIdentity::STATUS_REGISTERING));
+        $this->expectExceptionCode(ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value);
+        $fixture['service']->bindSocialIdentity(SocialProvider::QQ, 'code', $login['login']['access_token']);
+    }
+
+    public function testBindingRejectsInvalidSessionBeforeCreatingIdentity(): void
+    {
+        $fixture = $this->bindingFixture();
+        try {
+            $fixture['service']->bindSocialIdentity(SocialProvider::QQ, 'code', 'invalid');
+            $this->fail('Expected invalid session');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::AUTH_UNAUTHORIZED->value, $e->getCode());
+        }
+        $this->assertCount(0, $fixture['identityRepo']->identities);
+    }
+
+    public function testDisabledIdentityCannotRegisterAgain(): void
+    {
+        $fixture = $this->fixture(SocialProvider::QQ);
+        $fixture['identityRepo']->seed($this->identity(SocialProvider::QQ, 'qq-openid', 'disabled', '10001', SocialIdentity::STATUS_DISABLED));
+        $this->expectExceptionCode(ErrorCode::AUTH_UNAUTHORIZED->value);
+        $fixture['service']->socialLogin(SocialProvider::QQ, 'code', $this->device());
+    }
+
+    public function testBannedUserCannotLoginOrBind(): void
+    {
+        $fixture = $this->bindingFixture();
+        $login = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
+        $fixture['userDirectory']->status = 0;
+        try {
+            $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
+            $this->fail('Expected banned user');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::USER_BANNED->value, $e->getCode());
+        }
+        $this->expectExceptionCode(ErrorCode::AUTH_UNAUTHORIZED->value);
+        $fixture['service']->bindSocialIdentity(SocialProvider::QQ, 'code', $login['login']['access_token']);
+    }
+
+    public function testSocialSessionRefreshAndLogoutRemainValid(): void
+    {
+        $fixture = $this->fixture(SocialProvider::QQ);
+        $login = $fixture['service']->socialLogin(SocialProvider::QQ, 'code', $this->device())['login'];
+        $refresh = $fixture['service']->refreshToken($login['refresh_token']);
+        $this->assertTrue($fixture['service']->verifyToken($refresh['access_token'])['valid']);
+        $this->assertTrue($fixture['service']->logout($refresh['refresh_token']));
+        $this->expectExceptionCode(ErrorCode::AUTH_TOKEN_EXPIRED->value);
+        $fixture['service']->refreshToken($refresh['refresh_token']);
+    }
+
+    public function testLegacySmsBindingIsDisabled(): void
+    {
+        $fixture = $this->fixture(SocialProvider::QQ);
+        $this->expectExceptionCode(ErrorCode::AUTH_UNAUTHORIZED->value);
+        $fixture['service']->bindSocialPhone('token', '13800000000', '123456', $this->device());
+    }
+
+    private function bindingFixture(): array
+    {
+        return $this->fixture(SocialProvider::WECHAT, additionalIdentities: [$this->externalIdentity(SocialProvider::QQ)]);
     }
 
     /**
@@ -703,9 +549,6 @@ final class SocialAuthServiceTest extends TestCase
      *     authRepo: SocialAuthRepositoryFake,
      *     userDirectory: SocialUserDirectoryFake,
      *     identityRepo: SocialIdentityRepositoryFake,
-     *     bindStore: SocialBindSessionStoreFake,
-     *     phone: SocialPhoneVerificationFake,
-     *     lock: SocialLockFake
      * }
      */
     private function fixture(
@@ -726,9 +569,6 @@ final class SocialAuthServiceTest extends TestCase
         if ($active) {
             $identityRepo->seed($this->identity($provider, $identity->openId, 'identity-1', $userResult['user_id'], SocialIdentity::STATUS_ACTIVE));
         }
-        $bindStore = new SocialBindSessionStoreFake();
-        $phone = new SocialPhoneVerificationFake($bindStore);
-        $lock = new SocialLockFake();
         $service = new AuthApplicationService(
             authRepo: $authRepo,
             jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
@@ -737,13 +577,9 @@ final class SocialAuthServiceTest extends TestCase
             userDirectory: $userDirectory,
             socialProviderRegistry: new SocialAuthProviderRegistry($providers),
             socialIdentityRepository: $identityRepo,
-            socialBindSessionStore: $bindStore,
-            phoneVerificationService: $phone,
-            distributedLock: $lock,
-            phoneNormalizer: new PhoneNormalizer(),
         );
 
-        return compact('service', 'authRepo', 'userDirectory', 'identityRepo', 'bindStore', 'phone', 'lock');
+        return compact('service', 'authRepo', 'userDirectory', 'identityRepo');
     }
 
     private function externalIdentity(SocialProvider $provider): ExternalIdentity

@@ -320,6 +320,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
             jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
             wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
             credentialVerifier: new LoginCredentialVerifier('local', 'dev-code', null, true),
+            phoneLoginEnabled: true,
             userDirectory: new class ($userDirectoryFails) implements UserDirectoryInterface {
                 public function __construct(private readonly bool $fails)
                 {
@@ -334,7 +335,12 @@ final class GrpcErrorTrailerContractTest extends TestCase
                     return ['user_id' => '20001', 'is_new_user' => false];
                 }
 
-                public function findById(string $userId): array
+                public function findOrCreateBySocialIdentity(string $registrationKey, string $registerChannel): array
+    {
+        return ['user_id' => '20001', 'is_new_user' => false];
+    }
+
+    public function findById(string $userId): array
                 {
                     return ['user_id' => $userId, 'status' => self::STATUS_ACTIVE];
                 }
@@ -389,6 +395,16 @@ class EmptyUserRepository implements UserRepositoryInterface
         return null;
     }
 
+    public function findBySocialRegistrationKey(string $registrationKey): ?User
+    {
+        return null;
+    }
+
+    public function socialRegistrationKeyExists(string $registrationKey): bool
+    {
+        return false;
+    }
+
     public function findByEmail(string $email): ?User
     {
         return null;
@@ -404,7 +420,8 @@ class EmptyUserRepository implements UserRepositoryInterface
         ?string $phone,
         ?string $email,
         string $registerChannel = 'default',
-        int $riskLevel = 0
+        int $riskLevel = 0,
+        ?string $socialRegistrationKey = null
     ): User {
         return new User(id: $id, status: 1, phone: $phone, email: $email, registerChannel: $registerChannel, riskLevel: $riskLevel);
     }

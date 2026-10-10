@@ -5,17 +5,25 @@ declare(strict_types=1);
 namespace Packages\Outbox;
 
 use PDO;
-use Packages\IdGenerator\Snowflake;
+use Exception;
 use Throwable;
+use Packages\IdGenerator\Snowflake;
+use Packages\Database\EloquentConnection;
+use Packages\Outbox\Model\OutboxEvent;
+use Illuminate\Database\Query\Builder;
 
-final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
+final readonly class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
 {
+    private OutboxEvent $model;
+
     public function __construct(
-        private readonly PDO $pdo,
-        private readonly ?Snowflake $snowflake = null
+        PDO $pdo,
+        private ?Snowflake $snowflake = null
     ) {
+        $this->model = EloquentConnection::model(OutboxEvent::class, $pdo);
     }
 
+    /** @throws Exception If secure random generation, JSON encoding, or persistence fails. */
     public function recordEvent(
         string $eventId,
         string $aggregateType,
@@ -30,13 +38,7 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
         $now = gmdate('Y-m-d H:i:s.v');
         $jsonPayload = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO outbox_events 
-             (id, event_id, aggregate_type, aggregate_id, event_key, trace_id, event_type, event_version, payload, status, available_at, created_at)
-             VALUES (:id, :event_id, :aggregate_type, :aggregate_id, :event_key, :trace_id, :event_type, :event_version, :payload, 0, :available_at, :created_at)'
-        );
-
-        $stmt->execute([
+        $this->model->newQuery()->create([
             'id'             => $id,
             'event_id'       => $eventId,
             'aggregate_type' => $aggregateType,
@@ -46,6 +48,7 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
             'event_type'     => $eventType,
             'event_version'  => $eventVersion,
             'payload'        => $jsonPayload,
+            'status'         => 0,
             'available_at'   => $now,
             'created_at'     => $now,
         ]);
@@ -65,36 +68,36 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
      *
      * Statuses: 0 = pending, 1 = published, 2 = claimed (in-flight).
      *
+     * @throws Throwable If the claim transaction fails.
      * @return array<OutboxRecord>
      */
     public function claimPending(int $limit = 50): array
     {
-        $now = gmdate('Y-m-d H:i:s.v');
-        $claimed = [];
+        return $this->model->getConnection()->transaction(function () use ($limit): array {
+            $query = $this->model->newQuery();
+            $query->from('outbox_events as candidate')
+                ->select('candidate.*')
+                ->where('candidate.status', 0)
+                ->where('candidate.available_at', '<=', gmdate('Y-m-d H:i:s.v'))
+                ->whereNotExists(function (Builder $query): void {
+                    $query->select('earlier.id')->from('outbox_events as earlier')
+                        ->whereColumn('earlier.event_key', 'candidate.event_key')
+                        ->whereColumn('earlier.id', '<', 'candidate.id')
+                        ->where('earlier.status', '<>', 1);
+                })
+                ->orderBy('candidate.id')->limit($limit)
+                ->lock('FOR UPDATE SKIP LOCKED');
+            $rows = $query->get();
 
-        $this->pdo->beginTransaction();
-        try {
-            $stmt = $this->pdo->prepare(
-                'SELECT id, event_id, aggregate_type, aggregate_id, event_key, trace_id, event_type, event_version, payload, status, available_at, published_at, created_at
-                 FROM outbox_events AS candidate
-                 WHERE status = 0 AND available_at <= :now
-                   AND NOT EXISTS (
-                     SELECT 1 FROM outbox_events AS earlier
-                     WHERE earlier.event_key = candidate.event_key
-                       AND earlier.id < candidate.id AND earlier.status <> 1
-                   )
-                 ORDER BY candidate.id ASC
-                 LIMIT :limit
-                 FOR UPDATE SKIP LOCKED'
-            );
-            $stmt->bindValue(':now', $now);
-            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-            $stmt->execute();
+            if ($rows->isNotEmpty()) {
+                $this->model->newQuery()->whereIn('id', $rows->modelKeys())->where('status', 0)
+                    ->update(['status' => 2, 'claimed_at' => gmdate('Y-m-d H:i:s.v')]);
+            }
 
-            $ids = [];
-            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                $ids[] = (string)$row['id'];
-                $claimed[] = new OutboxRecord(
+            return $rows->map(static function (OutboxEvent $event): OutboxRecord {
+                $row = $event->getAttributes();
+
+                return new OutboxRecord(
                     eventId: (string)$row['event_id'],
                     aggregateType: (string)$row['aggregate_type'],
                     aggregateId: (string)$row['aggregate_id'],
@@ -109,23 +112,8 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
                     createdAt: (string)$row['created_at'],
                     id: (string)$row['id'],
                 );
-            }
-
-            if ($ids !== []) {
-                $placeholders = implode(',', array_fill(0, count($ids), '?'));
-                $update = $this->pdo->prepare(
-                    "UPDATE outbox_events SET status = 2, claimed_at = '{$now}' WHERE id IN ({$placeholders}) AND status = 0"
-                );
-                $update->execute($ids);
-            }
-
-            $this->pdo->commit();
-        } catch (Throwable $e) {
-            $this->pdo->rollBack();
-            throw $e;
-        }
-
-        return $claimed;
+            })->all();
+        });
     }
 
     /**
@@ -137,29 +125,21 @@ final class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
     public function releaseStaleClaims(int $olderThanSeconds = 300): int
     {
         $cutoff = gmdate('Y-m-d H:i:s.v', time() - $olderThanSeconds);
-        $stmt = $this->pdo->prepare(
-            "UPDATE outbox_events SET status = 0, claimed_at = NULL WHERE status = 2 AND claimed_at IS NOT NULL AND claimed_at < '{$cutoff}'"
-        );
-        $stmt->execute();
-
-        return $stmt->rowCount();
+        return $this->model->newQuery()->where('status', 2)->whereNotNull('claimed_at')
+            ->where('claimed_at', '<', $cutoff)->update(['status' => 0, 'claimed_at' => null]);
     }
 
     public function markPublished(string $id): void
     {
         $now = gmdate('Y-m-d H:i:s.v');
-        $stmt = $this->pdo->prepare(
-            "UPDATE outbox_events SET status = 1, published_at = '{$now}', claimed_at = NULL WHERE id = :id AND status = 2"
-        );
-        $stmt->execute(['id' => $id]);
+        $this->model->newQuery()->whereKey($id)->where('status', 2)
+            ->update(['status' => 1, 'published_at' => $now, 'claimed_at' => null]);
     }
 
     public function markFailed(string $id, int $retryDelaySeconds = 10): void
     {
         $nextAvailable = gmdate('Y-m-d H:i:s.v', time() + $retryDelaySeconds);
-        $stmt = $this->pdo->prepare(
-            "UPDATE outbox_events SET status = 0, claimed_at = NULL, available_at = '{$nextAvailable}' WHERE id = :id AND status = 2"
-        );
-        $stmt->execute(['id' => $id]);
+        $this->model->newQuery()->whereKey($id)->where('status', 2)
+            ->update(['status' => 0, 'claimed_at' => null, 'available_at' => $nextAvailable]);
     }
 }

@@ -4,16 +4,25 @@ declare(strict_types=1);
 
 namespace Tests\Integration;
 
+use Illuminate\Database\Schema\Blueprint;
+use Packages\Database\EloquentConnection;
 use Packages\IdGenerator\Snowflake;
 use PDO;
+use Random\RandomException;
 use RuntimeException;
-use Services\AuthService\Infrastructure\Repository\PdoAuthRepository;
+use Services\AuthService\Infrastructure\Model\Device as DeviceModel;
+use Services\AuthService\Infrastructure\Model\RefreshToken as RefreshTokenModel;
+use Services\AuthService\Infrastructure\Repository\EloquentAuthRepository;
 use Tests\TestCase;
 use Throwable;
 
 final class PdoDeviceIsolationTest extends TestCase
 {
     private PDO $pdo;
+
+    private DeviceModel $devices;
+
+    private RefreshTokenModel $refreshTokens;
 
     protected function setUp(): void
     {
@@ -31,24 +40,26 @@ final class PdoDeviceIsolationTest extends TestCase
             $this->markTestSkipped('MySQL integration service is not available: ' . $e->getMessage());
         }
 
-        $this->pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
-        $this->pdo->exec('DROP TABLE IF EXISTS refresh_tokens');
-        $this->pdo->exec('DROP TABLE IF EXISTS devices');
-        $this->pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+        $schema = EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder();
+        $schema->dropIfExists('refresh_tokens');
+        $schema->dropIfExists('devices');
         $this->createLegacySchema();
+
+        $this->devices = EloquentConnection::model(DeviceModel::class, $this->pdo);
+        $this->refreshTokens = EloquentConnection::model(RefreshTokenModel::class, $this->pdo);
     }
 
     protected function tearDown(): void
     {
         if (isset($this->pdo)) {
-            $this->pdo->exec('DROP TRIGGER IF EXISTS device_insert_delay');
-            $this->pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
-            $this->pdo->exec('DROP TABLE IF EXISTS refresh_tokens');
-            $this->pdo->exec('DROP TABLE IF EXISTS devices');
-            $this->pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+            $schema = EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder();
+            $schema->dropIfExists('refresh_tokens');
+            $schema->dropIfExists('devices');
+            EloquentConnection::forget($this->pdo);
         }
     }
 
+    /** @throws Throwable */
     public function testMigrationRevokesInconsistentRefreshTokensAndIsIdempotent(): void
     {
         $this->insertDevice('1001', '2001', 'shared-device');
@@ -88,6 +99,7 @@ final class PdoDeviceIsolationTest extends TestCase
         $this->assertDeviceIndexesAreUserScoped();
     }
 
+    /** @throws Throwable */
     public function testSameUuidAndSessionOperationsRemainIndependentAcrossUsers(): void
     {
         $this->applyDeviceMigration();
@@ -97,7 +109,7 @@ final class PdoDeviceIsolationTest extends TestCase
         $second = $repository->findOrCreateDevice('2002', 'shared-device', 'android', '2.0.0', null, null);
 
         $this->assertNotSame($first->id, $second->id);
-        $this->assertSame(2, (int)$this->pdo->query('SELECT COUNT(*) FROM devices')->fetchColumn());
+        $this->assertSame(2, $this->devices->newQuery()->count());
         $this->assertTrue($repository->deviceBelongsToUser('2001', $first->id));
         $this->assertFalse($repository->deviceBelongsToUser('2002', $first->id));
         $this->assertTrue($repository->deviceBelongsToUser('2002', $second->id));
@@ -133,14 +145,6 @@ final class PdoDeviceIsolationTest extends TestCase
     public function testConcurrentSameUserCreationReusesOneDeviceRow(): void
     {
         $this->applyDeviceMigration();
-        $this->pdo->exec(
-            'CREATE TRIGGER device_insert_delay
-             BEFORE INSERT ON devices
-             FOR EACH ROW
-             BEGIN
-                 DO SLEEP(0.1);
-             END'
-        );
 
         $prefix = tempnam(sys_get_temp_dir(), 'device-reserve-');
         if ($prefix === false) {
@@ -155,6 +159,9 @@ final class PdoDeviceIsolationTest extends TestCase
         $workers = [];
 
         try {
+            // Each worker parks immediately before its devices insert inside
+            // the Eloquent beforeExecuting hook, so the unique key - not the
+            // pre-check read - has to serialize the two workers.
             $workerScript = __DIR__ . '/fixtures/PdoDeviceReserveWorker.php';
             foreach ([1, 2] as $index) {
                 $pipes = [];
@@ -193,7 +200,7 @@ final class PdoDeviceIsolationTest extends TestCase
 
             $this->waitForPaths($readyPaths);
             file_put_contents($startPath, 'start');
-            $this->waitForWorkers($workers, 5.0);
+            $this->waitForWorkers($workers);
 
             $results = array_map(
                 static fn(string $path): string => trim((string)file_get_contents($path)),
@@ -206,9 +213,10 @@ final class PdoDeviceIsolationTest extends TestCase
             [, $firstId] = explode('|', $results[0], 2);
             [, $secondId] = explode('|', $results[1], 2);
             $this->assertSame($firstId, $secondId);
-            $this->assertSame(1, (int)$this->pdo->query(
-                "SELECT COUNT(*) FROM devices WHERE user_id = 2001 AND device_uuid = 'concurrent-device'"
-            )->fetchColumn());
+            $this->assertSame(1, $this->devices->newQuery()
+                ->where('user_id', '2001')
+                ->where('device_uuid', 'concurrent-device')
+                ->count());
         } finally {
             file_put_contents($startPath, 'start');
             $this->stopWorkers($workers);
@@ -220,49 +228,60 @@ final class PdoDeviceIsolationTest extends TestCase
             }
             @unlink($startPath);
             @unlink($prefix);
-            $this->pdo->exec('DROP TRIGGER IF EXISTS device_insert_delay');
         }
     }
 
-    private function repository(): PdoAuthRepository
+    /** @throws RandomException */
+    private function repository(): EloquentAuthRepository
     {
-        return new PdoAuthRepository($this->pdo, new Snowflake(random_int(1, 1023)));
+        return new EloquentAuthRepository($this->pdo, new Snowflake(random_int(1, 1023)));
     }
 
+    /**
+     * Legacy pre-0006 shape: the device UUID carries a global unique key, so
+     * applying 0006 must re-scope it to the owning user.
+     */
     private function createLegacySchema(): void
     {
-        $this->pdo->exec(
-            'CREATE TABLE devices (
-                id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
-                user_id BIGINT UNSIGNED NOT NULL,
-                device_uuid VARCHAR(64) NOT NULL,
-                platform VARCHAR(16) NOT NULL,
-                app_version VARCHAR(32) NOT NULL,
-                push_token VARCHAR(255) NULL,
-                last_ip VARBINARY(16) NULL,
-                last_active_at DATETIME(3) NOT NULL,
-                created_at DATETIME(3) NOT NULL,
-                updated_at DATETIME(3) NOT NULL,
-                UNIQUE KEY uniq_device_uuid (device_uuid),
-                INDEX idx_user_id (user_id)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
-        );
-        $this->pdo->exec(
-            'CREATE TABLE refresh_tokens (
-                id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
-                user_id BIGINT UNSIGNED NOT NULL,
-                device_id BIGINT UNSIGNED NOT NULL,
-                token_hash CHAR(64) NOT NULL,
-                expires_at DATETIME(3) NOT NULL,
-                revoked_at DATETIME(3) NULL,
-                created_at DATETIME(3) NOT NULL,
-                UNIQUE KEY uniq_token_hash (token_hash),
-                INDEX idx_user_device (user_id, device_id),
-                INDEX idx_expires_at (expires_at)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
-        );
+        $schema = EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder();
+        $schema->create('devices', static function (Blueprint $table): void {
+            $table->engine('InnoDB');
+            $table->charset('utf8mb4');
+            $table->collation('utf8mb4_unicode_ci');
+            $table->unsignedBigInteger('id')->primary();
+            $table->unsignedBigInteger('user_id');
+            $table->string('device_uuid', 64);
+            $table->string('platform', 16);
+            $table->string('app_version', 32);
+            $table->string('push_token', 255)->nullable();
+            $table->binary('last_ip', 16)->nullable();
+            $table->dateTime('last_active_at', 3);
+            $table->dateTime('created_at', 3);
+            $table->dateTime('updated_at', 3);
+            $table->unique('device_uuid', 'uniq_device_uuid');
+            $table->index('user_id', 'idx_user_id');
+        });
+        $schema->create('refresh_tokens', static function (Blueprint $table): void {
+            $table->engine('InnoDB');
+            $table->charset('utf8mb4');
+            $table->collation('utf8mb4_unicode_ci');
+            $table->unsignedBigInteger('id')->primary();
+            $table->unsignedBigInteger('user_id');
+            $table->unsignedBigInteger('device_id');
+            $table->char('token_hash', 64);
+            $table->dateTime('expires_at', 3);
+            $table->dateTime('revoked_at', 3)->nullable();
+            $table->dateTime('created_at', 3);
+            $table->unique('token_hash', 'uniq_token_hash');
+            $table->index(['user_id', 'device_id'], 'idx_user_device');
+            $table->index('expires_at', 'idx_expires_at');
+        });
     }
 
+    /**
+     * Runs the shipped 0006 migration file itself instead of re-creating its
+     * DDL in the test, so the versioned migration artifact keeps its coverage.
+     */
     private function applyDeviceMigration(): void
     {
         $path = __DIR__ . '/../../infra/docker/mysql/migrations/0006_device_user_scope.sql';
@@ -282,19 +301,14 @@ final class PdoDeviceIsolationTest extends TestCase
     private function insertDevice(string $id, string $userId, string $deviceUuid): void
     {
         $now = gmdate('Y-m-d H:i:s.v');
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO devices
-             (id, user_id, device_uuid, platform, app_version, push_token, last_ip,
-              last_active_at, created_at, updated_at)
-             VALUES (:id, :user_id, :device_uuid, :platform, :app_version, NULL, NULL,
-                     :last_active_at, :created_at, :updated_at)'
-        );
-        $stmt->execute([
+        $this->devices->newQuery()->create([
             'id' => $id,
             'user_id' => $userId,
             'device_uuid' => $deviceUuid,
             'platform' => 'ios',
             'app_version' => '1.0.0',
+            'push_token' => null,
+            'last_ip' => null,
             'last_active_at' => $now,
             'created_at' => $now,
             'updated_at' => $now,
@@ -308,12 +322,7 @@ final class PdoDeviceIsolationTest extends TestCase
         string $tokenHash,
         ?string $revokedAt,
     ): void {
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO refresh_tokens
-             (id, user_id, device_id, token_hash, expires_at, revoked_at, created_at)
-             VALUES (:id, :user_id, :device_id, :token_hash, :expires_at, :revoked_at, :created_at)'
-        );
-        $stmt->execute([
+        $this->refreshTokens->newQuery()->create([
             'id' => $id,
             'user_id' => $userId,
             'device_id' => $deviceId,
@@ -326,29 +335,31 @@ final class PdoDeviceIsolationTest extends TestCase
 
     private function refreshTokenRevokedAt(string $tokenHash): ?string
     {
-        $stmt = $this->pdo->prepare('SELECT revoked_at FROM refresh_tokens WHERE token_hash = :token_hash');
-        $stmt->execute(['token_hash' => $tokenHash]);
-        $value = $stmt->fetchColumn();
+        $query = $this->refreshTokens->newQuery();
+        $query->where('token_hash', $tokenHash);
+        $value = $query->value('revoked_at');
 
-        return $value === false || $value === null ? null : (string)$value;
+        return $value === null ? null : (string)$value;
     }
 
     /** @return array<int, array<string, mixed>> */
     private function refreshTokenRows(): array
     {
-        return $this->pdo->query(
-            'SELECT id, user_id, device_id, token_hash, expires_at, revoked_at, created_at
-             FROM refresh_tokens ORDER BY id'
-        )->fetchAll(PDO::FETCH_ASSOC);
+        $query = $this->refreshTokens->newQuery();
+        $query->orderBy('id');
+        $rows = $query->get(['id', 'user_id', 'device_id', 'token_hash', 'expires_at', 'revoked_at', 'created_at']);
+
+        return $rows->map(static fn (RefreshTokenModel $row): array => $row->getAttributes())->all();
     }
 
     private function assertDeviceIndexesAreUserScoped(): void
     {
-        $indexes = $this->pdo->query('SHOW INDEX FROM devices')->fetchAll(PDO::FETCH_ASSOC);
-        $indexNames = array_column($indexes, 'Key_name');
+        $schema = EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder();
+        $indexNames = array_column($schema->getIndexes('devices'), 'name');
 
         $this->assertContains('uniq_user_device_uuid', $indexNames);
         $this->assertNotContains('uniq_device_uuid', $indexNames);
+        $this->assertTrue($schema->hasIndex('devices', ['user_id', 'device_uuid'], 'unique'));
     }
 
     private function connectTestDatabase(string $database): PDO
@@ -375,9 +386,9 @@ final class PdoDeviceIsolationTest extends TestCase
     /**
      * @param array<int, array{process: resource, pipes: array<int, resource>}> $workers
      */
-    private function waitForWorkers(array &$workers, float $timeoutSeconds): void
+    private function waitForWorkers(array &$workers): void
     {
-        $deadline = microtime(true) + $timeoutSeconds;
+        $deadline = microtime(true) + 5.0;
         $statuses = [];
         while (microtime(true) < $deadline) {
             $allExited = true;

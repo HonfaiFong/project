@@ -47,7 +47,11 @@ function parseScenario(string $code, string $provider): array
         jsonResponse(200, ['errcode' => 40029, 'errmsg' => 'invalid code']);
     }
 
-    return [$parts[1], preg_replace('/[^A-Za-z0-9]/', '', $parts[2]) ?: 'unknown'];
+    // Distinct single-use authorization codes can represent the same identity.
+    // The optional nonce is test-only and never contributes to the subject id.
+    $identitySuffix = explode('~', $parts[2], 2)[0];
+
+    return [$parts[1], preg_replace('/[^A-Za-z0-9]/', '', $identitySuffix) ?: 'unknown'];
 }
 
 $path = parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/';

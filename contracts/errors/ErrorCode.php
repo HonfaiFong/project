@@ -137,6 +137,7 @@ enum ErrorCode: int
             self::AUTH_SOCIAL_BIND_TOKEN_INVALID,
             self::AUTH_SMS_CODE_INVALID,
             self::AUTH_SMS_CODE_EXPIRED => 401,
+            self::USER_BANNED,
             self::PERSONA_FORBIDDEN,
             self::CHAT_FORBIDDEN_BY_PRIVACY,
             self::SOCIAL_USER_BLOCKED => 403,

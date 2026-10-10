@@ -4,7 +4,23 @@ declare(strict_types=1);
 
 namespace Tests\Integration;
 
+use AddSocialIdentityAliases;
+use AddUserSocialRegistrationKey;
+use Illuminate\Database\Connection;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Database\Schema\Builder;
+use JsonException;
+use Packages\Database\EloquentConnection;
+use Packages\Outbox\Model\OutboxEvent;
+use Phinx\Db\Adapter\MysqlAdapter;
+use Phinx\Migration\IrreversibleMigrationException;
+use Services\AuthService\Infrastructure\Model\SocialIdentity;
+use Services\AuthService\Infrastructure\Model\SocialIdentityAlias;
+use Services\UserService\Infrastructure\Model\UserModel;
 use PDO;
+use PDOException;
+use Random\RandomException;
 use RuntimeException;
 use Tests\TestCase;
 use Throwable;
@@ -43,6 +59,7 @@ final class PhinxMigrationTest extends TestCase
 
     private string $prefix;
 
+    /** @throws RandomException */
     protected function setUp(): void
     {
         $database = getenv('SOCIAL_TEST_MYSQL_DATABASE');
@@ -71,11 +88,12 @@ final class PhinxMigrationTest extends TestCase
 
         foreach (self::LOGICAL_DATABASES as $database) {
             try {
-                $this->pdo->exec('DROP DATABASE IF EXISTS ' . $this->identifier($this->prefix . $database));
+                $this->schema()->dropDatabaseIfExists($this->prefix . $database);
             } catch (Throwable) {
                 // Keep the original assertion failure when cleanup itself is unavailable.
             }
         }
+        EloquentConnection::forget($this->pdo);
     }
 
     public function testFreshMigrationIsIdempotentAndPreservesRowsAndHistory(): void
@@ -86,50 +104,37 @@ final class PhinxMigrationTest extends TestCase
 
         $this->insertIdentity('100000000000000001', 'Abc');
         $firstCounts = $this->migrationCounts();
-
         $this->assertMigrationSucceeds();
 
         $this->assertPhinxHistory();
         $this->assertSame($firstCounts, $this->migrationCounts());
-        $this->assertSame(
-            1,
-            (int)$this->pdo->query(
-                'SELECT COUNT(*) FROM ' . $this->identifier($this->prefix . 'auth_db') . '.`social_identities`',
-            )->fetchColumn(),
-        );
-        $this->assertSame(
-            'Abc',
-            (string)$this->pdo->query(
-                'SELECT `openid` FROM ' . $this->identifier($this->prefix . 'auth_db')
-                . '.`social_identities` WHERE `id` = 100000000000000001',
-            )->fetchColumn(),
-        );
+        $this->assertSame(1, $this->model(SocialIdentity::class, 'auth_db')->newQuery()->count());
+        $this->assertSame('Abc', $this->model(SocialIdentity::class, 'auth_db')->newQuery()
+            ->whereKey('100000000000000001')->value('openid'));
     }
 
+    /** @throws JsonException */
     public function testPartialLegacySchemaIsRepairedAndMigrationCanBeRetried(): void
     {
         $this->executePrefixedBaseline();
 
-        $auth = $this->identifier($this->prefix . 'auth_db');
-        $this->pdo->exec(
-            'ALTER TABLE ' . $auth . '.`outbox_events` '
-            . 'ADD COLUMN `claimed_at` DATETIME(3) NULL AFTER `available_at`, '
-            . 'ADD INDEX `idx_aggregate_order` (`aggregate_type`, `aggregate_id`, `id`, `status`), '
-            . 'ADD COLUMN `event_key` VARCHAR(64) NOT NULL DEFAULT \'\' AFTER `aggregate_id`, '
-            . 'ADD COLUMN `trace_id` VARCHAR(64) NOT NULL DEFAULT \'\' AFTER `event_key`, '
-            . 'ADD INDEX `idx_event_key_id_status` (`event_key`, `id`, `status`)',
-        );
-        $user = $this->identifier($this->prefix . 'user_db');
-        $this->pdo->exec(
-            'ALTER TABLE ' . $user . '.`outbox_events` '
-            . 'ADD COLUMN `event_key` VARCHAR(64) NOT NULL DEFAULT \'\' AFTER `aggregate_id`, '
-            . 'ADD COLUMN `trace_id` VARCHAR(64) NOT NULL DEFAULT \'\' AFTER `event_key`',
-        );
+        $auth = $this->prefix . 'auth_db';
+        $this->schema()->table($auth . '.outbox_events', static function (Blueprint $table): void {
+            $table->dateTime('claimed_at', 3)->nullable()->after('available_at');
+            $table->index(['aggregate_type', 'aggregate_id', 'id', 'status'], 'idx_aggregate_order');
+            $table->string('event_key', 64)->default('')->after('aggregate_id');
+            $table->string('trace_id', 64)->default('')->after('event_key');
+            $table->index(['event_key', 'id', 'status'], 'idx_event_key_id_status');
+        });
+        $user = $this->prefix . 'user_db';
+        $this->schema()->table($user . '.outbox_events', static function (Blueprint $table): void {
+            $table->string('event_key', 64)->default('')->after('aggregate_id');
+            $table->string('trace_id', 64)->default('')->after('event_key');
+        });
         $this->insertOutboxEvent(
             $user,
             '00000000-0000-0000-0000-000000000001',
             'old-persona-aggregate',
-            'persona.updated.v1',
             'preserved-event-key',
             'existing-trace',
         );
@@ -137,7 +142,6 @@ final class PhinxMigrationTest extends TestCase
             $user,
             '00000000-0000-0000-0000-000000000002',
             'old-persona-aggregate-2',
-            'persona.updated.v1',
             '',
             '',
         );
@@ -145,28 +149,22 @@ final class PhinxMigrationTest extends TestCase
         $this->assertMigrationSucceeds();
         $this->assertCompleteSchema();
 
-        $statement = $this->pdo->prepare(
-            'SELECT `event_id`, `event_key` FROM ' . $user . '.`outbox_events` '
-            . 'WHERE `event_id` IN (:first, :second) ORDER BY `event_id`',
-        );
-        $statement->execute([
-            'first' => '00000000-0000-0000-0000-000000000001',
-            'second' => '00000000-0000-0000-0000-000000000002',
-        ]);
+        $query = $this->model(OutboxEvent::class, 'user_db')->newQuery();
+        $query->select(['event_id', 'event_key'])->whereIn('event_id', [
+            '00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002',
+        ])->orderBy('event_id');
         $this->assertSame(
             [
                 ['event_id' => '00000000-0000-0000-0000-000000000001', 'event_key' => 'preserved-event-key'],
                 ['event_id' => '00000000-0000-0000-0000-000000000002', 'event_key' => '1001'],
             ],
-            $statement->fetchAll(PDO::FETCH_ASSOC),
+            $query->get()->map(static fn (OutboxEvent $event): array => $event->getAttributes())->all(),
         );
 
         $this->assertMigrationSucceeds();
         $this->assertSame(
             6,
-            (int)$this->pdo->query(
-                'SELECT COUNT(*) FROM ' . $this->identifier($this->prefix . 'meta') . '.`schema_migrations`',
-            )->fetchColumn(),
+            $this->connection()->table($this->prefix . 'meta.schema_migrations')->count(),
         );
     }
 
@@ -181,10 +179,7 @@ final class PhinxMigrationTest extends TestCase
         $this->assertMigrationSucceeds();
         $this->assertCompleteSchema();
 
-        $history = $this->pdo->query(
-            'SELECT `name` FROM ' . $this->identifier($this->prefix . 'meta')
-            . '.`schema_migrations` ORDER BY `name`',
-        )->fetchAll(PDO::FETCH_COLUMN);
+        $history = $this->connection()->table($this->prefix . 'meta.schema_migrations')->orderBy('name')->pluck('name')->all();
         $this->assertSame(
             array_map(static fn(string $name): string => $name, self::LEGACY_MIGRATIONS),
             $history,
@@ -196,17 +191,9 @@ final class PhinxMigrationTest extends TestCase
         $this->assertMigrationSucceeds();
 
         $columns = ['provider_app_id', 'identity_namespace', 'subject_id', 'openid', 'unionid'];
-        $statement = $this->pdo->prepare(
-            'SELECT `column_name` AS `column_name`, `collation_name` AS `collation_name` '
-            . 'FROM `information_schema`.`columns` '
-            . "WHERE `table_schema` = :schema AND `table_name` = 'social_identities' "
-            . "AND `column_name` IN ('provider_app_id', 'identity_namespace', 'subject_id', 'openid', 'unionid')",
-        );
-        $statement->execute(['schema' => $this->prefix . 'auth_db']);
-        $collations = [];
-        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $column) {
-            $collations[(string)$column['column_name']] = (string)$column['collation_name'];
-        }
+        $collations = $this->connection()->table('information_schema.columns')
+            ->where('TABLE_SCHEMA', $this->prefix . 'auth_db')->where('TABLE_NAME', 'social_identities')
+            ->whereIn('COLUMN_NAME', $columns)->pluck('COLLATION_NAME', 'COLUMN_NAME')->all();
         foreach ($columns as $column) {
             $this->assertSame('utf8mb4_bin', $collations[$column] ?? null, $column . ' collation');
         }
@@ -215,15 +202,14 @@ final class PhinxMigrationTest extends TestCase
         $this->insertIdentity('100000000000000002', 'abc');
         $this->assertSame(
             2,
-            (int)$this->pdo->query(
-                'SELECT COUNT(*) FROM ' . $this->identifier($this->prefix . 'auth_db') . '.`social_identities`',
-            )->fetchColumn(),
+            $this->model(SocialIdentity::class, 'auth_db')->newQuery()->count(),
         );
     }
 
     public function testMigrationProcessHonoursPrefixAdvisoryLock(): void
     {
         $lockName = 'social_migrations_' . substr(hash('sha256', $this->prefix), 0, 40);
+        // MySQL session advisory locks have no Eloquent or Schema Builder API.
         $lock = $this->pdo->prepare('SELECT GET_LOCK(:name, :timeout)');
         $lock->execute(['name' => $lockName, 'timeout' => 0]);
         $this->assertSame(1, (int)$lock->fetchColumn());
@@ -238,6 +224,154 @@ final class PhinxMigrationTest extends TestCase
         }
 
         $this->assertMigrationSucceeds();
+    }
+
+    public function testSocialRegistrationKeyIsNullableUniqueAndPreservesExistingRows(): void
+    {
+        $this->assertMigrationSucceeds();
+        $this->assertColumnExists('user_db', 'users', 'social_registration_key');
+        $this->assertIndexExists('user_db', 'users', 'uniq_social_registration_key');
+
+        $users = $this->prefix . 'user_db.users';
+        $columns = array_column($this->schema()->getColumns($users), null, 'name');
+        $column = $columns['social_registration_key'];
+        $this->assertTrue($column['nullable']);
+        $this->assertSame('utf8mb4_bin', $this->connection()->table('information_schema.columns')
+            ->where('TABLE_SCHEMA', $this->prefix . 'user_db')->where('TABLE_NAME', 'users')
+            ->where('COLUMN_NAME', 'social_registration_key')->value('COLLATION_NAME'));
+        $this->assertSame('varchar(128)', $column['type']);
+
+        // Pre-existing phone accounts keep NULL keys and must coexist.
+        $this->insertUser($users, 5001, '+8613800000001', null);
+        $this->insertUser($users, 5002, '+8613800000002', null);
+        $this->insertUser($users, 5003, '+8613800000003', 'social:1001');
+        $accountsAfterMigration = $this->userRowCount($users);
+        $this->assertSame(3, $accountsAfterMigration);
+
+        try {
+            $this->insertUser($users, 5004, null, 'social:1001');
+            $this->fail('Expected the unique social registration key to reject a duplicate');
+        } catch (PDOException $exception) {
+            $this->assertSame('23000', $exception->getCode());
+            $this->assertSame(1062, (int)($exception->errorInfo[1] ?? 0));
+            $this->assertStringContainsString('uniq_social_registration_key', $exception->getMessage());
+        }
+
+        $this->assertSame($accountsAfterMigration, $this->userRowCount($users));
+
+        // Retrying the migration must stay a no-op and keep every row intact.
+        $this->assertMigrationSucceeds();
+        $this->assertSame($accountsAfterMigration, $this->userRowCount($users));
+        $this->assertSame(
+            'social:1001',
+            $this->model(UserModel::class, 'user_db')->newQuery()->whereKey('5003')->value('social_registration_key'),
+        );
+    }
+
+    public function testAliasSchemaPreservesCompositeKeyBinaryCollationAndForeignKey(): void
+    {
+        $this->assertMigrationSucceeds();
+        $table = $this->prefix . 'auth_db.social_identity_aliases';
+        $this->assertTrue($this->schema()->hasIndex($table, ['provider', 'provider_app_id', 'openid'], 'primary'));
+        $foreignKeys = $this->schema()->getForeignKeys($table);
+        $this->assertCount(1, $foreignKeys);
+        $this->assertSame(['social_identity_id'], $foreignKeys[0]['columns']);
+        $this->assertSame($this->prefix . 'auth_db', $foreignKeys[0]['foreign_schema']);
+        $this->assertSame('social_identities', $foreignKeys[0]['foreign_table']);
+        $this->assertSame(['id'], $foreignKeys[0]['foreign_columns']);
+
+        $this->insertIdentity('100000000000000001', 'canonical');
+        $aliases = $this->model(SocialIdentityAlias::class, 'auth_db');
+        foreach (['Abc', 'abc'] as $openId) {
+            $aliases->newQuery()->create([
+                'provider' => 'wechat', 'provider_app_id' => 'app', 'openid' => $openId,
+                'social_identity_id' => '100000000000000001',
+            ]);
+        }
+        $this->assertSame(2, $aliases->newQuery()->count());
+
+        try {
+            $aliases->newQuery()->create([
+                'provider' => 'wechat', 'provider_app_id' => 'app', 'openid' => 'Abc',
+                'social_identity_id' => '100000000000000001',
+            ]);
+            $this->fail('A duplicate alias tuple must be rejected');
+        } catch (PDOException $exception) {
+            $this->assertSame(1062, (int)($exception->errorInfo[1] ?? 0));
+        }
+        $beforeRetry = $this->migrationCounts();
+        $this->assertMigrationSucceeds();
+        $this->assertSame($beforeRetry, $this->migrationCounts());
+        $this->assertSame(2, $aliases->newQuery()->count());
+
+        try {
+            $aliases->newQuery()->create([
+                'provider' => 'wechat', 'provider_app_id' => 'app', 'openid' => 'missing-owner',
+                'social_identity_id' => '999999999999999999',
+            ]);
+            $this->fail('The alias must reference an existing identity');
+        } catch (PDOException $exception) {
+            $this->assertSame(1452, (int)($exception->errorInfo[1] ?? 0));
+        }
+    }
+
+    public function testRegistrationKeyMigrationPreservesLegacyRowsAndRepairsAMissingIndex(): void
+    {
+        $this->executePrefixedBaseline();
+        $users = $this->model(UserModel::class, 'user_db');
+        $id = '9223372036854775808';
+        $users->newQuery()->create([
+            'id' => $id, 'status' => 1, 'phone' => '+8613800000000', 'email' => null,
+            'register_channel' => 'legacy', 'risk_level' => 2,
+            'created_at' => '2020-01-01 00:00:00.123', 'updated_at' => '2020-01-02 00:00:00.456',
+        ]);
+        $before = $users->newQuery()->findOrFail($id)->getAttributes();
+        $this->assertMigrationSucceeds();
+        $after = $users->newQuery()->findOrFail($id)->getAttributes();
+        $this->assertNull($after['social_registration_key']);
+        unset($after['social_registration_key']);
+        $this->assertSame($before, $after);
+
+        require_once dirname(__DIR__, 2) . '/database/migrations/20261009000000_add_user_social_registration_key.php';
+        $migration = new AddUserSocialRegistrationKey('test', 20261009000000);
+        $migration->setAdapter(new MysqlAdapter([
+            'connection' => $this->pdo, 'name' => $this->prefix . 'meta',
+            'migration_table' => $this->prefix . 'meta.phinxlog', 'schema_prefix' => $this->prefix,
+        ]));
+        $table = $this->prefix . 'user_db.users';
+        $this->schema()->table($table, static function (Blueprint $table): void {
+            $table->dropUnique('uniq_social_registration_key');
+        });
+        $this->assertFalse($this->schema()->hasIndex($table, 'uniq_social_registration_key'));
+        $migration->up();
+        $this->assertTrue($this->schema()->hasIndex($table, 'uniq_social_registration_key', 'unique'));
+        $complete = $users->newQuery()->findOrFail($id)->getAttributes();
+        $migration->up();
+        $this->assertSame($complete, $users->newQuery()->findOrFail($id)->getAttributes());
+    }
+
+    /** @throws IrreversibleMigrationException */
+    public function testSocialMigrationsRefuseDestructiveRollback(): void
+    {
+        $this->assertMigrationSucceeds();
+        $this->insertIdentity('100000000000000001', 'preserved');
+        $before = $this->migrationCounts();
+        require_once dirname(__DIR__, 2) . '/database/migrations/20261009000000_add_user_social_registration_key.php';
+        require_once dirname(__DIR__, 2) . '/database/migrations/20261009000100_add_social_identity_aliases.php';
+        foreach ([
+            new AddUserSocialRegistrationKey('test', 20261009000000),
+            new AddSocialIdentityAliases('test', 20261009000100),
+        ] as $migration) {
+            try {
+                $migration->down();
+                $this->fail('Social persistence migrations must reject destructive rollback');
+            } catch (IrreversibleMigrationException $exception) {
+                $this->assertNotSame('', $exception->getMessage());
+            }
+        }
+        $this->assertSame($before, $this->migrationCounts());
+        $this->assertColumnExists('user_db', 'users', 'social_registration_key');
+        $this->assertTrue($this->schema()->hasTable($this->prefix . 'auth_db.social_identity_aliases'));
     }
 
     private function assertMigrationSucceeds(): void
@@ -287,7 +421,6 @@ final class PhinxMigrationTest extends TestCase
         $stdout = '';
         $stderr = '';
         $deadline = microtime(true) + 30.0;
-        $status = ['running' => true, 'exitcode' => -1];
         do {
             $status = proc_get_status($process);
             $chunk = stream_get_contents($pipes[1]);
@@ -363,6 +496,7 @@ final class PhinxMigrationTest extends TestCase
         if ($sql === null) {
             throw new RuntimeException('Unable to prepare baseline SQL');
         }
+        // Execute the actual versioned SQL fixture: rewriting it would stop testing legacy adoption.
         $this->pdo->exec($this->prefixDatabaseNames($sql));
     }
 
@@ -374,72 +508,59 @@ final class PhinxMigrationTest extends TestCase
             throw new RuntimeException('Unable to read legacy migration: ' . $migration);
         }
 
+        // Execute the actual versioned SQL fixture: rewriting it would stop testing legacy adoption.
         $this->pdo->exec($this->prefixDatabaseNames($sql));
     }
 
     private function createLegacyHistory(): void
     {
-        $meta = $this->identifier($this->prefix . 'meta');
-        $this->pdo->exec(
-            'CREATE DATABASE IF NOT EXISTS ' . $meta . ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
-        );
-        $this->pdo->exec(
-            'CREATE TABLE IF NOT EXISTS ' . $meta . '.`schema_migrations` ('
-            . '`name` VARCHAR(255) NOT NULL PRIMARY KEY, '
-            . '`applied_at` DATETIME(3) NOT NULL'
-            . ') ENGINE=InnoDB',
-        );
-        $statement = $this->pdo->prepare(
-            'INSERT INTO ' . $meta . '.`schema_migrations` (`name`, `applied_at`) '
-            . 'VALUES (:name, CURRENT_TIMESTAMP(3))',
-        );
-        foreach (self::LEGACY_MIGRATIONS as $migration) {
-            $statement->execute(['name' => $migration]);
+        $meta = $this->prefix . 'meta';
+        $schemas = array_column($this->schema()->getSchemas(), 'name');
+        if (!in_array($meta, $schemas, true)) {
+            $this->schema()->createDatabase($meta);
         }
+        $history = $meta . '.schema_migrations';
+        if (!$this->schema()->hasTable($history)) {
+            $this->schema()->create($history, static function (Blueprint $table): void {
+                $table->charset('utf8mb4');
+                $table->collation('utf8mb4_unicode_ci');
+                $table->string('name')->primary();
+                $table->dateTime('applied_at', 3);
+            });
+        }
+        $this->connection()->table($history)->insert(array_map(static fn (string $migration): array => [
+            'name' => $migration, 'applied_at' => gmdate('Y-m-d H:i:s.v'),
+        ], self::LEGACY_MIGRATIONS));
     }
 
     /** @return array{phinx: int, legacy: int, identities: int} */
     private function migrationCounts(): array
     {
         return [
-            'phinx' => (int)$this->pdo->query(
-                'SELECT COUNT(*) FROM ' . $this->identifier($this->prefix . 'meta') . '.`phinxlog`',
-            )->fetchColumn(),
-            'legacy' => (int)$this->pdo->query(
-                'SELECT COUNT(*) FROM ' . $this->identifier($this->prefix . 'meta') . '.`schema_migrations`',
-            )->fetchColumn(),
-            'identities' => (int)$this->pdo->query(
-                'SELECT COUNT(*) FROM ' . $this->identifier($this->prefix . 'auth_db') . '.`social_identities`',
-            )->fetchColumn(),
+            'phinx' => $this->connection()->table($this->prefix . 'meta.phinxlog')->count(),
+            'legacy' => $this->connection()->table($this->prefix . 'meta.schema_migrations')->count(),
+            'identities' => $this->model(SocialIdentity::class, 'auth_db')->newQuery()->count(),
         ];
     }
 
     private function assertCompleteSchema(): void
     {
+        $schemas = array_column($this->schema()->getSchemas(), 'name');
         foreach (self::LOGICAL_DATABASES as $database) {
-            $statement = $this->pdo->prepare(
-                'SELECT COUNT(*) FROM `information_schema`.`schemata` WHERE `schema_name` = :schema',
-            );
-            $statement->execute(['schema' => $this->prefix . $database]);
-            $this->assertSame(1, (int)$statement->fetchColumn(), $database . ' schema');
+            $this->assertContains($this->prefix . $database, $schemas, $database . ' schema');
         }
 
         $expectedTables = [
-            'auth_db' => ['devices', 'refresh_tokens', 'outbox_events', 'social_identities'],
+            'auth_db' => ['devices', 'refresh_tokens', 'outbox_events', 'social_identities', 'social_identity_aliases'],
             'user_db' => ['users', 'personas', 'outbox_events'],
             'content_db' => ['posts', 'post_media', 'comments', 'outbox_events'],
             'social_db' => ['likes', 'follows', 'blocks', 'outbox_events'],
             'chat_db' => ['conversations', 'conversation_members', 'outbox_events'],
             'message_db' => ['messages', 'outbox_events'],
         ];
-        $statement = $this->pdo->prepare(
-            'SELECT COUNT(*) FROM `information_schema`.`tables` '
-            . 'WHERE `table_schema` = :schema AND `table_name` = :table',
-        );
         foreach ($expectedTables as $database => $tables) {
             foreach ($tables as $table) {
-                $statement->execute(['schema' => $this->prefix . $database, 'table' => $table]);
-                $this->assertSame(1, (int)$statement->fetchColumn(), $database . '.' . $table);
+                $this->assertTrue($this->schema()->hasTable($this->prefix . $database . '.' . $table), $database . '.' . $table);
             }
         }
 
@@ -451,115 +572,115 @@ final class PhinxMigrationTest extends TestCase
             $this->assertIndexExists($database, 'outbox_events', 'idx_event_key_id_status');
         }
         $this->assertIndexExists('auth_db', 'devices', 'uniq_user_device_uuid');
-        $this->assertIndexMissing('auth_db', 'devices', 'uniq_device_uuid');
+        $this->assertFalse($this->schema()->hasIndex($this->prefix . 'auth_db.devices', 'uniq_device_uuid'));
+        $this->assertColumnExists('user_db', 'users', 'social_registration_key');
+        $this->assertIndexExists('user_db', 'users', 'uniq_social_registration_key');
     }
 
     private function assertPhinxHistory(): void
     {
-        $versions = $this->pdo->query(
-            'SELECT `version` FROM ' . $this->identifier($this->prefix . 'meta')
-            . '.`phinxlog` ORDER BY `version`',
-        )->fetchAll(PDO::FETCH_COLUMN);
-        $this->assertSame(
-            ['20261003000000', '20261003000100'],
-            array_map(static fn(mixed $version): string => (string)$version, $versions),
-        );
+        $versions = $this->connection()->table($this->prefix . 'meta.phinxlog')->orderBy('version')->pluck('version')->all();
+        $this->assertSame($this->migrationVersions(), array_map(static fn (mixed $version): string => (string)$version, $versions));
 
-        $legacyNames = $this->pdo->query(
-            'SELECT `name` FROM ' . $this->identifier($this->prefix . 'meta')
-            . '.`schema_migrations` ORDER BY `name`',
-        )->fetchAll(PDO::FETCH_COLUMN);
+        $legacyNames = $this->connection()->table($this->prefix . 'meta.schema_migrations')->orderBy('name')->pluck('name')->all();
         $this->assertSame(self::LEGACY_MIGRATIONS, $legacyNames);
+    }
+
+    /**
+     * The applied history must match every migration file exactly once. Reading
+     * the directory keeps this assertion correct when parallel work adds
+     * migrations instead of pinning a hand-maintained version list.
+     *
+     * @return list<string>
+     */
+    private function migrationVersions(): array
+    {
+        $versions = [];
+        foreach (glob(dirname(__DIR__, 2) . '/database/migrations/*.php') ?: [] as $path) {
+            if (preg_match('/\A(\d{14})_/', basename($path), $matches) === 1) {
+                $versions[] = $matches[1];
+            }
+        }
+        sort($versions);
+
+        return $versions;
     }
 
     private function assertColumnExists(string $database, string $table, string $column): void
     {
-        $statement = $this->pdo->prepare(
-            'SELECT COUNT(*) FROM `information_schema`.`columns` '
-            . 'WHERE `table_schema` = :schema AND `table_name` = :table AND `column_name` = :column',
-        );
-        $statement->execute([
-            'schema' => $this->prefix . $database,
-            'table' => $table,
-            'column' => $column,
-        ]);
-        $this->assertSame(1, (int)$statement->fetchColumn(), $database . '.' . $table . '.' . $column);
+        $this->assertTrue($this->schema()->hasColumn($this->prefix . $database . '.' . $table, $column), $database . '.' . $table . '.' . $column);
     }
 
     private function assertIndexExists(string $database, string $table, string $index): void
     {
-        $statement = $this->pdo->prepare(
-            'SELECT COUNT(DISTINCT `index_name`) FROM `information_schema`.`statistics` '
-            . 'WHERE `table_schema` = :schema AND `table_name` = :table AND `index_name` = :index',
-        );
-        $statement->execute([
-            'schema' => $this->prefix . $database,
-            'table' => $table,
-            'index' => $index,
-        ]);
-        $this->assertSame(1, (int)$statement->fetchColumn(), $database . '.' . $table . '.' . $index);
+        $this->assertTrue($this->schema()->hasIndex($this->prefix . $database . '.' . $table, $index), $database . '.' . $table . '.' . $index);
     }
 
-    private function assertIndexMissing(string $database, string $table, string $index): void
+    private function userRowCount(string $table): int
     {
-        $statement = $this->pdo->prepare(
-            'SELECT COUNT(DISTINCT `index_name`) FROM `information_schema`.`statistics` '
-            . 'WHERE `table_schema` = :schema AND `table_name` = :table AND `index_name` = :index',
-        );
-        $statement->execute([
-            'schema' => $this->prefix . $database,
-            'table' => $table,
-            'index' => $index,
+        return EloquentConnection::model(UserModel::class, $this->pdo)->setTable($table)->newQueryWithoutScopes()->count();
+    }
+
+    private function insertUser(string $table, int $id, ?string $phone, ?string $socialRegistrationKey): void
+    {
+        $now = gmdate('Y-m-d H:i:s.v');
+        EloquentConnection::model(UserModel::class, $this->pdo)->setTable($table)->newQuery()->create([
+            'id' => (string)$id, 'status' => 1, 'phone' => $phone, 'email' => null,
+            'register_channel' => 'default', 'risk_level' => 0,
+            'social_registration_key' => $socialRegistrationKey,
+            'created_at' => $now, 'updated_at' => $now,
         ]);
-        $this->assertSame(0, (int)$statement->fetchColumn(), $database . '.' . $table . '.' . $index);
     }
 
     private function insertIdentity(string $id, string $value): void
     {
-        $statement = $this->pdo->prepare(
-            'INSERT INTO ' . $this->identifier($this->prefix . 'auth_db') . '.`social_identities` '
-            . '(`id`, `user_id`, `provider`, `provider_app_id`, `identity_namespace`, `subject_type`, '
-            . '`subject_id`, `openid`, `unionid`, `status`, `bound_at`, `last_login_at`, `created_at`, `updated_at`) '
-            . "VALUES (:id, NULL, 'wechat', 'wechat-main-app', 'wechat-main', 'openid', "
-            . ':subject_id, :openid, NULL, 0, NULL, NULL, :created_at, :updated_at)',
-        );
         $now = gmdate('Y-m-d H:i:s.v');
-        $statement->execute([
-            'id' => $id,
-            'subject_id' => $value,
-            'openid' => $value,
-            'created_at' => $now,
-            'updated_at' => $now,
+        $this->model(SocialIdentity::class, 'auth_db')->newQuery()->create([
+            'id' => $id, 'user_id' => null, 'provider' => 'wechat', 'provider_app_id' => 'wechat-main-app',
+            'identity_namespace' => 'wechat-main', 'subject_type' => 'openid', 'subject_id' => $value,
+            'openid' => $value, 'unionid' => null, 'status' => 0, 'bound_at' => null, 'last_login_at' => null,
+            'created_at' => $now, 'updated_at' => $now,
         ]);
     }
 
+    /** @throws JsonException */
     private function insertOutboxEvent(
         string $schema,
         string $eventId,
         string $aggregateId,
-        string $eventType,
         string $eventKey,
         string $traceId,
     ): void {
-        $statement = $this->pdo->prepare(
-            'INSERT INTO ' . $schema . '.`outbox_events` '
-            . '(`id`, `event_id`, `aggregate_type`, `aggregate_id`, `event_key`, `trace_id`, `event_type`, '
-            . '`event_version`, `payload`, `status`, `available_at`, `published_at`, `created_at`) '
-            . 'VALUES (:id, :event_id, \'persona\', :aggregate_id, :event_key, :trace_id, :event_type, '
-            . '1, :payload, 0, :available_at, NULL, :created_at)',
-        );
         $now = gmdate('Y-m-d H:i:s.v');
-        $statement->execute([
+        EloquentConnection::model(OutboxEvent::class, $this->pdo)->setTable($schema . '.outbox_events')->newQuery()->create([
             'id' => $eventId === '00000000-0000-0000-0000-000000000001' ? '9001' : '9002',
-            'event_id' => $eventId,
-            'aggregate_id' => $aggregateId,
-            'event_key' => $eventKey,
-            'trace_id' => $traceId,
-            'event_type' => $eventType,
-            'payload' => json_encode(['user_id' => '1001'], JSON_THROW_ON_ERROR),
-            'available_at' => $now,
-            'created_at' => $now,
+            'event_id' => $eventId, 'aggregate_type' => 'persona', 'aggregate_id' => $aggregateId,
+            'event_key' => $eventKey, 'trace_id' => $traceId, 'event_type' => 'persona.updated.v1', 'event_version' => 1,
+            'payload' => json_encode(['user_id' => '1001'], JSON_THROW_ON_ERROR), 'status' => 0,
+            'available_at' => $now, 'published_at' => null, 'created_at' => $now,
         ]);
+    }
+
+    private function connection(): Connection
+    {
+        return EloquentConnection::fromPdo($this->pdo);
+    }
+
+    private function schema(): Builder
+    {
+        return $this->connection()->getSchemaBuilder();
+    }
+
+    /**
+     * @template T of Model
+     * @param class-string<T> $class
+     * @return T
+     */
+    private function model(string $class, string $database): Model
+    {
+        $model = EloquentConnection::model($class, $this->pdo);
+
+        return $model->setTable($this->prefix . $database . '.' . $model->getTable());
     }
 
     private function prefixDatabaseNames(string $sql): string

@@ -22,6 +22,9 @@ final class UserApplicationService
 {
     private const MAX_PERSONAS_PER_USER = 5;
 
+    /** Kept in sync with the users.social_registration_key column width. */
+    private const MAX_REGISTRATION_KEY_LENGTH = 128;
+
     public function __construct(
         private readonly UserRepositoryInterface $userRepo,
         private readonly PersonaRepositoryInterface $personaRepo,
@@ -35,7 +38,7 @@ final class UserApplicationService
     public function findOrCreateUserByPhone(string $phone, string $registerChannel = 'default'): array
     {
         $phone = $this->phoneNormalizer->normalize($phone);
-        $registerChannel = trim($registerChannel) !== '' ? trim($registerChannel) : 'default';
+        $registerChannel = $this->normalizeRegisterChannel($registerChannel);
         $user = $this->userRepo->findByPhone($phone);
         $isNew = false;
 
@@ -50,35 +53,7 @@ final class UserApplicationService
                         return [$existing, false];
                     }
 
-                    $id = $this->snowflake->nextId();
-                    $user = $this->userRepo->create($id, $phone, null, $registerChannel);
-
-                    $personaId = $this->snowflake->nextId();
-                    $persona = $this->personaRepo->create(
-                        id: $personaId,
-                        userId: $id,
-                        type: 1,
-                        nickname: 'User_' . substr($id, -4),
-                        avatarKey: null,
-                        bio: null
-                    );
-
-                    $this->recordEvent(
-                        aggregateType: 'user',
-                        aggregateId: $id,
-                        eventKey: $id,
-                        eventType: EventTypes::USER_REGISTERED,
-                        payload: $user->toArray() + ['persona_id' => $persona->id],
-                    );
-                    $this->recordEvent(
-                        aggregateType: 'persona',
-                        aggregateId: $persona->id,
-                        eventKey: $id,
-                        eventType: EventTypes::PERSONA_UPDATED,
-                        payload: $persona->toArray(),
-                    );
-
-                    return [$user, true];
+                    return [$this->registerUser($this->snowflake->nextId(), $phone, $registerChannel), true];
                 });
                 [$user, $isNew] = $registration;
             } catch (DuplicateUserException $e) {
@@ -103,6 +78,78 @@ final class UserApplicationService
         return [
             'user'       => $user,
             'is_new_user'=> $isNew,
+        ];
+    }
+
+    /**
+     * Registers a social login identity supplied by AuthService.
+     *
+     * The registration key stays opaque to this service: it is a caller-owned
+     * idempotency key ('social:' + social_identities.id), never the OAuth
+     * subject id, and it is only stored on the created user row.
+     *
+     * @return array{user: User, is_new_user: bool}
+     */
+    public function findOrCreateUserBySocialIdentity(
+        string $registrationKey,
+        string $registerChannel = 'default'
+    ): array {
+        $registrationKey = $this->normalizeRegistrationKey($registrationKey);
+        $registerChannel = $this->normalizeRegisterChannel($registerChannel);
+        $user = $this->userRepo->findBySocialRegistrationKey($registrationKey);
+        $isNew = false;
+
+        if (!$user) {
+            try {
+                /** @var array{0: User, 1: bool} $registration */
+                $registration = $this->transaction(function () use ($registrationKey, $registerChannel): array {
+                    // Re-check inside the transaction so a repeat or retried registration
+                    // shares the user created by the request that won the unique key.
+                    $existing = $this->userRepo->findBySocialRegistrationKey($registrationKey);
+                    if ($existing) {
+                        return [$existing, false];
+                    }
+
+                    return [
+                        $this->registerUser(
+                            $this->snowflake->nextId(),
+                            null,
+                            $registerChannel,
+                            $registrationKey,
+                        ),
+                        true,
+                    ];
+                });
+                [$user, $isNew] = $registration;
+            } catch (DuplicateUserException $e) {
+                // The unique registration key is the serialization point when two
+                // registrations race before either transaction can read the row.
+                $user = $this->userRepo->findBySocialRegistrationKey($registrationKey);
+                if ($user === null) {
+                    if ($this->userRepo->socialRegistrationKeyExists($registrationKey)) {
+                        // A soft-deleted account still owns the key: registration fails
+                        // closed instead of resurrecting a removed user.
+                        throw new RuntimeException(
+                            ErrorCode::USER_NOT_FOUND->message(),
+                            ErrorCode::USER_NOT_FOUND->value,
+                            $e
+                        );
+                    }
+                    throw new RuntimeException(
+                        ErrorCode::INTERNAL_SERVER_ERROR->message(),
+                        ErrorCode::INTERNAL_SERVER_ERROR->value,
+                        $e
+                    );
+                }
+            }
+        }
+
+        $this->assertUserCanAuthenticate($user);
+        $this->userRepo->updateLastLogin($user->id);
+
+        return [
+            'user'        => $user,
+            'is_new_user' => $isNew,
         ];
     }
 
@@ -253,6 +300,73 @@ final class UserApplicationService
     private function transaction(callable $callback): mixed
     {
         return $this->transactionManager->transaction($callback);
+    }
+
+    /**
+     * Creates the user row together with its default persona and the
+     * registration events inside the caller's transaction, so every new
+     * account (phone or social registration) gets the same defaults.
+     */
+    private function registerUser(
+        string $id,
+        ?string $phone,
+        string $registerChannel,
+        ?string $socialRegistrationKey = null
+    ): User {
+        $user = $this->userRepo->create(
+            id: $id,
+            phone: $phone,
+            email: null,
+            registerChannel: $registerChannel,
+            socialRegistrationKey: $socialRegistrationKey,
+        );
+
+        $personaId = $this->snowflake->nextId();
+        $persona = $this->personaRepo->create(
+            id: $personaId,
+            userId: $id,
+            type: 1,
+            nickname: 'User_' . substr($id, -4),
+            avatarKey: null,
+            bio: null
+        );
+
+        $this->recordEvent(
+            aggregateType: 'user',
+            aggregateId: $id,
+            eventKey: $id,
+            eventType: EventTypes::USER_REGISTERED,
+            payload: $user->toArray() + ['persona_id' => $persona->id],
+        );
+        $this->recordEvent(
+            aggregateType: 'persona',
+            aggregateId: $persona->id,
+            eventKey: $id,
+            eventType: EventTypes::PERSONA_UPDATED,
+            payload: $persona->toArray(),
+        );
+
+        return $user;
+    }
+
+    private function normalizeRegisterChannel(string $registerChannel): string
+    {
+        $registerChannel = trim($registerChannel);
+
+        return $registerChannel !== '' ? $registerChannel : 'default';
+    }
+
+    private function normalizeRegistrationKey(string $registrationKey): string
+    {
+        $registrationKey = trim($registrationKey);
+        if ($registrationKey === '') {
+            throw new RuntimeException('registration_key is required', ErrorCode::INVALID_ARGUMENT->value);
+        }
+        if (strlen($registrationKey) > self::MAX_REGISTRATION_KEY_LENGTH) {
+            throw new RuntimeException('registration_key is too long', ErrorCode::INVALID_ARGUMENT->value);
+        }
+
+        return $registrationKey;
     }
 
     /**

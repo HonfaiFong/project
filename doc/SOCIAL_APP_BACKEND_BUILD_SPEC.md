@@ -379,7 +379,9 @@ social-backend/
 
 负责：
 
-- 手机号 / 邮箱 / Apple / 第三方登录扩展
+- 微信 / QQ OAuth 登录与注册（默认登录方式）
+- 已登录用户绑定第三方身份（BindSocialIdentity）
+- 手机号验证码登录（仅 local / development / testing，生产禁用）
 - Access Token
 - Refresh Token
 - Device
@@ -387,6 +389,13 @@ social-backend/
 - WS Ticket
 - Logout
 - Token revoke
+
+约束：
+
+- 社交登录直接返回 `authenticated` 会话：首次登录即创建本地 User，不再有手机号绑定步骤，UserService 通过 `FindOrCreateBySocialIdentity(registration_key, register_channel)` 幂等开户；
+- 认证链路不依赖短信通道，只有开发环境的手机号登录使用固定开发验证码；
+- 绑定第三方身份时，被绑定的用户来自 Access Token，不信任请求体中的 user_id；
+- 旧的无凭据手机号绑定 RPC（`SendSocialPhoneCode` / `BindSocialPhone`）仅为协议兼容保留，调用一律拒绝。
 
 拥有：
 
@@ -1578,7 +1587,9 @@ updated_at
 初期至少实现：
 
 ```text
-POST /api/v1/auth/login
+POST /api/v1/auth/login                # 开发环境手机号登录
+POST /api/v1/auth/social/login         # 微信 / QQ 登录与注册，首次创建账号返回 201
+POST /api/v1/auth/social/bind          # Bearer JWT + provider/code，绑定第三方身份
 POST /api/v1/auth/refresh
 POST /api/v1/auth/logout
 

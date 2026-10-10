@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace Apps\ApiGateway\Grpc;
 
 use Contracts\Errors\ErrorCode;
+use Contracts\Gen\Auth\V1\BindSocialIdentityRequest;
+use Contracts\Gen\Auth\V1\BindSocialIdentityResponse;
 use Contracts\Gen\Auth\V1\CreateWsTicketRequest;
 use Contracts\Gen\Auth\V1\CreateWsTicketResponse;
-use Contracts\Gen\Auth\V1\BindSocialPhoneRequest;
-use Contracts\Gen\Auth\V1\BindSocialPhoneResponse;
 use Contracts\Gen\Auth\V1\DeviceInfo;
 use Contracts\Gen\Auth\V1\LoginRequest;
 use Contracts\Gen\Auth\V1\LoginResponse;
@@ -16,10 +16,9 @@ use Contracts\Gen\Auth\V1\LogoutRequest;
 use Contracts\Gen\Auth\V1\LogoutResponse;
 use Contracts\Gen\Auth\V1\RefreshTokenRequest;
 use Contracts\Gen\Auth\V1\RefreshTokenResponse;
-use Contracts\Gen\Auth\V1\SendSocialPhoneCodeRequest;
-use Contracts\Gen\Auth\V1\SendSocialPhoneCodeResponse;
 use Contracts\Gen\Auth\V1\SocialLoginRequest;
 use Contracts\Gen\Auth\V1\SocialLoginResponse;
+use Contracts\Gen\Auth\V1\SocialProvider;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use Contracts\Gen\Common\V1\HealthCheckRequest;
@@ -43,8 +42,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         private readonly ?string $target = null,
         private readonly int $timeoutMs = 300,
         private readonly int $socialLoginTimeoutMs = 7000,
-        private readonly int $socialPhoneCodeTimeoutMs = 5000,
-        private readonly int $socialBindTimeoutMs = 1000,
+        private readonly int $socialBindTimeoutMs = 7000,
         private readonly int $socialHttpTimeoutMs = 3000,
         ?UnaryGrpcClient $client = null,
         private readonly ?string $serviceToken = null,
@@ -52,6 +50,14 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         if ($this->socialLoginTimeoutMs <= 2 * $this->socialHttpTimeoutMs) {
             throw new InvalidArgumentException(
                 'SocialLogin gRPC deadline must exceed two social HTTP timeouts'
+            );
+        }
+
+        // Binding runs the same worst-case OAuth sequence (QQ sends two HTTP
+        // requests) and verifies the access token twice, so it needs the same budget.
+        if ($this->socialBindTimeoutMs <= 2 * $this->socialHttpTimeoutMs) {
+            throw new InvalidArgumentException(
+                'SocialBindIdentity gRPC deadline must exceed two social HTTP timeouts'
             );
         }
 
@@ -71,80 +77,16 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
     }
 
     /**
-     * @return array{state: string, bind_token?: string, bind_token_expires_at?: string, login?: array<string, mixed>}
+     * @return array{state: string, login: array<string, mixed>}
      */
     public function socialLogin(string $provider, string $code, array $deviceInfo): array
     {
-        $providerValue = match (strtolower(trim($provider))) {
-            'wechat' => 1,
-            'qq' => 2,
-            default => throw new RuntimeException(
-                ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED->message(),
-                ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED->value
-            ),
-        };
-
         $response = $this->call('/auth.v1.AuthService/SocialLogin', new SocialLoginRequest([
-            'provider' => $providerValue,
+            'provider' => $this->providerValue($provider),
             'code'     => $code,
             'device'   => $this->device($deviceInfo),
-        ]), SocialLoginResponse::class, [], $this->socialLoginTimeoutMs);
+        ]), SocialLoginResponse::class, $this->socialLoginTimeoutMs);
 
-        if ($response->getState() === 1) {
-            $login = $response->getLogin();
-            if ($login === null) {
-                throw new RuntimeException(
-                    ErrorCode::SERVICE_UNAVAILABLE->message(),
-                    ErrorCode::SERVICE_UNAVAILABLE->value
-                );
-            }
-
-            return [
-                'state' => 'authenticated',
-                'login' => $this->loginResponse($login),
-            ];
-        }
-
-        return [
-            'state'                  => 'phone_binding_required',
-            'bind_token'             => $response->getBindToken(),
-            'bind_token_expires_at'  => $response->getBindTokenExpiresAt(),
-        ];
-    }
-
-    /**
-     * @param array{ip?: ?string, device_uuid?: ?string} $context
-     * @return array{expires_in: int, resend_after: int}
-     */
-    public function sendSocialPhoneCode(string $bindToken, string $phone, array $context = []): array
-    {
-        $response = $this->call('/auth.v1.AuthService/SendSocialPhoneCode', new SendSocialPhoneCodeRequest([
-            'bind_token' => $bindToken,
-            'phone'      => $phone,
-        ]), SendSocialPhoneCodeResponse::class, [
-            'x-client-ip' => (string)($context['ip'] ?? ''),
-            'x-device-id' => (string)($context['device_uuid'] ?? ''),
-        ], $this->socialPhoneCodeTimeoutMs);
-
-        return [
-            'expires_in'   => $response->getExpiresIn(),
-            'resend_after' => $response->getResendAfter(),
-        ];
-    }
-
-    /** @return array{state: string, login: array<string, mixed>} */
-    public function bindSocialPhone(
-        string $bindToken,
-        string $phone,
-        string $code,
-        array $deviceInfo
-    ): array {
-        $response = $this->call('/auth.v1.AuthService/BindSocialPhone', new BindSocialPhoneRequest([
-            'bind_token' => $bindToken,
-            'phone'      => $phone,
-            'code'       => $code,
-            'device'     => $this->device($deviceInfo),
-        ]), BindSocialPhoneResponse::class, [], $this->socialBindTimeoutMs);
         $login = $response->getLogin();
         if ($login === null) {
             throw new RuntimeException(
@@ -156,6 +98,26 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         return [
             'state' => 'authenticated',
             'login' => $this->loginResponse($login),
+        ];
+    }
+
+    /**
+     * Binds a provider identity to the user behind the given access token.
+     * The user id is never taken from the request body.
+     *
+     * @return array{user_id: string, provider: string}
+     */
+    public function bindSocialIdentity(string $provider, string $code, string $accessToken): array
+    {
+        $response = $this->call('/auth.v1.AuthService/BindSocialIdentity', new BindSocialIdentityRequest([
+            'provider'     => $this->providerValue($provider),
+            'code'         => $code,
+            'access_token' => $accessToken,
+        ]), BindSocialIdentityResponse::class, $this->socialBindTimeoutMs);
+
+        return [
+            'user_id'  => (string)$response->getUserId(),
+            'provider' => $this->providerName($response->getProvider()),
         ];
     }
 
@@ -224,24 +186,22 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
     /**
      * @template T of Message
      * @param class-string<T> $responseClass
-     * @param array<string, string|array<string>> $metadata
      * @return T
      */
     private function call(
         string $method,
         Message $request,
         string $responseClass,
-        array $metadata = [],
         ?int $timeoutMs = null
     ): Message
     {
         $client = $this->client ??= new UnaryGrpcClient(
-            $this->target ?: (getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051'),
+            $this->target ?: config('gateway.grpc.auth.target', 'auth-service:50051'),
             $this->serviceToken,
         );
 
         try {
-            return $client->call($method, $request, $responseClass, $timeoutMs ?? $this->timeoutMs, $metadata);
+            return $client->call($method, $request, $responseClass, $timeoutMs ?? $this->timeoutMs);
         } catch (GrpcCallException $e) {
             throw $this->mapGrpcCallException($e);
         }
@@ -278,6 +238,30 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
             'app_version' => (string)($deviceInfo['app_version'] ?? ''),
             'push_token'  => (string)($deviceInfo['push_token'] ?? ''),
         ]);
+    }
+
+    private function providerValue(string $provider): int
+    {
+        return match (strtolower(trim($provider))) {
+            'wechat' => SocialProvider::SOCIAL_PROVIDER_WECHAT,
+            'qq' => SocialProvider::SOCIAL_PROVIDER_QQ,
+            default => throw new RuntimeException(
+                ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED->message(),
+                ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED->value
+            ),
+        };
+    }
+
+    private function providerName(int $provider): string
+    {
+        return match ($provider) {
+            SocialProvider::SOCIAL_PROVIDER_WECHAT => 'wechat',
+            SocialProvider::SOCIAL_PROVIDER_QQ => 'qq',
+            default => throw new RuntimeException(
+                ErrorCode::SERVICE_UNAVAILABLE->message(),
+                ErrorCode::SERVICE_UNAVAILABLE->value
+            ),
+        };
     }
 
     /** @return array<string, mixed> */

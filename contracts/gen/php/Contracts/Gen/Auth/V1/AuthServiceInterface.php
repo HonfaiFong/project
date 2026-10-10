@@ -49,6 +49,15 @@ interface AuthServiceInterface extends GRPC\ServiceInterface
 
     /**
     * @param GRPC\ContextInterface $ctx
+    * @param BindSocialIdentityRequest $in
+    * @return BindSocialIdentityResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function BindSocialIdentity(GRPC\ContextInterface $ctx, BindSocialIdentityRequest $in): BindSocialIdentityResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
     * @param RefreshTokenRequest $in
     * @return RefreshTokenResponse
     *

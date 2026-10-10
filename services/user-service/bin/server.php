@@ -4,19 +4,26 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../../vendor/autoload.php';
 
+use Packages\Database\EloquentConnection;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
-use Packages\Phone\PhoneNormalizer;
+use Packages\Outbox\Model\OutboxEvent;
 use Packages\Outbox\OutboxRepository;
+use Packages\Phone\PhoneNormalizer;
 use Contracts\Gen\Common\V1\HealthServiceInterface;
+use Contracts\Gen\User\V1\FindOrCreateByPhoneRequest;
+use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityRequest;
+use Contracts\Gen\User\V1\GetUserRequest;
 use Contracts\Gen\User\V1\UserServiceInterface;
 use Services\UserService\Application\Service\UserApplicationService;
-use Services\UserService\Infrastructure\Repository\PdoPersonaRepository;
-use Services\UserService\Infrastructure\Repository\PdoTransactionManager;
-use Services\UserService\Infrastructure\Repository\PdoUserRepository;
+use Services\UserService\Infrastructure\Model\PersonaModel;
+use Services\UserService\Infrastructure\Model\UserModel;
+use Services\UserService\Infrastructure\Repository\EloquentPersonaRepository;
+use Services\UserService\Infrastructure\Repository\EloquentTransactionManager;
+use Services\UserService\Infrastructure\Repository\EloquentUserRepository;
 use Services\UserService\Transport\Grpc\UserGrpcService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
@@ -55,10 +62,28 @@ if (!$pdo) {
 }
 
 $snowflake = new Snowflake(WorkerId::resolve());
-$userRepo = new PdoUserRepository($pdo);
-$personaRepo = new PdoPersonaRepository($pdo);
-$transactionManager = new PdoTransactionManager($pdo);
+$userRepo = new EloquentUserRepository($pdo);
+$personaRepo = new EloquentPersonaRepository($pdo);
+$transactionManager = new EloquentTransactionManager($pdo);
 $outbox = new OutboxRepository($pdo, $snowflake);
+// Eloquent boots each model class lazily on first use; without this warmup the
+// first RPC on a fresh worker pays ~250ms of boot cost and misses the gateway
+// gRPC deadline.
+EloquentConnection::warmup(
+    $pdo,
+    UserModel::class,
+    PersonaModel::class,
+    OutboxEvent::class,
+);
+
+$phoneNormalizer = new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGION') ?: 'CN')));
+// The first protobuf encode initializes the shared descriptor pool (~80ms) and
+// the first phone normalization loads country metadata; pay both at worker
+// start instead of on the first RPC.
+(new FindOrCreateByPhoneRequest())->serializeToString();
+(new FindOrCreateBySocialIdentityRequest())->serializeToString();
+(new GetUserRequest())->serializeToString();
+$phoneNormalizer->normalize('+8613800000000');
 $gatewayRpcToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_USER_TOKEN') ?: ''));
 $authRpcToken = trim((string)(getenv('INTERNAL_RPC_AUTH_USER_TOKEN') ?: ''));
 $internalRpcAuthorizer = new InternalRpcAuthorizer(
@@ -67,7 +92,7 @@ $internalRpcAuthorizer = new InternalRpcAuthorizer(
         'auth-service' => $authRpcToken,
     ],
     allowedMethodsByCaller: [
-        'auth-service' => ['FindOrCreateByPhone', 'GetUser'],
+        'auth-service' => ['FindOrCreateByPhone', 'FindOrCreateBySocialIdentity', 'GetUser'],
     ],
 );
 
@@ -77,7 +102,7 @@ $appService = new UserApplicationService(
     $snowflake,
     $transactionManager,
     $outbox,
-    new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGION') ?: 'CN'))),
+    $phoneNormalizer,
 );
 $grpcService = new UserGrpcService($appService, $logger, $internalRpcAuthorizer);
 $server = new Server(new Invoker());

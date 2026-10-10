@@ -19,15 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	UserService_FindOrCreateByPhone_FullMethodName = "/user.v1.UserService/FindOrCreateByPhone"
-	UserService_GetUser_FullMethodName             = "/user.v1.UserService/GetUser"
-	UserService_BatchGetUsers_FullMethodName       = "/user.v1.UserService/BatchGetUsers"
-	UserService_UpdateUser_FullMethodName          = "/user.v1.UserService/UpdateUser"
-	UserService_CreatePersona_FullMethodName       = "/user.v1.UserService/CreatePersona"
-	UserService_GetPersona_FullMethodName          = "/user.v1.UserService/GetPersona"
-	UserService_BatchGetPersonas_FullMethodName    = "/user.v1.UserService/BatchGetPersonas"
-	UserService_UpdatePersona_FullMethodName       = "/user.v1.UserService/UpdatePersona"
-	UserService_ListPersonas_FullMethodName        = "/user.v1.UserService/ListPersonas"
+	UserService_FindOrCreateByPhone_FullMethodName          = "/user.v1.UserService/FindOrCreateByPhone"
+	UserService_FindOrCreateBySocialIdentity_FullMethodName = "/user.v1.UserService/FindOrCreateBySocialIdentity"
+	UserService_GetUser_FullMethodName                      = "/user.v1.UserService/GetUser"
+	UserService_BatchGetUsers_FullMethodName                = "/user.v1.UserService/BatchGetUsers"
+	UserService_UpdateUser_FullMethodName                   = "/user.v1.UserService/UpdateUser"
+	UserService_CreatePersona_FullMethodName                = "/user.v1.UserService/CreatePersona"
+	UserService_GetPersona_FullMethodName                   = "/user.v1.UserService/GetPersona"
+	UserService_BatchGetPersonas_FullMethodName             = "/user.v1.UserService/BatchGetPersonas"
+	UserService_UpdatePersona_FullMethodName                = "/user.v1.UserService/UpdatePersona"
+	UserService_ListPersonas_FullMethodName                 = "/user.v1.UserService/ListPersonas"
 )
 
 // UserServiceClient is the client API for UserService service.
@@ -35,6 +36,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type UserServiceClient interface {
 	FindOrCreateByPhone(ctx context.Context, in *FindOrCreateByPhoneRequest, opts ...grpc.CallOption) (*FindOrCreateByPhoneResponse, error)
+	FindOrCreateBySocialIdentity(ctx context.Context, in *FindOrCreateBySocialIdentityRequest, opts ...grpc.CallOption) (*FindOrCreateBySocialIdentityResponse, error)
 	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*GetUserResponse, error)
 	BatchGetUsers(ctx context.Context, in *BatchGetUsersRequest, opts ...grpc.CallOption) (*BatchGetUsersResponse, error)
 	UpdateUser(ctx context.Context, in *UpdateUserRequest, opts ...grpc.CallOption) (*UpdateUserResponse, error)
@@ -57,6 +59,16 @@ func (c *userServiceClient) FindOrCreateByPhone(ctx context.Context, in *FindOrC
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FindOrCreateByPhoneResponse)
 	err := c.cc.Invoke(ctx, UserService_FindOrCreateByPhone_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *userServiceClient) FindOrCreateBySocialIdentity(ctx context.Context, in *FindOrCreateBySocialIdentityRequest, opts ...grpc.CallOption) (*FindOrCreateBySocialIdentityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FindOrCreateBySocialIdentityResponse)
+	err := c.cc.Invoke(ctx, UserService_FindOrCreateBySocialIdentity_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +160,7 @@ func (c *userServiceClient) ListPersonas(ctx context.Context, in *ListPersonasRe
 // for forward compatibility.
 type UserServiceServer interface {
 	FindOrCreateByPhone(context.Context, *FindOrCreateByPhoneRequest) (*FindOrCreateByPhoneResponse, error)
+	FindOrCreateBySocialIdentity(context.Context, *FindOrCreateBySocialIdentityRequest) (*FindOrCreateBySocialIdentityResponse, error)
 	GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error)
 	BatchGetUsers(context.Context, *BatchGetUsersRequest) (*BatchGetUsersResponse, error)
 	UpdateUser(context.Context, *UpdateUserRequest) (*UpdateUserResponse, error)
@@ -168,6 +181,9 @@ type UnimplementedUserServiceServer struct{}
 
 func (UnimplementedUserServiceServer) FindOrCreateByPhone(context.Context, *FindOrCreateByPhoneRequest) (*FindOrCreateByPhoneResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method FindOrCreateByPhone not implemented")
+}
+func (UnimplementedUserServiceServer) FindOrCreateBySocialIdentity(context.Context, *FindOrCreateBySocialIdentityRequest) (*FindOrCreateBySocialIdentityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FindOrCreateBySocialIdentity not implemented")
 }
 func (UnimplementedUserServiceServer) GetUser(context.Context, *GetUserRequest) (*GetUserResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetUser not implemented")
@@ -228,6 +244,24 @@ func _UserService_FindOrCreateByPhone_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(UserServiceServer).FindOrCreateByPhone(ctx, req.(*FindOrCreateByPhoneRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _UserService_FindOrCreateBySocialIdentity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FindOrCreateBySocialIdentityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).FindOrCreateBySocialIdentity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_FindOrCreateBySocialIdentity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).FindOrCreateBySocialIdentity(ctx, req.(*FindOrCreateBySocialIdentityRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -386,6 +420,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FindOrCreateByPhone",
 			Handler:    _UserService_FindOrCreateByPhone_Handler,
+		},
+		{
+			MethodName: "FindOrCreateBySocialIdentity",
+			Handler:    _UserService_FindOrCreateBySocialIdentity_Handler,
 		},
 		{
 			MethodName: "GetUser",

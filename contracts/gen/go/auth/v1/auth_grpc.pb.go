@@ -23,6 +23,7 @@ const (
 	AuthService_SocialLogin_FullMethodName         = "/auth.v1.AuthService/SocialLogin"
 	AuthService_SendSocialPhoneCode_FullMethodName = "/auth.v1.AuthService/SendSocialPhoneCode"
 	AuthService_BindSocialPhone_FullMethodName     = "/auth.v1.AuthService/BindSocialPhone"
+	AuthService_BindSocialIdentity_FullMethodName  = "/auth.v1.AuthService/BindSocialIdentity"
 	AuthService_RefreshToken_FullMethodName        = "/auth.v1.AuthService/RefreshToken"
 	AuthService_Logout_FullMethodName              = "/auth.v1.AuthService/Logout"
 	AuthService_VerifyToken_FullMethodName         = "/auth.v1.AuthService/VerifyToken"
@@ -35,8 +36,13 @@ const (
 type AuthServiceClient interface {
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
 	SocialLogin(ctx context.Context, in *SocialLoginRequest, opts ...grpc.CallOption) (*SocialLoginResponse, error)
+	// Deprecated: Do not use.
+	// Deprecated phone-binding flow: retained for wire compatibility. The
+	// transport rejects both RPCs with AUTH_UNAUTHORIZED.
 	SendSocialPhoneCode(ctx context.Context, in *SendSocialPhoneCodeRequest, opts ...grpc.CallOption) (*SendSocialPhoneCodeResponse, error)
+	// Deprecated: Do not use.
 	BindSocialPhone(ctx context.Context, in *BindSocialPhoneRequest, opts ...grpc.CallOption) (*BindSocialPhoneResponse, error)
+	BindSocialIdentity(ctx context.Context, in *BindSocialIdentityRequest, opts ...grpc.CallOption) (*BindSocialIdentityResponse, error)
 	RefreshToken(ctx context.Context, in *RefreshTokenRequest, opts ...grpc.CallOption) (*RefreshTokenResponse, error)
 	Logout(ctx context.Context, in *LogoutRequest, opts ...grpc.CallOption) (*LogoutResponse, error)
 	VerifyToken(ctx context.Context, in *VerifyTokenRequest, opts ...grpc.CallOption) (*VerifyTokenResponse, error)
@@ -71,6 +77,7 @@ func (c *authServiceClient) SocialLogin(ctx context.Context, in *SocialLoginRequ
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *authServiceClient) SendSocialPhoneCode(ctx context.Context, in *SendSocialPhoneCodeRequest, opts ...grpc.CallOption) (*SendSocialPhoneCodeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SendSocialPhoneCodeResponse)
@@ -81,10 +88,21 @@ func (c *authServiceClient) SendSocialPhoneCode(ctx context.Context, in *SendSoc
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *authServiceClient) BindSocialPhone(ctx context.Context, in *BindSocialPhoneRequest, opts ...grpc.CallOption) (*BindSocialPhoneResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BindSocialPhoneResponse)
 	err := c.cc.Invoke(ctx, AuthService_BindSocialPhone_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *authServiceClient) BindSocialIdentity(ctx context.Context, in *BindSocialIdentityRequest, opts ...grpc.CallOption) (*BindSocialIdentityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BindSocialIdentityResponse)
+	err := c.cc.Invoke(ctx, AuthService_BindSocialIdentity_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -137,8 +155,13 @@ func (c *authServiceClient) CreateWsTicket(ctx context.Context, in *CreateWsTick
 type AuthServiceServer interface {
 	Login(context.Context, *LoginRequest) (*LoginResponse, error)
 	SocialLogin(context.Context, *SocialLoginRequest) (*SocialLoginResponse, error)
+	// Deprecated: Do not use.
+	// Deprecated phone-binding flow: retained for wire compatibility. The
+	// transport rejects both RPCs with AUTH_UNAUTHORIZED.
 	SendSocialPhoneCode(context.Context, *SendSocialPhoneCodeRequest) (*SendSocialPhoneCodeResponse, error)
+	// Deprecated: Do not use.
 	BindSocialPhone(context.Context, *BindSocialPhoneRequest) (*BindSocialPhoneResponse, error)
+	BindSocialIdentity(context.Context, *BindSocialIdentityRequest) (*BindSocialIdentityResponse, error)
 	RefreshToken(context.Context, *RefreshTokenRequest) (*RefreshTokenResponse, error)
 	Logout(context.Context, *LogoutRequest) (*LogoutResponse, error)
 	VerifyToken(context.Context, *VerifyTokenRequest) (*VerifyTokenResponse, error)
@@ -164,6 +187,9 @@ func (UnimplementedAuthServiceServer) SendSocialPhoneCode(context.Context, *Send
 }
 func (UnimplementedAuthServiceServer) BindSocialPhone(context.Context, *BindSocialPhoneRequest) (*BindSocialPhoneResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BindSocialPhone not implemented")
+}
+func (UnimplementedAuthServiceServer) BindSocialIdentity(context.Context, *BindSocialIdentityRequest) (*BindSocialIdentityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BindSocialIdentity not implemented")
 }
 func (UnimplementedAuthServiceServer) RefreshToken(context.Context, *RefreshTokenRequest) (*RefreshTokenResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RefreshToken not implemented")
@@ -270,6 +296,24 @@ func _AuthService_BindSocialPhone_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AuthService_BindSocialIdentity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BindSocialIdentityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AuthServiceServer).BindSocialIdentity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AuthService_BindSocialIdentity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AuthServiceServer).BindSocialIdentity(ctx, req.(*BindSocialIdentityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AuthService_RefreshToken_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RefreshTokenRequest)
 	if err := dec(in); err != nil {
@@ -364,6 +408,10 @@ var AuthService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BindSocialPhone",
 			Handler:    _AuthService_BindSocialPhone_Handler,
+		},
+		{
+			MethodName: "BindSocialIdentity",
+			Handler:    _AuthService_BindSocialIdentity_Handler,
 		},
 		{
 			MethodName: "RefreshToken",

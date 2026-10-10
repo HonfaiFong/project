@@ -4,14 +4,24 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
+use Contracts\Gen\Auth\V1\BindSocialIdentityRequest;
+use Contracts\Gen\Auth\V1\BindSocialIdentityResponse;
+use Contracts\Gen\Auth\V1\BindSocialPhoneRequest;
+use Contracts\Gen\Auth\V1\BindSocialPhoneResponse;
+use Contracts\Gen\Auth\V1\SendSocialPhoneCodeRequest;
+use Contracts\Gen\Auth\V1\SendSocialPhoneCodeResponse;
+use Contracts\Gen\Auth\V1\SocialProvider;
 use Contracts\Gen\Common\V1\HealthCheckRequest;
 use Contracts\Gen\Common\V1\HealthCheckResponse;
 use Contracts\Gen\User\V1\FindOrCreateByPhoneRequest;
 use Contracts\Gen\User\V1\FindOrCreateByPhoneResponse;
+use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityRequest;
+use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityResponse;
 use Contracts\Gen\User\V1\GetUserRequest;
 use Contracts\Gen\User\V1\GetUserResponse;
 use Contracts\Gen\User\V1\UpdateUserRequest;
 use Contracts\Gen\User\V1\UpdateUserResponse;
+use Contracts\Errors\ErrorCode;
 use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
@@ -49,6 +59,11 @@ final class InternalRpcSmokeRunner
     private function runGatewayChecks(string $target, string $validToken): void
     {
         $authTarget = getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051';
+        $authToken = trim((string)(getenv('GRPC_AUTH_TOKEN') ?: ''));
+        if ($authToken === '') {
+            throw new RuntimeException('Gateway auth-service RPC token environment is missing');
+        }
+
         foreach ([null, self::WRONG_TOKEN] as $token) {
             $this->expectStatus(
                 $token === null ? 'auth missing token' : 'auth wrong token',
@@ -85,6 +100,48 @@ final class InternalRpcSmokeRunner
             GetUserResponse::class,
             StatusCode::INVALID_ARGUMENT,
         );
+
+        $this->expectStatus(
+            'gateway social registration invalid argument',
+            new UnaryGrpcClient($target, $validToken),
+            '/user.v1.UserService/FindOrCreateBySocialIdentity',
+            new FindOrCreateBySocialIdentityRequest(),
+            FindOrCreateBySocialIdentityResponse::class,
+            StatusCode::INVALID_ARGUMENT,
+        );
+        $this->expectStatus(
+            'gateway social bind requires an access token',
+            new UnaryGrpcClient($authTarget, $authToken),
+            '/auth.v1.AuthService/BindSocialIdentity',
+            new BindSocialIdentityRequest([
+                'provider'     => SocialProvider::SOCIAL_PROVIDER_WECHAT,
+                'code'         => '',
+                'access_token' => '',
+            ]),
+            BindSocialIdentityResponse::class,
+            StatusCode::UNAUTHENTICATED,
+        );
+
+        // The retired SMS phone-binding RPCs stay declared for wire
+        // compatibility but must never serve a caller.
+        $this->expectRejected(
+            'gateway legacy SendSocialPhoneCode rejected',
+            new UnaryGrpcClient($authTarget, $authToken),
+            '/auth.v1.AuthService/SendSocialPhoneCode',
+            new SendSocialPhoneCodeRequest(['bind_token' => 'internal-rpc-smoke', 'phone' => '+8613800000000']),
+            SendSocialPhoneCodeResponse::class,
+        );
+        $this->expectRejected(
+            'gateway legacy BindSocialPhone rejected',
+            new UnaryGrpcClient($authTarget, $authToken),
+            '/auth.v1.AuthService/BindSocialPhone',
+            new BindSocialPhoneRequest([
+                'bind_token' => 'internal-rpc-smoke',
+                'phone'      => '+8613800000000',
+                'code'       => '123456',
+            ]),
+            BindSocialPhoneResponse::class,
+        );
     }
 
     private function runAuthServiceChecks(string $target, string $validToken): void
@@ -114,6 +171,14 @@ final class InternalRpcSmokeRunner
             '/user.v1.UserService/FindOrCreateByPhone',
             new FindOrCreateByPhoneRequest(['phone' => '']),
             FindOrCreateByPhoneResponse::class,
+            StatusCode::INVALID_ARGUMENT,
+        );
+        $this->expectStatus(
+            'auth-service FindOrCreateBySocialIdentity allowed',
+            new UnaryGrpcClient($target, $validToken),
+            '/user.v1.UserService/FindOrCreateBySocialIdentity',
+            new FindOrCreateBySocialIdentityRequest(['registration_key' => '']),
+            FindOrCreateBySocialIdentityResponse::class,
             StatusCode::INVALID_ARGUMENT,
         );
         $this->expectStatus(
@@ -147,6 +212,43 @@ final class InternalRpcSmokeRunner
             }
 
             printf("PASS case=%s status=%d\n", $case, $expectedStatus);
+            return;
+        }
+
+        throw new RuntimeException(sprintf('%s unexpectedly succeeded', $case));
+    }
+
+    /**
+     * A retired RPC must be rejected for an authorization reason. A deadline,
+     * an unavailable backend, or any other transport fault is not evidence
+     * that the RPC is closed, so it fails the check.
+     *
+     * @param class-string<Message> $responseClass
+     */
+    private function expectRejected(
+        string $case,
+        UnaryGrpcClient $client,
+        string $method,
+        Message $request,
+        string $responseClass,
+    ): void {
+        try {
+            $client->call($method, $request, $responseClass, 1000);
+        } catch (GrpcCallException $e) {
+            $rejected = in_array($e->grpcStatus, [
+                StatusCode::UNAUTHENTICATED,
+                StatusCode::PERMISSION_DENIED,
+                StatusCode::UNIMPLEMENTED,
+            ], true);
+            $codeMatches = $e->appErrorCode === null
+                || $e->appErrorCode === ErrorCode::AUTH_UNAUTHORIZED->value;
+            if (!$rejected || !$codeMatches) {
+                throw new RuntimeException(
+                    sprintf('%s failed for an unrelated reason (status %d)', $case, $e->grpcStatus),
+                );
+            }
+
+            printf("PASS case=%s status=%d\n", $case, $e->grpcStatus);
             return;
         }
 

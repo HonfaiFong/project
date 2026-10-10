@@ -23,6 +23,12 @@ class InMemoryUserRepository implements UserRepositoryInterface
     /** @var array<string, User> */
     public array $users = [];
 
+    /** @var array<string, string> registration key => user id */
+    public array $socialRegistrationKeys = [];
+
+    /** @var list<string> keys held by soft-deleted rows, mirrors the unique index */
+    public array $softDeletedSocialRegistrationKeys = [];
+
     public function findById(string $id): ?User
     {
         return $this->users[$id] ?? null;
@@ -41,6 +47,19 @@ class InMemoryUserRepository implements UserRepositoryInterface
             }
         }
         return null;
+    }
+
+    public function findBySocialRegistrationKey(string $registrationKey): ?User
+    {
+        $userId = $this->socialRegistrationKeys[$registrationKey] ?? null;
+
+        return $userId !== null ? ($this->users[$userId] ?? null) : null;
+    }
+
+    public function socialRegistrationKeyExists(string $registrationKey): bool
+    {
+        return isset($this->socialRegistrationKeys[$registrationKey])
+            || in_array($registrationKey, $this->softDeletedSocialRegistrationKeys, true);
     }
 
     public function findByEmail(string $email): ?User
@@ -69,8 +88,14 @@ class InMemoryUserRepository implements UserRepositoryInterface
         ?string $phone,
         ?string $email,
         string $registerChannel = 'default',
-        int $riskLevel = 0
+        int $riskLevel = 0,
+        ?string $socialRegistrationKey = null
     ): User {
+        if ($socialRegistrationKey !== null && in_array($socialRegistrationKey, $this->softDeletedSocialRegistrationKeys, true)) {
+            // MySQL keeps the soft-deleted row's key in the unique index.
+            throw new DuplicateUserException('Duplicate registration key');
+        }
+
         $u = new User(
             id: $id,
             status: 1,
@@ -80,6 +105,9 @@ class InMemoryUserRepository implements UserRepositoryInterface
             riskLevel: $riskLevel
         );
         $this->users[$id] = $u;
+        if ($socialRegistrationKey !== null) {
+            $this->socialRegistrationKeys[$socialRegistrationKey] = $id;
+        }
         return $u;
     }
 
@@ -287,7 +315,8 @@ final class UserServiceTest extends TestCase
                 ?string $phone,
                 ?string $email,
                 string $registerChannel = 'default',
-                int $riskLevel = 0
+                int $riskLevel = 0,
+                ?string $socialRegistrationKey = null
             ): User {
                 $this->attempts++;
                 if ($this->attempts === 1) {
@@ -325,7 +354,8 @@ final class UserServiceTest extends TestCase
                 ?string $phone,
                 ?string $email,
                 string $registerChannel = 'default',
-                int $riskLevel = 0
+                int $riskLevel = 0,
+                ?string $socialRegistrationKey = null
             ): User {
                 // Simulates Snowflake ID collision or other DB 1062 where user is NOT found by phone
                 throw new DuplicateUserException('Duplicate key on PRIMARY', ErrorCode::USER_ALREADY_EXISTS->value);
@@ -346,6 +376,139 @@ final class UserServiceTest extends TestCase
         $this->expectExceptionMessage(ErrorCode::INTERNAL_SERVER_ERROR->message());
 
         $service->findOrCreateUserByPhone('+8613800000000');
+    }
+
+    public function testFindOrCreateBySocialIdentityCreatesUserWithoutPhone(): void
+    {
+        $res = $this->userService->findOrCreateUserBySocialIdentity('social:1001', 'wechat');
+
+        $this->assertTrue($res['is_new_user']);
+        $this->assertNull($res['user']->phone);
+        $this->assertSame('wechat', $res['user']->registerChannel);
+        $this->assertSame($res['user']->id, $this->userRepo->socialRegistrationKeys['social:1001']);
+
+        $personas = $this->userService->listPersonas($res['user']->id);
+        $this->assertCount(1, $personas);
+        $this->assertSame($res['user']->id, $personas[0]->userId);
+
+        $userRegisteredEvents = $this->outbox->findByEventType(EventTypes::USER_REGISTERED);
+        $this->assertCount(1, $userRegisteredEvents);
+        $this->assertSame($res['user']->id, $userRegisteredEvents[0]['aggregate_id']);
+        $this->assertSame($res['user']->id, $userRegisteredEvents[0]['event_key']);
+        $this->assertSame($res['user']->id, $userRegisteredEvents[0]['payload']['id']);
+        $this->assertNull($userRegisteredEvents[0]['payload']['phone']);
+        $this->assertSame($personas[0]->id, $userRegisteredEvents[0]['payload']['persona_id']);
+
+        $personaUpdatedEvents = $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED);
+        $this->assertCount(1, $personaUpdatedEvents);
+        $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['aggregate_id']);
+    }
+
+    public function testFindOrCreateBySocialIdentityReusesAccountForRepeatedKey(): void
+    {
+        $first = $this->userService->findOrCreateUserBySocialIdentity('social:1001', 'wechat');
+        $second = $this->userService->findOrCreateUserBySocialIdentity('social:1001', 'qq');
+
+        $this->assertTrue($first['is_new_user']);
+        $this->assertFalse($second['is_new_user']);
+        $this->assertSame($first['user']->id, $second['user']->id);
+        $this->assertCount(1, $this->userRepo->users);
+        $this->assertSame('wechat', $second['user']->registerChannel);
+        $this->assertCount(1, $this->outbox->findByEventType(EventTypes::USER_REGISTERED));
+    }
+
+    public function testFindOrCreateBySocialIdentityRejectsInactiveUser(): void
+    {
+        $created = $this->userService->findOrCreateUserBySocialIdentity('social:1001');
+        $existing = $created['user'];
+        $this->userRepo->users[$existing->id] = new User(
+            id: $existing->id,
+            status: 0,
+            phone: null,
+            email: null,
+            registerChannel: $existing->registerChannel,
+            riskLevel: $existing->riskLevel,
+        );
+
+        $this->expectExceptionCode(ErrorCode::USER_BANNED->value);
+        $this->userService->findOrCreateUserBySocialIdentity('social:1001');
+    }
+
+    public function testFindOrCreateBySocialIdentityReportsSoftDeletedAccountAsNotFound(): void
+    {
+        $this->userRepo->softDeletedSocialRegistrationKeys[] = 'social:1001';
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(ErrorCode::USER_NOT_FOUND->value);
+        $this->userService->findOrCreateUserBySocialIdentity('social:1001');
+    }
+
+    public function testFindOrCreateBySocialIdentityRejectsEmptyRegistrationKey(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(ErrorCode::INVALID_ARGUMENT->value);
+        $this->userService->findOrCreateUserBySocialIdentity('   ');
+    }
+
+    public function testFindOrCreateBySocialIdentityRejectsOverlongRegistrationKey(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionCode(ErrorCode::INVALID_ARGUMENT->value);
+        $this->userService->findOrCreateUserBySocialIdentity('social:' . str_repeat('9', 200));
+    }
+
+    public function testFindOrCreateBySocialIdentityHandlesConcurrentDuplicateUser(): void
+    {
+        $racingRepo = new class ($this->userRepo) extends InMemoryUserRepository {
+            private int $attempts = 0;
+
+            public function __construct(private readonly InMemoryUserRepository $parent)
+            {
+            }
+
+            public function findBySocialRegistrationKey(string $registrationKey): ?User
+            {
+                return $this->parent->findBySocialRegistrationKey($registrationKey);
+            }
+
+            public function create(
+                string $id,
+                ?string $phone,
+                ?string $email,
+                string $registerChannel = 'default',
+                int $riskLevel = 0,
+                ?string $socialRegistrationKey = null
+            ): User {
+                $this->attempts++;
+                if ($this->attempts === 1) {
+                    // Simulate the concurrent transaction winning the unique key
+                    $this->parent->create(
+                        id: '20003',
+                        phone: null,
+                        email: null,
+                        registerChannel: $registerChannel,
+                        socialRegistrationKey: $socialRegistrationKey,
+                    );
+                    throw new DuplicateUserException('Duplicate registration key');
+                }
+
+                return $this->parent->create($id, $phone, $email, $registerChannel, $riskLevel, $socialRegistrationKey);
+            }
+        };
+
+        $service = new UserApplicationService(
+            userRepo: $racingRepo,
+            personaRepo: $this->personaRepo,
+            snowflake: new Snowflake(1),
+            transactionManager: new PassThroughTransactionManager(),
+            outbox: new RecordingEventOutbox(),
+            phoneNormalizer: new PhoneNormalizer(),
+        );
+
+        $res = $service->findOrCreateUserBySocialIdentity('social:1001');
+
+        $this->assertFalse($res['is_new_user']);
+        $this->assertSame('20003', $res['user']->id);
     }
 
     public function testUpdateUserSuccess(): void

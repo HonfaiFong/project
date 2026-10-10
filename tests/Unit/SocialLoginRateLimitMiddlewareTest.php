@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
 use Contracts\Errors\ErrorCode;
+use InvalidArgumentException;
 use RuntimeException;
 use Tests\TestCase;
 use Webman\Http\Request;
@@ -17,13 +18,14 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
     {
         $count = 0;
         $middleware = new SocialLoginRateLimitMiddleware(
-            counter: static function (string $key, int $ttl) use (&$count): int {
+            counter: static function () use (&$count): int {
                 $count++;
 
                 return $count;
             },
             limit: 2,
             windowSeconds: 60,
+            environment: 'development',
         );
         $request = new class ('') extends Request {
             public function getRemoteIp(): string
@@ -50,12 +52,13 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
     {
         $keys = [];
         $middleware = new SocialLoginRateLimitMiddleware(
-            counter: static function (string $key, int $ttl) use (&$keys): int {
+            counter: static function (string $key) use (&$keys): int {
                 $keys[] = $key;
 
                 return 1;
             },
             trustedProxyCidrs: ['10.0.0.0/8'],
+            environment: 'development',
         );
         $handler = static fn (Request $request): Response => new Response(200);
 
@@ -76,12 +79,13 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
     {
         $keys = [];
         $middleware = new SocialLoginRateLimitMiddleware(
-            counter: static function (string $key, int $ttl) use (&$keys): int {
+            counter: static function (string $key) use (&$keys): int {
                 $keys[] = $key;
 
                 return 1;
             },
             trustedProxyCidrs: ['10.0.0.0/8'],
+            environment: 'development',
         );
         $handler = static fn (Request $request): Response => new Response(200);
 
@@ -100,12 +104,13 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
     {
         $keys = [];
         $middleware = new SocialLoginRateLimitMiddleware(
-            counter: static function (string $key, int $ttl) use (&$keys): int {
+            counter: static function (string $key) use (&$keys): int {
                 $keys[] = $key;
 
                 return 1;
             },
             trustedProxyCidrs: ['10.0.0.0/8'],
+            environment: 'development',
         );
         $handler = static fn (Request $request): Response => new Response(200);
 
@@ -122,16 +127,79 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
 
     public function testInvalidTrustedProxyCidrFailsClosedAtConstruction(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
 
         new SocialLoginRateLimitMiddleware(trustedProxyCidrs: ['not-a-cidr']);
     }
 
     public function testPublicAnyAddressTrustedProxyRangeIsRejected(): void
     {
-        $this->expectException(\InvalidArgumentException::class);
+        $this->expectException(InvalidArgumentException::class);
 
         new SocialLoginRateLimitMiddleware(trustedProxyCidrs: ['0.0.0.0/0']);
+    }
+
+    public function testMissingCounterFailsClosedOutsideDevelopment(): void
+    {
+        $middleware = new SocialLoginRateLimitMiddleware();
+        $handler = static fn (Request $request): Response => new Response(200);
+
+        try {
+            $middleware->process($this->request('192.0.2.10'), $handler);
+        } catch (RuntimeException $e) {
+            $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, $e->getCode());
+            return;
+        }
+
+        $this->fail('Expected the rate limiter to fail closed without a counter');
+    }
+
+    public function testFailingCounterFailsClosedOutsideDevelopment(): void
+    {
+        $middleware = new SocialLoginRateLimitMiddleware(
+            counter: static function (): int {
+                throw new RuntimeException('redis unavailable');
+            },
+        );
+        $handler = static fn (Request $request): Response => new Response(200);
+
+        try {
+            $middleware->process($this->request('192.0.2.10'), $handler);
+        } catch (RuntimeException $e) {
+            $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, $e->getCode());
+            return;
+        }
+
+        $this->fail('Expected the rate limiter to fail closed when the counter throws');
+    }
+
+    public function testDevelopmentEnvironmentBypassesTheLimiterWhenTheCounterIsUnavailable(): void
+    {
+        $middleware = new SocialLoginRateLimitMiddleware(environment: 'development');
+        $handler = static fn (Request $request): Response => new Response(200);
+
+        $response = $middleware->process($this->request('192.0.2.10'), $handler);
+
+        $this->assertSame(200, $response->getStatusCode());
+    }
+
+    public function testEnvironmentComesFromTheConstructorInsteadOfTheProcessEnvironment(): void
+    {
+        $previous = getenv('APP_ENV');
+        putenv('APP_ENV=development');
+
+        try {
+            $middleware = new SocialLoginRateLimitMiddleware();
+
+            $this->expectException(RuntimeException::class);
+            $this->expectExceptionCode(ErrorCode::SERVICE_UNAVAILABLE->value);
+            $middleware->process(
+                $this->request('192.0.2.10'),
+                static fn (Request $request): Response => new Response(200),
+            );
+        } finally {
+            $previous === false ? putenv('APP_ENV') : putenv('APP_ENV=' . $previous);
+        }
     }
 
     private function request(string $remoteIp, array $headers = []): Request
