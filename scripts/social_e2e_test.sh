@@ -158,13 +158,30 @@ device="{\"device_uuid\":\"${device_uuid}\",\"platform\":\"ios\",\"app_version\"
 
 # The fake upstream fails the first call of a "transient" code once, so the
 # first WeChat login of this run also proves that a failed upstream attempt
-# leaves no account behind. Every code is scoped by the run id.
-wechat_code="wechat-transient-${run_id}"
-wechat_openid="wechat-openid-transient-${run_id}"
+# leaves no account behind. Authorization codes are single-use at the fake
+# upstream (a failed redemption burns the code), so every redemption below
+# carries a distinct "~nonce" while the identity part stays scoped by the run
+# id: distinct codes, one external identity.
+wechat_identity="transient-${run_id}"
+wechat_openid="wechat-openid-${wechat_identity}"
+wechat_code_fail="wechat-${wechat_identity}~1"
+wechat_code_register="wechat-${wechat_identity}~2"
+wechat_code_repeat="wechat-${wechat_identity}~3"
 second_wechat_code="wechat-primary-${run_id}b"
 second_wechat_openid="wechat-openid-primary-${run_id}b"
-qq_code="qq-primary-${run_id}"
-qq_openid="qq-openid-primary-${run_id}"
+qq_identity="primary-${run_id}"
+qq_openid="qq-openid-${qq_identity}"
+qq_code_bind="qq-${qq_identity}~1"
+qq_code_login="qq-${qq_identity}~2"
+qq_code_conflict="qq-${qq_identity}~3"
+qq_code_owner="qq-${qq_identity}~4"
+qq_code_pre_ban="qq-${qq_identity}~5"
+qq_code_banned="qq-${qq_identity}~6"
+qq_code_deleted="qq-${qq_identity}~7"
+qq_first_identity="primary-${run_id}c"
+qq_first_openid="qq-openid-${qq_first_identity}"
+qq_first_code="qq-${qq_first_identity}~1"
+qq_first_code_repeat="qq-${qq_first_identity}~2"
 
 echo "Running social HTTP -> gRPC -> MySQL/Redis E2E for run ${run_id}"
 
@@ -172,18 +189,23 @@ echo "Running social HTTP -> gRPC -> MySQL/Redis E2E for run ${run_id}"
 request_without_body 404 POST /api/v1/auth/social/phone/code '{"bind_token":"social-e2e"}'
 request_without_body 404 POST /api/v1/auth/social/phone/bind '{"bind_token":"social-e2e","phone":"+8613800000000","code":"123456"}'
 
-# A transient upstream failure is reported as such and creates no account.
+# A transient upstream failure is reported as such and creates no account. The
+# burned code stays burned: replaying it is rejected like a real single-use
+# authorization code, and the client must obtain a fresh code to recover.
 users_before_social="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
-request 503 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code}\",\"device\":${device}}"
+request 503 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_fail}\",\"device\":${device}}"
 expect_code 1001010
 assert_mysql user_db 'SELECT COUNT(*) FROM users' "$users_before_social"
 assert_mysql auth_db \
   "SELECT COUNT(*) FROM social_identities WHERE provider = 'wechat' AND openid = '${wechat_openid}' AND status = 1" \
   '0'
+request 401 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_fail}\",\"device\":${device}}"
+expect_code 1001009
 
-# Retrying registers the WeChat account without a phone number. This is the
-# first account of the run, so the API answers 201 Created.
-request 201 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code}\",\"device\":${device}}"
+# Recovering with a brand-new authorization code for the SAME external identity
+# registers the WeChat account without a phone number and without a duplicate
+# user. This is the first account of the run, so the API answers 201 Created.
+request 201 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_register}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
 expect_field data.is_new_user true
@@ -199,10 +221,10 @@ assert_mysql auth_db \
   "1:${user_a}"
 assert_new_account_baseline "$user_a"
 
-# Repeating the same provider login reuses the account and its identity, and
-# answers 200 instead of 201.
+# A repeat visit with yet another fresh code for the same identity reuses the
+# account and its identity, and answers 200 instead of 201.
 users_after_registration="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
-request 200 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code}\",\"device\":${device}}"
+request 200 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_repeat}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
 expect_field data.is_new_user false
@@ -213,15 +235,16 @@ assert_mysql auth_db \
   '1'
 
 # Binding is an authenticated action: without the JWT the request is rejected
-# and a body-supplied user_id is never trusted.
+# and a body-supplied user_id is never trusted. The code is not consumed by
+# these rejections because they never reach the OAuth upstream.
 request 401 POST /api/v1/auth/social/bind \
-  "{\"provider\":\"qq\",\"code\":\"${qq_code}\",\"user_id\":\"${user_a}\"}"
+  "{\"provider\":\"qq\",\"code\":\"${qq_code_bind}\",\"user_id\":\"${user_a}\"}"
 expect_code 1001005
 request 422 POST /api/v1/auth/social/bind '{"provider":"weibo","code":"social-e2e"}' "$access_a"
 expect_code 1001008
 
 # A logged-in WeChat user actively binds a QQ identity that has never logged in.
-request 200 POST /api/v1/auth/social/bind "{\"provider\":\"qq\",\"code\":\"${qq_code}\"}" "$access_a"
+request 200 POST /api/v1/auth/social/bind "{\"provider\":\"qq\",\"code\":\"${qq_code_bind}\"}" "$access_a"
 expect_code 0
 expect_field data.user_id "$user_a"
 expect_field data.provider qq
@@ -231,8 +254,9 @@ assert_mysql auth_db \
 assert_mysql user_db "SELECT COUNT(*) FROM users WHERE id = '${user_a}' AND phone IS NULL" '1'
 assert_mysql auth_db "SELECT COUNT(*) FROM social_identities WHERE user_id = '${user_a}' AND status = 1" '2'
 
-# Logging in with the QQ code now authenticates the same local user.
-request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code}\",\"device\":${device}}"
+# Logging in with a fresh QQ code for the bound identity authenticates the same
+# local user.
+request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_login}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
 expect_field data.is_new_user false
@@ -242,8 +266,6 @@ request 200 GET /api/v1/me '' "$qq_access_a"
 expect_field data.user.id "$user_a"
 
 # A QQ identity that was never bound registers its own phone-less account.
-qq_first_code="qq-primary-${run_id}c"
-qq_first_openid="qq-openid-primary-${run_id}c"
 request 201 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_first_code}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
@@ -256,7 +278,7 @@ assert_mysql auth_db \
   "SELECT CONCAT(status, ':', COALESCE(user_id, 'NULL')) FROM social_identities WHERE provider = 'qq' AND openid = '${qq_first_openid}'" \
   "1:${user_c}"
 assert_new_account_baseline "$user_c"
-request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_first_code}\",\"device\":${device}}"
+request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_first_code_repeat}\",\"device\":${device}}"
 expect_code 0
 expect_field data.is_new_user false
 expect_field data.user_id "$user_c"
@@ -321,12 +343,12 @@ assert_mysql auth_db \
   "1:${user_b}"
 assert_new_account_baseline "$user_b"
 
-request 409 POST /api/v1/auth/social/bind "{\"provider\":\"qq\",\"code\":\"${qq_code}\"}" "$access_b"
+request 409 POST /api/v1/auth/social/bind "{\"provider\":\"qq\",\"code\":\"${qq_code_conflict}\"}" "$access_b"
 expect_code 1001015
 assert_mysql auth_db \
   "SELECT CONCAT(status, ':', COALESCE(user_id, 'NULL')) FROM social_identities WHERE provider = 'qq' AND openid = '${qq_openid}'" \
   "1:${user_a}"
-request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code}\",\"device\":${device}}"
+request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_owner}\",\"device\":${device}}"
 expect_code 0
 expect_field data.user_id "$user_a"
 
@@ -365,7 +387,7 @@ assert_redis 1 EXISTS "auth:access-token-revoked:$(php -r 'echo hash("sha256", $
 
 # A newly issued session for the same provider identity authenticates again,
 # and an authoritative ban or delete rejects that still-valid JWT.
-request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code}\",\"device\":${device}}"
+request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_pre_ban}\",\"device\":${device}}"
 expect_code 0
 expect_field data.user_id "$user_a"
 banned_access_a="$(field data.access_token)"
@@ -374,7 +396,7 @@ mysql_query user_db "UPDATE users SET status = 0 WHERE id = '${user_a}'" >/dev/n
 request 401 GET /api/v1/me '' "$banned_access_a"
 # A banned account cannot open a new session or register a replacement account.
 users_during_ban="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
-request 403 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code}\",\"device\":${device}}"
+request 403 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_banned}\",\"device\":${device}}"
 expect_code 2001003
 assert_mysql user_db 'SELECT COUNT(*) FROM users' "$users_during_ban"
 mysql_query user_db "UPDATE users SET status = 1 WHERE id = '${user_a}'" >/dev/null
@@ -383,11 +405,11 @@ expect_field data.user.id "$user_a"
 mysql_query user_db "UPDATE users SET deleted_at = NOW(3) WHERE id = '${user_a}'" >/dev/null
 request 401 GET /api/v1/me '' "$banned_access_a"
 users_during_delete="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
-request 404 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code}\",\"device\":${device}}"
+request 404 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_deleted}\",\"device\":${device}}"
 expect_code 2001001
 assert_mysql user_db 'SELECT COUNT(*) FROM users' "$users_during_delete"
 mysql_query user_db "UPDATE users SET deleted_at = NULL WHERE id = '${user_a}'" >/dev/null
 request 200 GET /api/v1/me '' "$banned_access_a"
 expect_field data.user.id "$user_a"
 
-echo 'Social E2E passed: SMS-free first registration, repeat reuse, active bind, provider login identity, bind conflict, refresh/logout device isolation, and issued JWT user-state checks.'
+echo 'Social E2E passed: single-use OAuth code redemption, fresh-code recovery of the same identity, SMS-free first registration, repeat reuse, active bind, provider login identity, bind conflict, refresh/logout device isolation, and issued JWT user-state checks.'

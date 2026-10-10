@@ -361,6 +361,9 @@ final class SocialIdentityRepositoryFake implements SocialIdentityRepositoryInte
 
 final class FakeSocialAuthProvider implements SocialAuthProviderInterface
 {
+    /** @var array<string, true> */
+    private array $redeemedCodes = [];
+
     public function __construct(private readonly ExternalIdentity $identity)
     {
     }
@@ -370,8 +373,22 @@ final class FakeSocialAuthProvider implements SocialAuthProviderInterface
         return $this->identity->provider;
     }
 
+    /**
+     * Mirrors the real upstream contract: an authorization code is redeemed at
+     * most once. Replaying a burned code is the providers' invalid-code error,
+     * so recovery must always arrive with a fresh code.
+     */
     public function authenticate(string $code): ExternalIdentity
     {
+        if (isset($this->redeemedCodes[$code])) {
+            throw new \RuntimeException(
+                ErrorCode::AUTH_SOCIAL_CODE_INVALID->message(),
+                ErrorCode::AUTH_SOCIAL_CODE_INVALID->value
+            );
+        }
+
+        $this->redeemedCodes[$code] = true;
+
         return $this->identity;
     }
 }
@@ -449,6 +466,40 @@ final class SocialAuthServiceTest extends TestCase
         $this->assertSame($fixture['userDirectory']->calls[0], $fixture['userDirectory']->calls[1]);
     }
 
+    public function testRedeemedCodeIsRejectedAndFreshCodeResumesTheSameIdentity(): void
+    {
+        $fixture = $this->fixture(SocialProvider::WECHAT);
+        $fixture['userDirectory']->loseReply = true;
+        try {
+            $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code1', $this->device());
+            $this->fail('Expected timeout');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::RPC_TIMEOUT->value, $e->getCode());
+        }
+
+        // The burned authorization code is single-use: replaying it fails with
+        // the invalid-code error and changes no registration state.
+        try {
+            $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code1', $this->device());
+            $this->fail('Expected the replayed code to be rejected');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(ErrorCode::AUTH_SOCIAL_CODE_INVALID->value, $e->getCode());
+        }
+        $this->assertSame(
+            SocialIdentity::STATUS_REGISTERING,
+            $fixture['identityRepo']->findById('identity-1')->status
+        );
+
+        // A brand-new code for the same external identity resumes the same
+        // registration exactly once: no duplicate user, no duplicate identity.
+        $result = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code2', $this->device());
+        $this->assertSame('authenticated', $result['state']);
+        $this->assertSame('10001', $result['login']['user_id']);
+        $this->assertCount(1, $fixture['identityRepo']->identities);
+        $this->assertSame($fixture['userDirectory']->calls[0], $fixture['userDirectory']->calls[1]);
+        $this->assertCount(2, $fixture['userDirectory']->calls);
+    }
+
     public function testLoggedInUserCanBindQqThenLoginAsSameUser(): void
     {
         $fixture = $this->bindingFixture();
@@ -509,7 +560,7 @@ final class SocialAuthServiceTest extends TestCase
         $login = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
         $fixture['userDirectory']->status = 0;
         try {
-            $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code', $this->device());
+            $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code2', $this->device());
             $this->fail('Expected banned user');
         } catch (\RuntimeException $e) {
             $this->assertSame(ErrorCode::USER_BANNED->value, $e->getCode());
