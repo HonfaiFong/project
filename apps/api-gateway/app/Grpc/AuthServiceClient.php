@@ -76,8 +76,8 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
             );
         }
 
-        // Binding runs the same worst-case OAuth sequence (QQ sends two HTTP
-        // requests) and verifies the access token twice, so it needs the same budget.
+        // 绑定走的是与登录同样的最坏情况 OAuth 流程（QQ 会发两次 HTTP 请求），
+        // 且要验证 access token 两次，因此需要同样的预算。
         if ($socialBindTimeoutMs <= 2 * $socialHttpTimeoutMs) {
             throw new InvalidArgumentException(
                 'SocialBindIdentity gRPC deadline must exceed two social HTTP timeouts'
@@ -123,8 +123,8 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
     }
 
     /**
-     * Binds a provider identity to the user behind the given access token.
-     * The user id is never taken from the request body.
+     * 把服务商身份绑定到给定 access token 背后的用户上。
+     * 用户 ID 绝不从请求体获取。
      *
      * @return array{user_id: string, provider: string}
      */

@@ -22,30 +22,30 @@ final readonly class AuthController
     ) {
     }
 
-    /** @throws Exception If the secure random source is unavailable. */
+    /** @throws Exception 安全随机源不可用时抛出 */
     public function login(GatewayRequest $request): Response
     {
         $phone = trim((string)$request->post('phone', ''));
-        if ($phone === '') {
+        if (blank($phone)) {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'phone is required');
         }
 
         $code = trim((string)$request->post('code', ''));
         $password = (string)$request->post('password', '');
-        if ($code === '' && $password === '') {
+        if (blank($code) && blank($password)) {
             return ApiResponse::error(ErrorCode::AUTH_INVALID_CREDENTIALS->value, ErrorCode::AUTH_INVALID_CREDENTIALS->message());
         }
 
         $device = $request->loginDevice();
 
-        $authRes = $this->authClient->login($phone, $code, $device, $password !== '' ? $password : null);
+        $authRes = $this->authClient->login($phone, $code, $device, blank($password) ? null : $password);
 
         $login = $this->loginData($authRes);
 
         return ApiResponse::success($login, $login['is_new_user'] ? 201 : 200);
     }
 
-    /** @throws Exception If the secure random source is unavailable. */
+    /** @throws Exception 安全随机源不可用时抛出 */
     public function socialLogin(GatewayRequest $request): Response
     {
         $provider = strtolower(trim((string)$request->post('provider', '')));
@@ -60,7 +60,7 @@ final readonly class AuthController
             $request->loginDevice(),
         );
 
-        // Social login always registers or resumes the user: new users get 201.
+        // 社交登录始终注册或恢复既有用户：新用户返回 201。
         $login = $this->loginData($result['login']);
 
         return ApiResponse::success([
@@ -77,9 +77,9 @@ final readonly class AuthController
             return $error;
         }
 
-        // The bound user comes from the Authorization access token, never from the body.
+        // 被绑定的用户取自 Authorization 访问令牌，绝不来自请求体。
         $accessToken = $request->bearerToken();
-        if ($accessToken === null) {
+        if (blank($accessToken)) {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 
@@ -94,7 +94,7 @@ final readonly class AuthController
     public function refresh(GatewayRequest $request): Response
     {
         $refreshToken = (string)$request->post('refresh_token', '');
-        if ($refreshToken === '') {
+        if (blank($refreshToken)) {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'refresh_token is required');
         }
 
@@ -112,12 +112,12 @@ final readonly class AuthController
     public function logout(GatewayRequest $request): Response
     {
         $refreshToken = (string)$request->post('refresh_token', '');
-        if ($refreshToken === '') {
+        if (blank($refreshToken)) {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'refresh_token is required');
         }
 
         $accessToken = $request->bearerToken();
-        if ($accessToken === null) {
+        if (blank($accessToken)) {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 

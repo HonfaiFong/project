@@ -40,12 +40,12 @@ final class AuthMiddleware implements MiddlewareInterface
         $deviceId = (string)($res['device_id'] ?? '');
         $requestedPersonaId = $request->header('x-persona-id');
 
-        // Update TraceContext with authenticated user info.
-        // SECURITY NOTE:
-        // x-user-id and x-device-id originate from verified token signature.
-        // x-persona-id from client headers is untrusted raw user input.
-        // It must NOT be promoted to trusted TraceContext / internal gRPC metadata (personaId: null)
-        // until verified against UserService for ownership.
+        // 用已认证的用户信息更新 TraceContext。
+        // 安全注记：
+        // x-user-id 与 x-device-id 来自已验证签名的令牌；
+        // 客户端头里的 x-persona-id 是不可信的原始用户输入，
+        // 必须先经 UserService 校验归属，才能提升进可信 TraceContext /
+        // 内部 gRPC 元数据（在此之前 personaId 一直为 null）。
         $currentTrace = TraceContext::current();
         $updated = TraceContext::create(
             requestId: $currentTrace->requestId,

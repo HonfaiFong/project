@@ -132,9 +132,8 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
 
     public function updatePersona(string $personaId, string $userId, ?string $nickname, ?string $avatarKey, ?string $bio): array
     {
-        // UpdatePersonaRequest fields are proto3 `optional`: only set the keys that
-        // were actually provided, otherwise the server sees presence and overwrites
-        // the stored value with an empty string (PATCH would clear unspecified fields).
+        // UpdatePersonaRequest 的字段是 proto3 `optional`：只写入真正提供的 key，
+        // 否则服务端会视同"字段存在"，用空字符串覆盖已存值（PATCH 语义会清掉未指定的字段）。
         $fields = [
             'persona_id' => $personaId,
             'user_id'    => $userId,

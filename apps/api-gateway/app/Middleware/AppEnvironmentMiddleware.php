@@ -11,19 +11,18 @@ use Webman\Http\Response;
 use Webman\MiddlewareInterface;
 
 /**
- * Restricts a route to the development environment.
+ * 将路由限制在开发环境。
  *
- * Phone (SMS) login is a development-only capability: production keeps this
- * middleware in the route pipeline, so the route can never be re-enabled by a
- * runtime flag or a request payload. The environment is resolved once while
- * Webman loads config/gateway.php and injected by the container; the middleware
- * never reads environment variables or config files per request. Anything that
- * is not development is treated as production and the route is rejected.
+ * 手机号（短信）登录是仅限开发环境的能力：生产环境始终把本中间件保留在
+ * 路由管线中，因此该路由无法通过运行时开关或请求载荷重新启用。环境在
+ * Webman 加载 config/gateway.php 时解析一次并由容器注入；本中间件绝不会
+ * 在每个请求里读取环境变量或配置文件。凡不是 development 的一律按生产
+ * 处理并拒绝该路由。
  */
 final readonly class AppEnvironmentMiddleware implements MiddlewareInterface
 {
     /**
-     * @param string $environment 'development' or 'production'
+     * @param string $environment 'development'（开发）或 'production'（生产）
      */
     public function __construct(private string $environment = 'production')
     {

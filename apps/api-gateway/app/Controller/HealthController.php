@@ -45,7 +45,7 @@ final class HealthController
         }
 
         if (!$healthy) {
-            // Degraded: report 503 so orchestrators and load balancers stop routing.
+            // 降级：返回 503，让编排器与负载均衡器停止导流。
             return ApiResponse::error(
                 ErrorCode::SERVICE_UNAVAILABLE->value,
                 'one or more upstream services are unhealthy',

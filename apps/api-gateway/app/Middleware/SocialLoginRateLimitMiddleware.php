@@ -19,15 +19,13 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
     protected TrustedProxyClientIpResolver $clientIpResolver;
 
     /**
-     * @param Closure(string, int): int|null $counter Increments a windowed counter and returns the new count
+     * @param Closure(string, int): int|null $counter 递增窗口计数器并返回最新计数值
      * @param list<string> $trustedProxyCidrs
-     * @param string $environment 'development' or 'production'
-     * @param string $scenario 'login' or 'bind'; separates per-scenario buckets
-     * @param int $scenarioLimit Per-IP allowance for this scenario alone
-     * @param int $deviceLimit Per (IP, device) allowance; a risk signal that may
-     *                         only tighten, never replace, the IP buckets
-     * @param int $identityLimit Per-authenticated-user allowance (bind scenario);
-     *                           zero disables the identity bucket
+     * @param string $environment 'development'（开发）或 'production'（生产）
+     * @param string $scenario 'login' 或 'bind'，用于分隔各场景的限流桶
+     * @param int $scenarioLimit 该场景单独的每 IP 限额
+     * @param int $deviceLimit 每（IP, 设备）限额；仅作为收紧 IP 桶的风险信号，不能替代 IP 桶
+     * @param int $identityLimit 每认证用户的限额（bind 场景）；为 0 时禁用身份桶
      */
     public function __construct(
         protected ?Closure $counter = null,
@@ -88,9 +86,7 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
         } catch (Throwable $e) {
             $rateLimited = $e instanceof RuntimeException
                 && $e->getCode() === ErrorCode::RATE_LIMIT_EXCEEDED->value;
-            // An exceeded bucket rejects the request in every environment; a
-            // broken counter fails closed in production and bypasses only in
-            // development.
+            // 限流触发的拒绝在任何环境都生效；计数器故障在生产环境 fail-closed，仅开发环境放行。
             if ($rateLimited || $this->isProduction()) {
                 if (!$rateLimited) {
                     $e = new RuntimeException(
@@ -108,20 +104,17 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
     }
 
     /**
-     * Layered buckets, all of which must pass:
+     * 分层限流桶，所有桶都必须通过：
      *
-     * - IP global: one ceiling per client IP across login and bind together.
-     *   Sized generously because carrier CGNAT puts several real users behind
-     *   one IPv4; scenario buckets carry the fine-grained limits.
-     * - IP + scenario: separates WeChat/QQ login traffic from bind traffic so
-     *   neither consumes the other's allowance.
-     * - IP + device: a risk signal for scripted clients that hammer one device
-     *   identity. Optional and strictly additive — rotating a forged
-     *   device_uuid only mints new device buckets, it never lifts the IP
-     *   buckets, so spoofing the header cannot bypass limiting.
-     * - user + scenario (bind only): one authenticated account binding
-     *   identities repeatedly gets its own long-window bucket, independent of
-     *   which IP it comes from.
+     * - IP 全局：同一客户端 IP 在 login 与 bind 之间共享一个总上限。
+     *   给得较宽，因为运营商 CGNAT 会把多个真实用户压在同一个 IPv4 后面；
+     *   细粒度限额由场景桶承担。
+     * - IP + 场景：把微信/QQ 登录流量与绑定流量分开，互不挤占额度。
+     * - IP + 设备：针对用同一设备身份高频请求的脚本客户端的风险信号。
+     *   可选且严格叠加——轮换伪造的 device_uuid 只会铸造新的设备桶，
+     *   永远不会抬高 IP 桶，因此伪造该头无法绕过限流。
+     * - 用户 + 场景（仅 bind）：同一认证账号反复绑定会命中自己独立的
+     *   长窗口桶，与其来源 IP 无关。
      *
      * @return list<array{key: string, limit: int, window_seconds: int}>
      */
@@ -143,7 +136,7 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
         ];
 
         $deviceId = $this->deviceId($request);
-        if ($deviceId !== '') {
+        if (filled($deviceId)) {
             $buckets[] = [
                 'key'            => 'auth:gateway:social-login:device:' . hash('sha256', $ipBucketId . '|' . $deviceId),
                 'limit'          => $this->deviceLimit,
@@ -152,7 +145,7 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
         }
 
         $userId = $this->authenticatedUserId($request);
-        if ($this->identityLimit > 0 && $userId !== '') {
+        if ($this->identityLimit > 0 && filled($userId)) {
             $buckets[] = [
                 'key'            => 'auth:gateway:social-login:user:' . $this->scenario . ':' . hash('sha256', $userId),
                 'limit'          => $this->identityLimit,
@@ -169,10 +162,9 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
     }
 
     /**
-     * IPv4 clients key on the full address. An IPv6 client keys on its /64:
-     * the end user controls the low 64 interface bits and could otherwise
-     * rotate them for an unbounded supply of fresh buckets, while a /64 is
-     * the granularity a single subscriber is expected to occupy.
+     * IPv4 客户端按完整地址作 key。IPv6 客户端按 /64 作 key：
+     * 低 64 位接口标识由终端用户控制，不归并的话就能无限轮换、取之不竭地
+     * 造出新桶，而 /64 正是单个入网用户应占用的粒度。
      */
     private function ipBucketId(string $clientIp): string
     {
@@ -185,27 +177,24 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
     }
 
     /**
-     * The same device identity the login/bind payloads carry (device_uuid
-     * field, x-device-id header). Missing means no device bucket; the IP
-     * buckets still apply.
+     * 与 login/bind 载荷携带的设备身份一致（device_uuid 字段、x-device-id 头）。
+     * 缺失即不加设备桶；IP 桶仍然生效。
      */
     private function deviceId(Request $request): string
     {
         $device = (array)$request->post('device', []);
         $deviceId = is_scalar($device['device_uuid'] ?? null) ? trim((string)$device['device_uuid']) : '';
-        if ($deviceId === '') {
+        if (blank($deviceId)) {
             $header = $request->header('x-device-id');
             $deviceId = is_scalar($header) ? trim((string)$header) : '';
         }
 
-        // Client-controlled input only ever feeds a hash; cap it so a huge
-        // payload cannot turn each request into expensive hashing work.
+        // 客户端可控的输入只用于计算哈希；限制长度，防止超大载荷把每个请求都变成昂贵的哈希运算。
         return substr($deviceId, 0, 128);
     }
 
     /**
-     * The verified user id published by AuthMiddleware. Empty before
-     * authentication (login) or when wiring runs the limiter pre-auth.
+     * AuthMiddleware 发布的已验证用户 ID。认证前（login）或限流器接线先于认证时为空。
      */
     protected function authenticatedUserId(Request $request): string
     {

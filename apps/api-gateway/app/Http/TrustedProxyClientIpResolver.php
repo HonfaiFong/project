@@ -29,14 +29,13 @@ final class TrustedProxyClientIpResolver
             return 'unknown';
         }
 
-        // Forwarded headers are accepted only when the immediate socket peer
-        // is inside the explicitly configured trusted proxy ranges.
+        // 仅当直接 socket 对端落在显式配置的可信代理网段内时，才接受转发头。
         if (!$this->isTrustedProxy($peer)) {
             return $peer;
         }
 
         $forwarded = $request->header('x-forwarded-for');
-        if (!is_string($forwarded) || trim($forwarded) === '') {
+        if (blank($forwarded)) {
             return $peer;
         }
 
@@ -50,8 +49,7 @@ final class TrustedProxyClientIpResolver
             $chain[] = $candidate;
         }
 
-        // Walk from the trusted gateway towards the client. The first address
-        // outside the trusted chain is the client key.
+        // 从可信网关一侧向客户端方向回溯，链上第一个不在可信范围内的地址即客户端地址。
         $chain[] = $peer;
         for ($index = count($chain) - 1; $index >= 0; $index--) {
             if (!$this->isTrustedProxy($chain[$index])) {
@@ -63,17 +61,15 @@ final class TrustedProxyClientIpResolver
     }
 
     /**
-     * IPv4-mapped IPv6 addresses (::ffff:198.51.100.10) must compare as their
-     * embedded IPv4 form: a dual-stack CDN/LB can present the mapped form on
-     * one hop and the plain form on another, and a mismatch would silently
-     * demote a trusted hop to untrusted (collapsing every client into one
-     * shared socket-peer rate bucket) or split one client across two keys.
+     * IPv4 映射的 IPv6 地址（::ffff:198.51.100.10）必须按其内嵌的 IPv4 形式比较：
+     * 双栈 CDN/LB 可能在一跳呈现映射形式、在另一跳呈现普通形式，一旦不一致就会
+     * 把可信一跳静默降级为不可信（所有客户端塌缩进同一个 socket 对端限流桶），
+     * 或把同一个客户端拆到两个 key 上。
      *
-     * The check is binary, not textual: inet_pton accepts several spellings of
-     * the same mapped address (::ffff:10.1.0.1, ::FFFF:10.1.0.1,
-     * ::ffff:a01:1, 0:0:0:0:0:ffff:a01:1), and only the 96-bit zero-plus-ffff
-     * prefix of the packed form decides — a str_starts_with('::ffff:') match
-     * would miss the other spellings and re-break trusted-hop matching.
+     * 判断必须是二进制而非文本比较：inet_pton 接受同一映射地址的多种写法
+     * （::ffff:10.1.0.1、::FFFF:10.1.0.1、::ffff:a01:1、0:0:0:0:0:ffff:a01:1），
+     * 只有 packed 形式的 96 位零加 ffff 前缀才算数——用 str_starts_with('::ffff:')
+     * 匹配会漏掉其他写法，再次破坏可信一跳的判定。
      */
     private function normalizeIp(string $ip): string
     {
@@ -132,16 +128,15 @@ final class TrustedProxyClientIpResolver
      * @param list<string> $cidrs
      * @return list<array{network: string, prefix: int, bytes: int}>
      *
-     * Webman's generic getRealIp() policy trusts all intranet peers and also
-     * accepts headers that are not part of this gateway's proxy contract. The
-     * native inet_pton prefix check keeps the trusted proxy boundary explicit.
+     * Webman 自带的 getRealIp() 策略信任所有内网对端，且接受的请求头超出了
+     * 本网关的代理契约范围。这里用原生 inet_pton 前缀比较把可信代理边界显式化。
      */
     private function parseTrustedProxyCidrs(array $cidrs): array
     {
         $networks = [];
         foreach ($cidrs as $cidr) {
             $cidr = trim($cidr);
-            if ($cidr === '') {
+            if (blank($cidr)) {
                 continue;
             }
 

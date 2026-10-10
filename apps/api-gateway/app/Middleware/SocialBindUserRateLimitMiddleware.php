@@ -8,7 +8,7 @@ use Closure;
 use LogicException;
 use Webman\Http\Request;
 
-/** Enforces only the verified user's binding allowance, after authentication. */
+/** 认证后仅强制执行已验证用户的绑定限额。 */
 final class SocialBindUserRateLimitMiddleware extends SocialLoginRateLimitMiddleware
 {
     /** @param Closure(string, int): int|null $counter */
@@ -33,7 +33,7 @@ final class SocialBindUserRateLimitMiddleware extends SocialLoginRateLimitMiddle
     protected function buckets(Request $request): array
     {
         $userId = $this->authenticatedUserId($request);
-        if ($userId === '') {
+        if (empty($userId)) {
             throw new LogicException('Social bind user limiter requires an authenticated user');
         }
 

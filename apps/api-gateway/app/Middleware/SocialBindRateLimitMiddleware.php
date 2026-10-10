@@ -8,17 +8,15 @@ use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use Closure;
 
 /**
- * Bind-flavoured social rate limiter: same layered IP buckets, but counted in
- * the bind scenario and with the per-authenticated-user bucket enabled, so one
- * account binding identities in a loop is capped regardless of which IP it
- * comes from. Register it after AuthMiddleware — the user bucket needs the
- * verified user id AuthMiddleware publishes on the request.
+ * 绑定场景的社交限流器：沿用同样的分层 IP 桶，但按 bind 场景计数并启用
+ * 每认证用户桶，因此同一账号循环绑定身份时，无论换哪个 IP 都会被限住。
+ * 必须注册在 AuthMiddleware 之后——用户桶需要 AuthMiddleware 发布在请求上的
+ * 已验证用户 ID。
  */
 final class SocialBindRateLimitMiddleware extends SocialLoginRateLimitMiddleware
 {
     /**
-     * Same construction surface as the parent minus the scenario, which is
-     * the entire point of this class: it can never be wired as 'login'.
+     * 构造参数与父类一致，唯独去掉 scenario——这正是本类存在的意义：它永远不可能被接成 'login'。
      *
      * @param Closure(string, int): int|null $counter
      * @param list<string> $trustedProxyCidrs

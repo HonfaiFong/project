@@ -20,7 +20,7 @@ final class UserController
     public function me(GatewayRequest $request): Response
     {
         $userId = $request->authContext['user_id'];
-        if ($userId === '') {
+        if (empty($userId)) {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 

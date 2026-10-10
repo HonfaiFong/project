@@ -28,12 +28,12 @@ final class GatewayRequest extends Request
 
         $token = trim(substr($authorization, 7));
 
-        return $token === '' ? null : $token;
+        return filled($token) ? $token : null;
     }
 
     /**
      * @return array<string, mixed>
-     * @throws Exception If the secure random source is unavailable.
+     * @throws Exception 安全随机源不可用时抛出
      */
     public function loginDevice(): array
     {

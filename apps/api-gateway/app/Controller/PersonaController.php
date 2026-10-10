@@ -20,7 +20,7 @@ final readonly class PersonaController
     public function list(GatewayRequest $request): Response
     {
         $userId = $request->authContext['user_id'];
-        if ($userId === '') {
+        if (empty($userId)) {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 
@@ -33,18 +33,19 @@ final readonly class PersonaController
     public function create(GatewayRequest $request): Response
     {
         $userId = $request->authContext['user_id'];
-        if ($userId === '') {
+        if (empty($userId)) {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 
         $nickname = trim((string)$request->post('nickname', ''));
-        if ($nickname === '') {
+        if (blank($nickname)) {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'nickname is required');
         }
 
         $type = (int)$request->post('type', 1);
-        $avatarKey = $request->post('avatar_key') ? (string)$request->post('avatar_key') : null;
-        $bio = $request->post('bio') ? (string)$request->post('bio') : null;
+        // proto3 契约：'0' 等 falsy 值与缺失同义，故用 empty() 而非 filled()。
+        $avatarKey = empty($request->post('avatar_key')) ? null : (string)$request->post('avatar_key');
+        $bio = empty($request->post('bio')) ? null : (string)$request->post('bio');
 
         $res = $this->userClient->createPersona($userId, $type, $nickname, $avatarKey, $bio);
 
@@ -53,7 +54,7 @@ final readonly class PersonaController
 
     public function get(string $personaId): Response
     {
-        if ($personaId === '') {
+        if (empty($personaId)) {
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'persona_id is required');
         }
 
@@ -64,7 +65,7 @@ final readonly class PersonaController
     public function update(GatewayRequest $request, string $personaId): Response
     {
         $userId = $request->authContext['user_id'];
-        if ($userId === '') {
+        if (empty($userId)) {
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 
