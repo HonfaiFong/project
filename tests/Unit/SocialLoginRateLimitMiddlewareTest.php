@@ -75,6 +75,103 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
         $this->assertNotSame($keys[0], $keys[1]);
     }
 
+    public function testDualCdnLbChainKeepsDistinctClientBuckets(): void
+    {
+        // Two clients arrive through the same dual CDN -> LB chain; they must
+        // never share one bucket keyed on the shared proxy infrastructure.
+        $keys = [];
+        $middleware = new SocialLoginRateLimitMiddleware(
+            counter: static function (string $key) use (&$keys): int {
+                $keys[] = $key;
+
+                return 1;
+            },
+            trustedProxyCidrs: ['100.64.0.0/10', '10.0.0.0/8'],
+            environment: 'development',
+        );
+        $handler = static fn (Request $request): Response => new Response(200);
+
+        $middleware->process(
+            $this->request('10.2.0.7', ['x-forwarded-for' => '198.51.100.10, 100.64.1.9']),
+            $handler,
+        );
+        $middleware->process(
+            $this->request('10.2.0.7', ['x-forwarded-for' => '198.51.100.11, 100.64.1.9']),
+            $handler,
+        );
+
+        $this->assertSame(
+            'auth:gateway:social-login:' . hash('sha256', '198.51.100.10'),
+            $keys[0]
+        );
+        $this->assertSame(
+            'auth:gateway:social-login:' . hash('sha256', '198.51.100.11'),
+            $keys[1]
+        );
+    }
+
+    public function testIpv4MappedDualStackChainKeysOnTheRealClient(): void
+    {
+        $keys = [];
+        $middleware = new SocialLoginRateLimitMiddleware(
+            counter: static function (string $key) use (&$keys): int {
+                $keys[] = $key;
+
+                return 1;
+            },
+            trustedProxyCidrs: ['10.0.0.0/8'],
+            environment: 'development',
+        );
+        $handler = static fn (Request $request): Response => new Response(200);
+
+        $middleware->process(
+            $this->request('::ffff:10.1.0.1', ['x-forwarded-for' => '::ffff:198.51.100.10']),
+            $handler,
+        );
+
+        $this->assertSame(
+            'auth:gateway:social-login:' . hash('sha256', '198.51.100.10'),
+            $keys[0]
+        );
+    }
+
+    public function testIpv6ClientsShareOneBucketPerSlash64(): void
+    {
+        $keys = [];
+        $middleware = new SocialLoginRateLimitMiddleware(
+            counter: static function (string $key) use (&$keys): int {
+                $keys[] = $key;
+
+                return 1;
+            },
+            trustedProxyCidrs: ['fd00::/8'],
+            environment: 'development',
+        );
+        $handler = static fn (Request $request): Response => new Response(200);
+
+        // Rotating the interface bits must not mint new buckets...
+        $middleware->process(
+            $this->request('fd00::1', ['x-forwarded-for' => '2001:db8:aaaa:1::1, fd00::2']),
+            $handler,
+        );
+        $middleware->process(
+            $this->request('fd00::1', ['x-forwarded-for' => '2001:db8:aaaa:1::dead, fd00::2']),
+            $handler,
+        );
+        // ...while a different /64 is a different subscriber.
+        $middleware->process(
+            $this->request('fd00::1', ['x-forwarded-for' => '2001:db8:bbbb:1::1, fd00::2']),
+            $handler,
+        );
+
+        $this->assertSame(
+            'auth:gateway:social-login:' . hash('sha256', '2001:db8:aaaa:1::/64'),
+            $keys[0]
+        );
+        $this->assertSame($keys[0], $keys[1]);
+        $this->assertNotSame($keys[0], $keys[2]);
+    }
+
     public function testUntrustedPeerCannotChooseBucketWithForwardedHeader(): void
     {
         $keys = [];

@@ -52,7 +52,7 @@ final readonly class SocialLoginRateLimitMiddleware implements MiddlewareInterfa
         }
 
         try {
-            $key = 'auth:gateway:social-login:' . hash('sha256', $this->clientIpResolver->resolve($request));
+            $key = $this->rateLimitKey($this->clientIpResolver->resolve($request));
             $count = ($this->counter)($key, $this->windowSeconds);
         } catch (Throwable $e) {
             if ($this->isProduction()) {
@@ -79,5 +79,21 @@ final readonly class SocialLoginRateLimitMiddleware implements MiddlewareInterfa
     private function isProduction(): bool
     {
         return $this->environment !== 'development';
+    }
+
+    /**
+     * IPv4 clients key on the full address. An IPv6 client keys on its /64:
+     * the end user controls the low 64 interface bits and could otherwise
+     * rotate them for an unbounded supply of fresh buckets, while a /64 is
+     * the granularity a single subscriber is expected to occupy.
+     */
+    private function rateLimitKey(string $clientIp): string
+    {
+        $packed = inet_pton($clientIp);
+        if ($packed !== false && strlen($packed) === 16) {
+            $clientIp = inet_ntop(substr($packed, 0, 8) . str_repeat("\x00", 8)) . '/64';
+        }
+
+        return 'auth:gateway:social-login:' . hash('sha256', $clientIp);
     }
 }

@@ -34,6 +34,93 @@ final class TrustedProxyClientIpResolverTest extends TestCase
         );
     }
 
+    public function testDualCdnAndLbHopsInSeparateTrustedRangesResolveTheClient(): void
+    {
+        // CDN edge 100.64.0.0/10 -> L2 LB 10.0.0.0/8 -> gateway. The chain is
+        // "client, cdn-edge" with the LB as the socket peer.
+        $resolver = new TrustedProxyClientIpResolver(['100.64.0.0/10', '10.0.0.0/8']);
+
+        $this->assertSame(
+            '198.51.100.10',
+            $resolver->resolve($this->request(
+                '10.2.0.7',
+                ['x-forwarded-for' => '198.51.100.10, 100.64.1.9']
+            ))
+        );
+    }
+
+    public function testLeftmostSpoofedHopsCannotShiftTheDualChainClientIp(): void
+    {
+        $resolver = new TrustedProxyClientIpResolver(['100.64.0.0/10', '10.0.0.0/8']);
+
+        // The attacker prepends a decoy public IP; the CDN appends the real
+        // client IP, so the rightmost untrusted address still wins.
+        $this->assertSame(
+            '198.51.100.10',
+            $resolver->resolve($this->request(
+                '10.2.0.7',
+                ['x-forwarded-for' => '1.2.3.4, 198.51.100.10, 100.64.1.9']
+            ))
+        );
+    }
+
+    public function testIntruderCannotEnterTheChainByClaimingATrustedRange(): void
+    {
+        $resolver = new TrustedProxyClientIpResolver(['100.64.0.0/10', '10.0.0.0/8']);
+
+        // The client sends "X-Forwarded-For: 10.9.9.9" itself; the trusted CDN
+        // appends the client's real address, which stays the resolved key.
+        $this->assertSame(
+            '198.51.100.77',
+            $resolver->resolve($this->request(
+                '10.2.0.7',
+                ['x-forwarded-for' => '10.9.9.9, 198.51.100.77, 100.64.1.9']
+            ))
+        );
+    }
+
+    public function testIpv4MappedIpv6PeerIsComparedAsItsEmbeddedAddress(): void
+    {
+        // A dual-stack LB presenting ::ffff:10.1.0.1 must still count as the
+        // configured 10.0.0.0/8 proxy; otherwise every client behind it would
+        // collapse into one shared socket-peer rate bucket.
+        $resolver = new TrustedProxyClientIpResolver(['10.0.0.0/8']);
+
+        $this->assertSame(
+            '198.51.100.10',
+            $resolver->resolve($this->request(
+                '::ffff:10.1.0.1',
+                ['x-forwarded-for' => '::ffff:198.51.100.10']
+            ))
+        );
+    }
+
+    public function testIpv6ClientIsResolvedThroughATrustedIpv6Proxy(): void
+    {
+        $resolver = new TrustedProxyClientIpResolver(['fd00::/8']);
+
+        $this->assertSame(
+            '2001:db8:abcd:12::42',
+            $resolver->resolve($this->request(
+                'fd00::1',
+                ['x-forwarded-for' => '2001:db8:abcd:12::42, fd00::2']
+            ))
+        );
+    }
+
+    public function testAllTrustedChainFallsBackToTheSocketPeer(): void
+    {
+        $resolver = new TrustedProxyClientIpResolver(['10.0.0.0/8']);
+
+        $this->assertSame(
+            '10.2.0.7',
+            $resolver->resolve($this->request(
+                '10.2.0.7',
+                ['x-forwarded-for' => '10.3.0.1, 10.4.0.1']
+            ))
+        );
+    }
+
     public function testMalformedForwardedChainFallsBackToSocketPeer(): void
     {
         $resolver = new TrustedProxyClientIpResolver(['10.0.0.0/8']);

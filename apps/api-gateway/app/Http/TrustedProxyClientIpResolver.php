@@ -24,7 +24,7 @@ final class TrustedProxyClientIpResolver
 
     public function resolve(Request $request): string
     {
-        $peer = trim((string)$request->getRemoteIp());
+        $peer = $this->normalizeIp(trim((string)$request->getRemoteIp()));
         if (filter_var($peer, FILTER_VALIDATE_IP) === false) {
             return 'unknown';
         }
@@ -42,7 +42,7 @@ final class TrustedProxyClientIpResolver
 
         $chain = [];
         foreach (explode(',', $forwarded) as $candidate) {
-            $candidate = trim($candidate);
+            $candidate = $this->normalizeIp(trim($candidate));
             if (filter_var($candidate, FILTER_VALIDATE_IP) === false) {
                 return $peer;
             }
@@ -60,6 +60,25 @@ final class TrustedProxyClientIpResolver
         }
 
         return $peer;
+    }
+
+    /**
+     * IPv4-mapped IPv6 addresses (::ffff:198.51.100.10) must compare as their
+     * embedded IPv4 form: a dual-stack CDN/LB can present the mapped form on
+     * one hop and the plain form on another, and a mismatch would silently
+     * demote a trusted hop to untrusted (collapsing every client into one
+     * shared socket-peer rate bucket) or split one client across two keys.
+     */
+    private function normalizeIp(string $ip): string
+    {
+        if (str_starts_with($ip, '::ffff:')) {
+            $embedded = substr($ip, strlen('::ffff:'));
+            if (filter_var($embedded, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+                return $embedded;
+            }
+        }
+
+        return $ip;
     }
 
     private function isTrustedProxy(string $ip): bool
