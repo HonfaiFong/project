@@ -178,6 +178,9 @@ services:
       - SERVICE_NAME=auth-service
       - INTERNAL_RPC_GATEWAY_AUTH_TOKEN=${INTERNAL_RPC_GATEWAY_AUTH_TOKEN:?Set INTERNAL_RPC_GATEWAY_AUTH_TOKEN in .env}
       - GRPC_USER_SERVICE_TOKEN=${INTERNAL_RPC_AUTH_USER_TOKEN:?Set INTERNAL_RPC_AUTH_USER_TOKEN in .env}
+      # Per-hop budget for the AuthService -> UserService directory calls; must
+      # stay below the gateway's GRPC_AUTH_TIMEOUT_MS so the outer deadline rules.
+      - GRPC_USER_DIRECTORY_TIMEOUT_MS=${GRPC_USER_DIRECTORY_TIMEOUT_MS:-250}
       - APP_ENV=${APP_ENV:-production}
       # Snowflake service slot (0-31). Replicas of this service must use
       # distinct values; WorkerId::resolve() spreads rr worker processes

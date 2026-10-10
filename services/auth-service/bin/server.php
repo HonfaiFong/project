@@ -113,8 +113,10 @@ if (!$credentialVerifier->isDevelopment() && !$credentialVerifier->hasProvider()
     $logger->info('Phone credential login is disabled in production; configured OAuth providers authenticate users.');
 }
 $userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
+$userDirectoryTimeoutMs = max(1, (int)(getenv('GRPC_USER_DIRECTORY_TIMEOUT_MS') ?: '250'));
 $userDirectory = new GrpcUserDirectoryClient(
     target: $userServiceTarget,
+    timeoutMs: $userDirectoryTimeoutMs,
     serviceToken: trim((string)(getenv('GRPC_USER_SERVICE_TOKEN') ?: '')) ?: null,
 );
 $internalRpcToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_AUTH_TOKEN') ?: ''));
