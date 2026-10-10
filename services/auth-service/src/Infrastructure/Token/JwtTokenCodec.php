@@ -6,9 +6,9 @@ namespace Services\AuthService\Infrastructure\Token;
 
 use RuntimeException;
 
-final class JwtTokenCodec
+final readonly class JwtTokenCodec
 {
-    public function __construct(private readonly string $jwtSecret)
+    public function __construct(private string $jwtSecret)
     {
     }
 
@@ -21,10 +21,10 @@ final class JwtTokenCodec
         $b64Header = $this->base64UrlEncode((string)json_encode($header));
         $b64Payload = $this->base64UrlEncode((string)json_encode($payload));
 
-        $signature = hash_hmac('sha256', "{$b64Header}.{$b64Payload}", $this->jwtSecret, true);
+        $signature = hash_hmac('sha256', "$b64Header.$b64Payload", $this->jwtSecret, true);
         $b64Sig = $this->base64UrlEncode($signature);
 
-        return "{$b64Header}.{$b64Payload}.{$b64Sig}";
+        return "$b64Header.$b64Payload.$b64Sig";
     }
 
     /**
@@ -38,7 +38,7 @@ final class JwtTokenCodec
         }
 
         [$b64Header, $b64Payload, $b64Sig] = $parts;
-        $expectedSig = hash_hmac('sha256', "{$b64Header}.{$b64Payload}", $this->jwtSecret, true);
+        $expectedSig = hash_hmac('sha256', "$b64Header.$b64Payload", $this->jwtSecret, true);
 
         if (!hash_equals($expectedSig, $this->base64UrlDecode($b64Sig))) {
             throw new RuntimeException('Invalid signature');

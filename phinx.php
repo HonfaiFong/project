@@ -48,8 +48,8 @@ register_shutdown_function(static function () use ($pdo, $lockName): void {
 // Only the tracking database is bootstrapped here. The identifier is validated
 // above; all business schema changes belong to versioned migrations.
 $metaDatabase = $prefix . 'meta';
-$pdo->exec("CREATE DATABASE IF NOT EXISTS `{$metaDatabase}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-$pdo->exec("USE `{$metaDatabase}`");
+$pdo->exec("CREATE DATABASE IF NOT EXISTS `$metaDatabase` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+$pdo->exec("USE `$metaDatabase`");
 
 return [
     'paths' => ['migrations' => __DIR__ . '/database/migrations'],

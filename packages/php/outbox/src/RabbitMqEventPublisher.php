@@ -7,18 +7,19 @@ namespace Packages\Outbox;
 use Contracts\Events\EventEnvelope;
 use DateTimeImmutable;
 use DateTimeZone;
+use Exception;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Message\AMQPMessage;
 use RuntimeException;
 
-final class RabbitMqEventPublisher implements EventPublisher
+final readonly class RabbitMqEventPublisher implements EventPublisher
 {
     public function __construct(
-        private readonly AMQPChannel $channel,
-        private readonly string $producer,
+        private AMQPChannel $channel,
+        private string $producer,
     ) {
         $this->channel->confirm_select();
-        $this->channel->set_nack_handler(static function (AMQPMessage $message): never {
+        $this->channel->set_nack_handler(static function (): never {
             throw new RuntimeException('RabbitMQ NACKed domain event publication');
         });
         $this->channel->set_return_listener(static function (): never {
@@ -26,6 +27,7 @@ final class RabbitMqEventPublisher implements EventPublisher
         });
     }
 
+    /** @throws Exception */
     public function publish(OutboxRecord $event): void
     {
         $body = (new EventEnvelope(

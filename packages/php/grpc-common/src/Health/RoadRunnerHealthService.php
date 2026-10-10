@@ -10,6 +10,7 @@ use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Contracts\Gen\Common\V1\HealthStatus;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Spiral\RoadRunner\GRPC\ContextInterface;
+use Throwable;
 
 /**
  * gRPC health service (common.v1.HealthService) registered by RoadRunner workers.
@@ -25,6 +26,7 @@ final class RoadRunnerHealthService implements HealthServiceInterface
 
     /**
      * @param (callable(): bool)|null $readinessChecker
+     * @param InternalRpcAuthorizer|null $authorizer
      */
     public function __construct(
         ?callable $readinessChecker = null,
@@ -36,9 +38,7 @@ final class RoadRunnerHealthService implements HealthServiceInterface
 
     public function Check(ContextInterface $ctx, HealthCheckRequest $in): HealthCheckResponse
     {
-        if ($this->authorizer !== null) {
-            $this->authorizer->authorize($ctx, 'Check');
-        }
+        $this->authorizer?->authorize($ctx, 'Check');
 
         if ($this->readinessChecker !== null) {
             try {
@@ -48,7 +48,7 @@ final class RoadRunnerHealthService implements HealthServiceInterface
                         ->setStatus(HealthStatus::HEALTH_STATUS_NOT_SERVING)
                         ->setMessage('downstream dependencies unhealthy');
                 }
-            } catch (\Throwable $e) {
+            } catch (Throwable $e) {
                 return (new HealthCheckResponse())
                     ->setStatus(HealthStatus::HEALTH_STATUS_NOT_SERVING)
                     ->setMessage('readiness check failed: ' . $e->getMessage());

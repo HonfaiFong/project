@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Services\AuthService\Infrastructure\Cache;
 
 use Contracts\Errors\ErrorCode;
+use Random\RandomException;
 use Redis;
 use RuntimeException;
 use Services\AuthService\Domain\Entity\SocialBindSession;
@@ -19,6 +20,7 @@ final class RedisSocialBindSessionStore implements SocialBindSessionStoreInterfa
     {
     }
 
+    /** @throws RandomException when the CSPRNG cannot produce the bind token */
     public function issue(string $socialIdentityId, int $ttlSeconds): array
     {
         if ($ttlSeconds < 1) {
@@ -171,6 +173,7 @@ LUA, [self::TOKEN_PREFIX . $session->tokenHash, self::IDENTITY_PREFIX . $session
         return $session;
     }
 
+    /** @throws RandomException when the CSPRNG cannot produce the bind token */
     private function randomToken(): string
     {
         return rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');

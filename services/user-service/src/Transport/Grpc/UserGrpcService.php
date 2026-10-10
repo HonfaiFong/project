@@ -40,16 +40,21 @@ use Spiral\RoadRunner\GRPC\Exception\GRPCException;
 use Spiral\RoadRunner\GRPC\ResponseTrailers;
 use Spiral\RoadRunner\GRPC\StatusCode;
 use Throwable;
+use Random\RandomException;
 
-final class UserGrpcService implements UserServiceInterface
+final readonly class UserGrpcService implements UserServiceInterface
 {
     public function __construct(
-        private readonly UserApplicationService $userService,
-        private readonly LoggerInterface $logger,
-        private readonly ?InternalRpcAuthorizer $authorizer = null,
+        private UserApplicationService $userService,
+        private LoggerInterface $logger,
+        private ?InternalRpcAuthorizer $authorizer = null,
     ) {
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function FindOrCreateByPhone(
         ContextInterface $ctx,
         FindOrCreateByPhoneRequest $in
@@ -71,6 +76,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function FindOrCreateBySocialIdentity(
         ContextInterface $ctx,
         FindOrCreateBySocialIdentityRequest $in
@@ -92,6 +101,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function GetUser(ContextInterface $ctx, GetUserRequest $in): GetUserResponse
     {
         return $this->call($ctx, 'GetUser', function () use ($in): GetUserResponse {
@@ -101,6 +114,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function BatchGetUsers(ContextInterface $ctx, BatchGetUsersRequest $in): BatchGetUsersResponse
     {
         return $this->call($ctx, 'BatchGetUsers', function () use ($in): BatchGetUsersResponse {
@@ -113,6 +130,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function UpdateUser(ContextInterface $ctx, UpdateUserRequest $in): UpdateUserResponse
     {
         return $this->call($ctx, 'UpdateUser', function () use ($in): UpdateUserResponse {
@@ -126,6 +147,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function CreatePersona(ContextInterface $ctx, CreatePersonaRequest $in): CreatePersonaResponse
     {
         return $this->call($ctx, 'CreatePersona', function () use ($in): CreatePersonaResponse {
@@ -141,6 +166,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function GetPersona(ContextInterface $ctx, GetPersonaRequest $in): GetPersonaResponse
     {
         return $this->call($ctx, 'GetPersona', function () use ($in): GetPersonaResponse {
@@ -150,6 +179,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function BatchGetPersonas(ContextInterface $ctx, BatchGetPersonasRequest $in): BatchGetPersonasResponse
     {
         return $this->call($ctx, 'BatchGetPersonas', function () use ($in): BatchGetPersonasResponse {
@@ -162,6 +195,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function UpdatePersona(ContextInterface $ctx, UpdatePersonaRequest $in): UpdatePersonaResponse
     {
         return $this->call($ctx, 'UpdatePersona', function () use ($in): UpdatePersonaResponse {
@@ -177,6 +214,10 @@ final class UserGrpcService implements UserServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException
+     * @throws GRPCException
+     */
     public function ListPersonas(ContextInterface $ctx, ListPersonasRequest $in): ListPersonasResponse
     {
         return $this->call($ctx, 'ListPersonas', function () use ($in): ListPersonasResponse {
@@ -193,12 +234,12 @@ final class UserGrpcService implements UserServiceInterface
      * @template T
      * @param callable(): T $operation
      * @return T
+     * @throws GRPCException
+     * @throws RandomException
      */
     private function call(ContextInterface $ctx, string $method, callable $operation): mixed
     {
-        if ($this->authorizer !== null) {
-            $this->authorizer->authorize($ctx, $method);
-        }
+        $this->authorizer?->authorize($ctx, $method);
 
         $trace = TraceContext::create(
             requestId: $this->metadataValue($ctx, 'x-request-id'),
@@ -210,7 +251,7 @@ final class UserGrpcService implements UserServiceInterface
             traceparent: $this->metadataValue($ctx, 'traceparent'),
         );
         TraceContext::setCurrent($trace);
-        $this->logger->info("Handling User gRPC call: {$method}", ['method' => $method]);
+        $this->logger->info("Handling User gRPC call: $method", ['method' => $method]);
 
         try {
             return $operation();
@@ -220,7 +261,9 @@ final class UserGrpcService implements UserServiceInterface
             // The gateway client maps the transport status via its own fallback table.
             throw $e;
         } catch (Throwable $e) {
-            $this->logger->error("Error in {$method}: " . $e->getMessage(), [
+            // Each service maps its own domain exceptions and response trailers.
+            /** @noinspection DuplicatedCode */
+            $this->logger->error("Error in $method: " . $e->getMessage(), [
                 'exception' => $e::class,
                 'error_code' => $e->getCode(),
             ]);
@@ -265,7 +308,7 @@ final class UserGrpcService implements UserServiceInterface
     {
         $value = (string)$id;
         if ($value === '' || $value === '0' || strspn($value, '0123456789') !== strlen($value)) {
-            throw GRPCException::create("{$field} is required", StatusCode::INVALID_ARGUMENT);
+            throw GRPCException::create("$field is required", StatusCode::INVALID_ARGUMENT);
         }
 
         return $value;
@@ -285,6 +328,10 @@ final class UserGrpcService implements UserServiceInterface
         return $result;
     }
 
+    /**
+     * Service trace parsing stays independent of internal caller authorization.
+     * @noinspection DuplicatedCode
+     */
     private function metadataValue(ContextInterface $ctx, string $key): ?string
     {
         $values = $ctx->getValues();
@@ -302,7 +349,7 @@ final class UserGrpcService implements UserServiceInterface
     private function toUserProfile(User $user): UserProfile
     {
         return (new UserProfile())
-            ->setId((string)$user->id)
+            ->setId($user->id)
             ->setStatus($user->status)
             ->setPhone($user->phone ?? '')
             ->setEmail($user->email ?? '')
@@ -315,8 +362,8 @@ final class UserGrpcService implements UserServiceInterface
     private function toPersonaProfile(Persona $persona): PersonaProfile
     {
         return (new PersonaProfile())
-            ->setId((string)$persona->id)
-            ->setUserId((string)$persona->userId)
+            ->setId($persona->id)
+            ->setUserId($persona->userId)
             ->setType($persona->type)
             ->setNickname($persona->nickname)
             ->setAvatarKey($persona->avatarKey ?? '')
@@ -328,6 +375,8 @@ final class UserGrpcService implements UserServiceInterface
 
     private function publicErrorMessage(Throwable $exception): string
     {
+        // PDO exceptions can return SQLSTATE strings; retain integer normalization.
+        /** @noinspection PhpCastIsUnnecessaryInspection */
         return match ((int)$exception->getCode()) {
             ErrorCode::INVALID_ARGUMENT->value,
             ErrorCode::USER_NOT_FOUND->value,

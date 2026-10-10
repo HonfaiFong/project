@@ -22,6 +22,7 @@ use Contracts\Gen\User\V1\ListPersonasRequest;
 use Contracts\Gen\User\V1\ListPersonasResponse;
 use Contracts\Gen\User\V1\PersonaProfile;
 use Contracts\Errors\ErrorCode;
+use Exception;
 use Contracts\Gen\User\V1\UpdatePersonaRequest;
 use Contracts\Gen\User\V1\UpdatePersonaResponse;
 use Contracts\Gen\User\V1\UpdateUserRequest;
@@ -51,6 +52,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         $this->client = $client;
     }
 
+    /**
+     * @throws Exception
+     */
     public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
     {
         $response = $this->call('/user.v1.UserService/FindOrCreateByPhone', new FindOrCreateByPhoneRequest([
@@ -64,6 +68,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         ];
     }
 
+    /**
+     * @throws Exception
+     */
     public function getUser(string $userId): array
     {
         $response = $this->call('/user.v1.UserService/GetUser', new GetUserRequest([
@@ -73,6 +80,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         return ['user' => $this->user($response->getUser())];
     }
 
+    /**
+     * @throws Exception
+     */
     public function batchGetUsers(array $userIds): array
     {
         $response = $this->call('/user.v1.UserService/BatchGetUsers', new BatchGetUsersRequest([
@@ -82,6 +92,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         return ['users' => array_map(fn (UserProfile $user): array => $this->user($user), iterator_to_array($response->getUsers()))];
     }
 
+    /**
+     * @throws Exception
+     */
     public function updateUser(string $userId, ?string $phone = null, ?string $email = null): array
     {
         $fields = [
@@ -99,6 +112,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         return ['user' => $this->user($response->getUser())];
     }
 
+    /**
+     * @throws Exception
+     */
     public function createPersona(string $userId, int $type, string $nickname, ?string $avatarKey, ?string $bio): array
     {
         $response = $this->call('/user.v1.UserService/CreatePersona', new CreatePersonaRequest([
@@ -112,6 +128,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         return ['persona' => $this->persona($response->getPersona())];
     }
 
+    /**
+     * @throws Exception
+     */
     public function getPersona(string $personaId): array
     {
         $response = $this->call('/user.v1.UserService/GetPersona', new GetPersonaRequest([
@@ -121,6 +140,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         return ['persona' => $this->persona($response->getPersona())];
     }
 
+    /**
+     * @throws Exception
+     */
     public function batchGetPersonas(array $personaIds): array
     {
         $response = $this->call('/user.v1.UserService/BatchGetPersonas', new BatchGetPersonasRequest([
@@ -130,6 +152,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         return ['personas' => array_map(fn (PersonaProfile $persona): array => $this->persona($persona), iterator_to_array($response->getPersonas()))];
     }
 
+    /**
+     * @throws Exception
+     */
     public function updatePersona(string $personaId, string $userId, ?string $nickname, ?string $avatarKey, ?string $bio): array
     {
         // UpdatePersonaRequest 的字段是 proto3 `optional`：只写入真正提供的 key，
@@ -153,6 +178,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         return ['persona' => $this->persona($response->getPersona())];
     }
 
+    /**
+     * @throws Exception
+     */
     public function listPersonas(string $userId): array
     {
         $response = $this->call('/user.v1.UserService/ListPersonas', new ListPersonasRequest([
@@ -162,6 +190,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
         return ['personas' => array_map(fn (PersonaProfile $persona): array => $this->persona($persona), iterator_to_array($response->getPersonas()))];
     }
 
+    /**
+     * @throws Exception
+     */
     public function checkHealth(): array
     {
         $response = $this->call('/common.v1.HealthService/Check', new HealthCheckRequest(), HealthCheckResponse::class);
@@ -176,6 +207,7 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
      * @template T of Message
      * @param class-string<T> $responseClass
      * @return T
+     * @throws Exception
      */
     private function call(string $method, Message $request, string $responseClass): Message
     {

@@ -35,7 +35,7 @@ final readonly class SocialIdentity
 
     public function isPendingPhone(): bool
     {
-        return $this->status === self::STATUS_PENDING_PHONE && $this->userId === null;
+        return $this->status === self::STATUS_PENDING && $this->userId === null;
     }
 
     public function isActive(): bool

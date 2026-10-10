@@ -135,7 +135,7 @@ final class VerifyTokenLatencyProbe
         }
         $value = filter_var($raw, FILTER_VALIDATE_INT, ['options' => ['min_range' => $min]]);
         if ($value === false) {
-            throw new InvalidArgumentException("{$name} must be an integer >= {$min}");
+            throw new InvalidArgumentException("$name must be an integer >= $min");
         }
 
         return $value;
@@ -352,7 +352,7 @@ final class VerifyTokenLatencyProbe
         }
         $errno = (int)($error->getHandlerContext()['errno'] ?? 0);
 
-        return $errno === (defined('CURLE_OPERATION_TIMEDOUT') ? (int)CURLE_OPERATION_TIMEDOUT : 28)
+        return $errno === (defined('CURLE_OPERATION_TIMEDOUT') ? CURLE_OPERATION_TIMEDOUT : 28)
             || str_contains(strtolower($error->getMessage()), 'timed out');
     }
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Apps\ApiGateway\Middleware;
 
 use Closure;
+use InvalidArgumentException;
 use LogicException;
 use Webman\Http\Request;
 
@@ -19,7 +20,7 @@ final class SocialBindUserRateLimitMiddleware extends SocialLoginRateLimitMiddle
         string $environment = 'production',
     ) {
         if ($identityLimit < 1 || $identityWindowSeconds < 1) {
-            throw new \InvalidArgumentException('Social bind user limit and window must be positive');
+            throw new InvalidArgumentException('Social bind user limit and window must be positive');
         }
         parent::__construct(
             counter: $counter,

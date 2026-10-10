@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Services\AuthService\Application\Service;
 
 use Contracts\Errors\ErrorCode;
+use Exception;
 use Packages\Phone\PhoneNormalizer;
+use Random\RandomException;
 use RuntimeException;
 use Services\AuthService\Domain\Auth\SocialProvider;
 use Services\AuthService\Domain\Auth\CredentialVerifierInterface;
@@ -17,22 +19,23 @@ use Services\AuthService\Domain\Repository\SocialIdentityRepositoryInterface;
 use Services\AuthService\Infrastructure\OAuth\SocialAuthProviderRegistry;
 use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
 use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
+use Throwable;
 
-final class AuthApplicationService
+final readonly class AuthApplicationService
 {
     public function __construct(
-        private readonly AuthRepositoryInterface $authRepo,
-        private readonly JwtTokenCodec $jwtCodec,
-        private readonly WsTicketIssuer $wsTicketIssuer,
-        private readonly CredentialVerifierInterface $credentialVerifier,
-        private readonly UserDirectoryInterface $userDirectory,
-        private readonly int $accessTokenTtl = 7200,      // 2 hours
-        private readonly int $refreshTokenTtl = 2592000,   // 30 days
-        private readonly ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null,
-        private readonly ?SocialAuthProviderRegistry $socialProviderRegistry = null,
-        private readonly ?SocialIdentityRepositoryInterface $socialIdentityRepository = null,
-        private readonly ?PhoneNormalizer $phoneNormalizer = null,
-        private readonly bool $phoneLoginEnabled = false,
+        private AuthRepositoryInterface $authRepo,
+        private JwtTokenCodec $jwtCodec,
+        private WsTicketIssuer $wsTicketIssuer,
+        private CredentialVerifierInterface $credentialVerifier,
+        private UserDirectoryInterface $userDirectory,
+        private int $accessTokenTtl = 7200,      // 2 hours
+        private int $refreshTokenTtl = 2592000,   // 30 days
+        private ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null,
+        private ?SocialAuthProviderRegistry $socialProviderRegistry = null,
+        private ?SocialIdentityRepositoryInterface $socialIdentityRepository = null,
+        private ?PhoneNormalizer $phoneNormalizer = null,
+        private bool $phoneLoginEnabled = false,
     ) {
     }
 
@@ -42,6 +45,8 @@ final class AuthApplicationService
      *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
      * @return array{user_id: string, access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int, is_new_user: bool}
+     * @throws Exception when the UserService directory transport fails outside the mapped status path
+     * @throws RandomException when the CSPRNG cannot mint the device hint or refresh token
      */
     public function login(
         string $phone,
@@ -75,6 +80,8 @@ final class AuthApplicationService
      *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
      * @return array{state: string, login: array<string, mixed>}
+     * @throws Exception when the UserService directory transport fails outside the mapped status path
+     * @throws RandomException when the CSPRNG cannot mint the device hint or refresh token
      */
     public function socialLogin(
         SocialProvider $provider,
@@ -151,13 +158,29 @@ final class AuthApplicationService
         return ['user_id' => $userId, 'provider' => $provider->value];
     }
 
-    /** @deprecated Phone binding is no longer a public authentication flow. */
+    /**
+     * @deprecated Phone binding is no longer a public authentication flow.
+     *
+     * The parameters stay part of the retired signature so existing callers,
+     * including named-argument calls, keep compiling even though every call is
+     * rejected.
+     *
+     * @noinspection PhpUnusedParameterInspection
+     */
     public function sendSocialPhoneCode(string $bindToken, string $phone, array $context = []): array
     {
         throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
     }
 
-    /** @deprecated Phone binding is no longer a public authentication flow. */
+    /**
+     * @deprecated Phone binding is no longer a public authentication flow.
+     *
+     * The parameters stay part of the retired signature so existing callers,
+     * including named-argument calls, keep compiling even though every call is
+     * rejected.
+     *
+     * @noinspection PhpUnusedParameterInspection
+     */
     public function bindSocialPhone(string $bindToken, string $phone, string $code, array $deviceInfo): array
     {
         throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
@@ -169,6 +192,8 @@ final class AuthApplicationService
      *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
      * @return array{user_id: string, access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int, is_new_user: bool}
+     * @throws Exception when the UserService directory transport fails outside the mapped status path
+     * @throws RandomException when the CSPRNG cannot mint the device hint or refresh token
      */
     private function issueTokenForUser(string $userId, array $deviceInfo, bool $isNewUser = false): array
     {
@@ -215,8 +240,15 @@ final class AuthApplicationService
     }
 
     /**
+     * The device hint is accepted for transport-signature compatibility, but
+     * rotation binds the device from the stored refresh-token record.
+     *
      * @param array{device_uuid?: string, platform?: string, app_version?: string} $deviceInfo
      * @return array{access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int}
+     * @throws Exception when the UserService directory transport fails outside the mapped status path
+     * @throws RandomException when the CSPRNG cannot mint the rotated refresh token
+     *
+     * @noinspection PhpUnusedParameterInspection
      */
     public function refreshToken(string $rawRefreshToken, array $deviceInfo = []): array
     {
@@ -275,7 +307,7 @@ final class AuthApplicationService
             $payload = null;
             try {
                 $payload = $this->jwtCodec->decode($rawAccessToken);
-            } catch (\Throwable) {
+            } catch (Throwable) {
                 // An invalid access token cannot be used for authentication and needs no blacklist entry.
             }
 
@@ -326,7 +358,7 @@ final class AuthApplicationService
             if (!$this->authRepo->deviceBelongsToUser($userId, (string)($payload['device_id'] ?? ''))) {
                 return ['valid' => false];
             }
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             throw new RuntimeException(
                 ErrorCode::SERVICE_UNAVAILABLE->message(),
                 ErrorCode::SERVICE_UNAVAILABLE->value,
@@ -336,7 +368,7 @@ final class AuthApplicationService
 
         try {
             $this->assertUserCanAuthenticate($userId);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             if (in_array($e->getCode(), [ErrorCode::USER_NOT_FOUND->value, ErrorCode::USER_BANNED->value], true)) {
                 return ['valid' => false];
             }
@@ -354,12 +386,17 @@ final class AuthApplicationService
         ];
     }
 
+    /** @throws RandomException when the CSPRNG cannot produce the websocket ticket */
     public function createWsTicket(string $userId, string $personaId, string $deviceId): array
     {
         return $this->wsTicketIssuer->issue($userId, $personaId, $deviceId);
     }
 
-    /** @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo */
+    /**
+     * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
+     * @throws Exception when the UserService directory transport fails outside the mapped status path
+     * @throws RandomException when the CSPRNG cannot mint the device hint or refresh token
+     */
     private function authenticatedSocialLogin(SocialIdentity $identity, array $deviceInfo): array
     {
         if ($identity->userId === null || $identity->userId === '') {
@@ -369,7 +406,7 @@ final class AuthApplicationService
             );
         }
 
-        $login = $this->issueTokenForUser($identity->userId, $deviceInfo, false);
+        $login = $this->issueTokenForUser($identity->userId, $deviceInfo);
         $this->socialIdentityRepository->touchLastLogin($identity->id);
 
         return [
@@ -396,6 +433,7 @@ final class AuthApplicationService
         return $this->phoneNormalizer?->normalize($phone) ?? trim($phone);
     }
 
+    /** @throws Exception when the UserService directory transport fails outside the mapped status path */
     private function assertUserCanAuthenticate(string $userId): void
     {
         $user = $this->userDirectory->findById($userId);

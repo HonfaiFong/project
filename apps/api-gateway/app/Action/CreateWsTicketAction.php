@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Action;
 
+use Exception;
 use Contracts\Errors\ErrorCode;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
@@ -20,6 +21,7 @@ final readonly class CreateWsTicketAction
      * @param array<string, mixed> $body
      * @param array<string, mixed> $authContext
      * @return array{ticket: string, expires_at: string}
+     * @throws Exception
      */
     public function execute(array $body, array $authContext): array
     {

@@ -63,6 +63,7 @@ final class ImportLegacySchema extends AbstractMigration
         $this->useSchema($meta);
     }
 
+    /** @throws IrreversibleMigrationException */
     public function down(): void
     {
         throw new IrreversibleMigrationException(
@@ -73,11 +74,7 @@ final class ImportLegacySchema extends AbstractMigration
     private function applyLegacyMigration(array $schemas, string $meta, string $name): void
     {
         match ($name) {
-            '0001_outbox_claimed_at.sql' => $this->repairOutboxColumns(
-                $schemas,
-                'claimed_at',
-                'DATETIME(3) NULL AFTER `available_at`',
-            ),
+            '0001_outbox_claimed_at.sql' => $this->repairOutboxClaimedAt($schemas),
             '0002_outbox_aggregate_order.sql' => $this->repairOutboxIndex(
                 $schemas,
                 'idx_aggregate_order',
@@ -98,17 +95,17 @@ final class ImportLegacySchema extends AbstractMigration
         };
     }
 
-    private function repairOutboxColumns(array $schemas, string $column, string $definition): void
+    private function repairOutboxClaimedAt(array $schemas): void
     {
         foreach (self::OUTBOX_DATABASES as $database) {
             $schema = $schemas[$database];
-            if ($this->columnExists($schema, 'outbox_events', $column)) {
+            if ($this->columnExists($schema, 'claimed_at')) {
                 continue;
             }
 
             $this->execute(
                 'ALTER TABLE ' . $this->identifier($schema) . '.`outbox_events` '
-                . 'ADD COLUMN ' . $this->identifier($column) . ' ' . $definition,
+                . 'ADD COLUMN `claimed_at` DATETIME(3) NULL AFTER `available_at`',
             );
         }
     }
@@ -117,7 +114,7 @@ final class ImportLegacySchema extends AbstractMigration
     {
         foreach (self::OUTBOX_DATABASES as $database) {
             $schema = $schemas[$database];
-            if ($this->indexExists($schema, 'outbox_events', $index)) {
+            if ($this->indexExists($schema, $index)) {
                 continue;
             }
 
@@ -133,14 +130,14 @@ final class ImportLegacySchema extends AbstractMigration
         foreach (self::OUTBOX_DATABASES as $database) {
             $schema = $schemas[$database];
 
-            if (!$this->columnExists($schema, 'outbox_events', 'event_key')) {
+            if (!$this->columnExists($schema, 'event_key')) {
                 $this->execute(
                     'ALTER TABLE ' . $this->identifier($schema) . '.`outbox_events` '
                     . 'ADD COLUMN `event_key` VARCHAR(64) NOT NULL DEFAULT \'\' AFTER `aggregate_id`',
                 );
             }
 
-            if (!$this->columnExists($schema, 'outbox_events', 'trace_id')) {
+            if (!$this->columnExists($schema, 'trace_id')) {
                 $this->execute(
                     'ALTER TABLE ' . $this->identifier($schema) . '.`outbox_events` '
                     . 'ADD COLUMN `trace_id` VARCHAR(64) NOT NULL DEFAULT \'\' AFTER `event_key`',
@@ -240,14 +237,14 @@ final class ImportLegacySchema extends AbstractMigration
         );
     }
 
-    private function columnExists(string $schema, string $table, string $column): bool
+    private function columnExists(string $schema, string $column): bool
     {
-        return $this->getAdapter()->hasColumn($schema . '.' . $table, $column);
+        return $this->getAdapter()->hasColumn($schema . '.outbox_events', $column);
     }
 
-    private function indexExists(string $schema, string $table, string $index): bool
+    private function indexExists(string $schema, string $index): bool
     {
-        return $this->getAdapter()->hasIndexByName($schema . '.' . $table, $index);
+        return $this->getAdapter()->hasIndexByName($schema . '.outbox_events', $index);
     }
 
     /** @return array<string, string> */
@@ -271,7 +268,7 @@ final class ImportLegacySchema extends AbstractMigration
         if ($prefix === null) {
             return '';
         }
-        if (!is_string($prefix) || preg_match('/\A[a-zA-Z0-9_]*\z/D', $prefix) !== 1) {
+        if (!is_string($prefix) || preg_match('/\A[a-zA-Z0-9_]*\z/', $prefix) !== 1) {
             throw new RuntimeException('schema_prefix must contain only ASCII letters, digits, and underscores.');
         }
         if (strlen($prefix) > 64) {

@@ -6,14 +6,15 @@ namespace Packages\Outbox;
 
 use Throwable;
 
-final class OutboxRelay
+final readonly class OutboxRelay
 {
     public function __construct(
-        private readonly OutboxRelayStore $outbox,
-        private readonly EventPublisher $publisher,
+        private OutboxRelayStore $outbox,
+        private EventPublisher $publisher,
     ) {
     }
 
+    /** @throws Throwable */
     public function runOnce(): int
     {
         $this->outbox->releaseStaleClaims();

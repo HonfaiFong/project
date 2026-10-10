@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Packages\IdGenerator;
 
 use RuntimeException;
+use Random\RandomException;
 
 /**
  * Resolves the 10-bit Snowflake worker id for the current process.
@@ -30,6 +31,10 @@ final class WorkerId
     public const SERVICE_SLOTS = 32;
     public const PROCESS_SLOTS = 32;
 
+    /**
+     * @throws RandomException
+     * @throws RuntimeException
+     */
     public static function resolve(): int
     {
         $raw = getenv('WORKER_ID');

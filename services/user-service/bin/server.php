@@ -38,20 +38,23 @@ $mysqlUser = getenv('MYSQL_USER') ?: 'root';
 $mysqlPass = getenv('MYSQL_PASSWORD') ?: 'root_password';
 $mysqlDb   = getenv('USER_DB_NAME') ?: 'user_db';
 
+// The startup retry loop intentionally mirrors the sibling services' worker
+// bootstrap so every service stays independently deployable.
+/** @noinspection DuplicatedCode */
 $maxRetries = 15;
 $pdo = null;
 
 for ($i = 0; $i < $maxRetries; $i++) {
     try {
-        $dsn = "mysql:host={$mysqlHost};port={$mysqlPort};dbname={$mysqlDb};charset=utf8mb4";
+        $dsn = "mysql:host=$mysqlHost;port=$mysqlPort;dbname=$mysqlDb;charset=utf8mb4";
         $pdo = new PDO($dsn, $mysqlUser, $mysqlPass, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         ]);
-        $logger->info("Connected to MySQL successfully: {$mysqlDb}");
+        $logger->info("Connected to MySQL successfully: $mysqlDb");
         break;
-    } catch (\Throwable $e) {
-        $logger->warning("Waiting for MySQL ({$mysqlDb})... " . $e->getMessage());
+    } catch (Throwable $e) {
+        $logger->warning("Waiting for MySQL ($mysqlDb)... " . $e->getMessage());
         sleep(2);
     }
 }
@@ -61,6 +64,9 @@ if (!$pdo) {
     exit(1);
 }
 
+// A missing worker id or an unreadable CSPRNG must abort startup: the process
+// exits non-zero and the supervisor observes the crash.
+/** @noinspection PhpUnhandledExceptionInspection */
 $snowflake = new Snowflake(WorkerId::resolve());
 $userRepo = new EloquentUserRepository($pdo);
 $personaRepo = new EloquentPersonaRepository($pdo);

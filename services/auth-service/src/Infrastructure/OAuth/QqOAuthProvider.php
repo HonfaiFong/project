@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Services\AuthService\Infrastructure\OAuth;
 
 use Contracts\Errors\ErrorCode;
+use JsonException;
 use RuntimeException;
 use Services\AuthService\Domain\Auth\ExternalIdentity;
 use Services\AuthService\Domain\Auth\SocialAuthProviderInterface;
@@ -55,7 +56,7 @@ final class QqOAuthProvider implements SocialAuthProviderInterface
             'redirect_uri'  => $this->redirectUri,
         ]));
 
-        if (isset($tokenPayload['error']) || trim((string)($tokenPayload['access_token'] ?? '')) === '') {
+        if (isset($tokenPayload['error']) || trim($tokenPayload['access_token'] ?? '') === '') {
             throw new RuntimeException(
                 ErrorCode::AUTH_SOCIAL_CODE_INVALID->message(),
                 ErrorCode::AUTH_SOCIAL_CODE_INVALID->value
@@ -63,7 +64,7 @@ final class QqOAuthProvider implements SocialAuthProviderInterface
         }
 
         $openIdBody = $this->httpClient->get($this->openIdEndpoint, [
-            'access_token' => (string)$tokenPayload['access_token'],
+            'access_token' => $tokenPayload['access_token'],
         ]);
         $identityPayload = $this->parseCallbackJson($openIdBody);
 
@@ -105,7 +106,7 @@ final class QqOAuthProvider implements SocialAuthProviderInterface
     private function parseCallbackJson(string $body): array
     {
         $body = trim($body);
-        if (!preg_match('/\\Acallback\\s*\\(\\s*(\\{.*\\})\\s*\\)\\s*;?\\z/sD', $body, $matches)) {
+        if (!preg_match('/\\Acallback\\s*\\(\\s*(\\{.*})\\s*\\)\\s*;?\\z/s', $body, $matches)) {
             throw new RuntimeException(
                 ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->message(),
                 ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->value
@@ -114,7 +115,7 @@ final class QqOAuthProvider implements SocialAuthProviderInterface
 
         try {
             $payload = json_decode($matches[1], true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException $e) {
+        } catch (JsonException $e) {
             throw new RuntimeException(
                 ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->message(),
                 ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->value,

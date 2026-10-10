@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace Packages\GrpcCommon;
 
 use Google\Protobuf\Internal\Message;
+use Exception;
 use Grpc\BaseStub;
 use Grpc\ChannelCredentials;
 use const Grpc\STATUS_OK;
 
 class UnaryGrpcClient extends BaseStub
 {
+    /** @throws Exception */
     public function __construct(
         string $target,
         private readonly ?string $serviceToken = null,
@@ -26,6 +28,7 @@ class UnaryGrpcClient extends BaseStub
      * @param class-string<T> $responseClass
      * @param array<string, array<string>> $metadata
      * @return T
+     * @throws Exception
      */
     public function call(
         string $method,
@@ -57,9 +60,6 @@ class UnaryGrpcClient extends BaseStub
         return $response;
     }
 
-    /**
-     * @param mixed $metadata
-     */
     private function extractAppErrorCode(mixed $metadata): ?int
     {
         if (!is_array($metadata)) {
@@ -69,7 +69,7 @@ class UnaryGrpcClient extends BaseStub
         foreach ($metadata as $key => $values) {
             if (strtolower((string)$key) === 'x-app-error-code') {
                 $val = is_array($values) ? ($values[0] ?? null) : $values;
-                if ($val !== null && is_numeric($val)) {
+                if (is_numeric($val)) {
                     return (int)$val;
                 }
             }

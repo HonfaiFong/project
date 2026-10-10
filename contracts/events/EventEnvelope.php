@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Contracts\Events;
 
+use JsonException;
+
 final readonly class EventEnvelope
 {
     /**
@@ -38,6 +40,7 @@ final readonly class EventEnvelope
         ];
     }
 
+    /** @throws JsonException */
     public function toJson(): string
     {
         return json_encode($this->toArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);

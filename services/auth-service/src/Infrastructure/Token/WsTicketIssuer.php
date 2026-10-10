@@ -4,16 +4,19 @@ declare(strict_types=1);
 
 namespace Services\AuthService\Infrastructure\Token;
 
-final class WsTicketIssuer
+use Random\RandomException;
+
+final readonly class WsTicketIssuer
 {
     public function __construct(
-        private readonly string $wsTicketSecret,
-        private readonly int $wsTicketTtl = 60
+        private string $wsTicketSecret,
+        private int $wsTicketTtl = 60
     ) {
     }
 
     /**
      * @return array{ticket: string, expire_at: int}
+     * @throws RandomException when the CSPRNG cannot produce the ticket nonce
      */
     public function issue(string $userId, string $personaId, string $deviceId): array
     {

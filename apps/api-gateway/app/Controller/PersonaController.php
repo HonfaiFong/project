@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Controller;
 
+use Exception;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Response\ApiResponse;
@@ -17,6 +18,7 @@ final readonly class PersonaController
     {
     }
 
+    /** @throws Exception */
     public function list(GatewayRequest $request): Response
     {
         $userId = $request->authContext['user_id'];
@@ -30,6 +32,7 @@ final readonly class PersonaController
         ]);
     }
 
+    /** @throws Exception */
     public function create(GatewayRequest $request): Response
     {
         $userId = $request->authContext['user_id'];
@@ -52,6 +55,7 @@ final readonly class PersonaController
         return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []), 201);
     }
 
+    /** @throws Exception */
     public function get(string $personaId): Response
     {
         if (empty($personaId)) {
@@ -62,6 +66,7 @@ final readonly class PersonaController
         return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []));
     }
 
+    /** @throws Exception */
     public function update(GatewayRequest $request, string $personaId): Response
     {
         $userId = $request->authContext['user_id'];

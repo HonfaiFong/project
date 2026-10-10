@@ -11,6 +11,8 @@ use Packages\Phone\PhoneNormalizer;
 use Packages\Outbox\EventOutboxInterface;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
+use Random\RandomException;
+use Throwable;
 use Services\UserService\Domain\Entity\Persona;
 use Services\UserService\Domain\Entity\User;
 use Services\UserService\Domain\Exception\DuplicateUserException;
@@ -35,6 +37,7 @@ final class UserApplicationService
     ) {
     }
 
+    /** @throws Throwable */
     public function findOrCreateUserByPhone(string $phone, string $registerChannel = 'default'): array
     {
         $phone = $this->phoneNormalizer->normalize($phone);
@@ -60,9 +63,7 @@ final class UserApplicationService
                 // A unique phone constraint is the serialization point when two
                 // registrations race before either transaction can read the row.
                 $user = $this->userRepo->findByPhone($phone);
-                if ($user !== null) {
-                    $isNew = false;
-                } else {
+                if ($user === null) {
                     throw new RuntimeException(
                         ErrorCode::INTERNAL_SERVER_ERROR->message(),
                         ErrorCode::INTERNAL_SERVER_ERROR->value,
@@ -89,6 +90,7 @@ final class UserApplicationService
      * subject id, and it is only stored on the created user row.
      *
      * @return array{user: User, is_new_user: bool}
+     * @throws Throwable
      */
     public function findOrCreateUserBySocialIdentity(
         string $registrationKey,
@@ -171,6 +173,7 @@ final class UserApplicationService
         return $this->userRepo->batchFindByIds($userIds);
     }
 
+    /** @throws Throwable */
     public function updateUser(
         string $userId,
         ?string $phone = null,
@@ -201,6 +204,7 @@ final class UserApplicationService
         });
     }
 
+    /** @throws Throwable */
     public function createPersona(
         string $userId,
         int $type,
@@ -251,6 +255,7 @@ final class UserApplicationService
         return $this->personaRepo->batchFindByIds($personaIds);
     }
 
+    /** @throws Throwable */
     public function updatePersona(
         string $personaId,
         string $userId,
@@ -296,6 +301,7 @@ final class UserApplicationService
      * @template T
      * @param callable(): T $callback
      * @return T
+     * @throws Throwable
      */
     private function transaction(callable $callback): mixed
     {
@@ -306,6 +312,7 @@ final class UserApplicationService
      * Creates the user row together with its default persona and the
      * registration events inside the caller's transaction, so every new
      * account (phone or social registration) gets the same defaults.
+     * @throws RandomException
      */
     private function registerUser(
         string $id,
@@ -371,6 +378,7 @@ final class UserApplicationService
 
     /**
      * @param array<string, mixed> $payload
+     * @throws RandomException
      */
     private function recordEvent(
         string $aggregateType,
@@ -380,13 +388,13 @@ final class UserApplicationService
         array $payload
     ): void {
         $this->outbox->recordEvent(
-            eventId: (string)$this->snowflake->nextId(),
+            eventId: $this->snowflake->nextId(),
             aggregateType: $aggregateType,
             aggregateId: $aggregateId,
-            eventKey: $eventKey,
             eventType: $eventType,
             eventVersion: 1,
             payload: $payload,
+            eventKey: $eventKey,
             traceId: TraceContext::current()->traceId,
         );
     }

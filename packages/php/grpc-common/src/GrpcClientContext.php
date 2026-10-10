@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Packages\GrpcCommon;
 
 use Packages\Tracing\TraceContext;
+use Random\RandomException;
 
 final class GrpcClientContext
 {
@@ -15,6 +16,7 @@ final class GrpcClientContext
      * @param array<string, string|array<string>> $customMetadata Extra metadata
      * @param string|null $serviceToken Token configured for this target service
      * @return array{timeout: int, metadata: array<string, array<string>>, call_credentials?: mixed} Call options array compatible with gRPC PHP clients
+     * @throws RandomException
      */
     public static function createCallOptions(
         int $timeoutMs = 150,
@@ -58,7 +60,7 @@ final class GrpcClientContext
             }
         }
         $serviceName = trim((string)(getenv('SERVICE_NAME') ?: ''));
-        $serviceToken = trim((string)($serviceToken ?? ''));
+        $serviceToken = trim($serviceToken ?? '');
         if ($serviceName !== '') {
             $metadata['x-service-name'] = [$serviceName];
         }

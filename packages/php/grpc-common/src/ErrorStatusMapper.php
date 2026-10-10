@@ -34,7 +34,9 @@ final class ErrorStatusMapper
      * The literal union is declared so callers can hand the result straight to
      * GRPCException::create(), whose $code parameter is typed as that union.
      *
-     * @return 3|4|5|6|7|8|10|13|14|16
+     * @param ErrorCode|null $error
+     * @return int
+     * @phpstan-return 3|4|5|6|7|8|10|13|14|16
      */
     public static function forFailure(?ErrorCode $error): int
     {
@@ -45,6 +47,7 @@ final class ErrorStatusMapper
         return match ($error) {
             ErrorCode::INVALID_ARGUMENT,
             ErrorCode::AUTH_DEVICE_INVALID,
+            ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED,
             ErrorCode::AUTH_TICKET_EXPIRED => StatusCode::INVALID_ARGUMENT,
 
             ErrorCode::AUTH_INVALID_CREDENTIALS,
@@ -57,9 +60,8 @@ final class ErrorStatusMapper
             ErrorCode::AUTH_SMS_CODE_INVALID,
             ErrorCode::AUTH_SMS_CODE_EXPIRED => StatusCode::UNAUTHENTICATED,
 
-            ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED => StatusCode::INVALID_ARGUMENT,
-
-            ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR => StatusCode::UNAVAILABLE,
+            ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR,
+            ErrorCode::SERVICE_UNAVAILABLE => StatusCode::UNAVAILABLE,
 
             ErrorCode::PERSONA_FORBIDDEN,
             ErrorCode::CHAT_FORBIDDEN_BY_PRIVACY,
@@ -87,8 +89,6 @@ final class ErrorStatusMapper
 
             ErrorCode::RPC_TIMEOUT => StatusCode::DEADLINE_EXCEEDED,
 
-            ErrorCode::SERVICE_UNAVAILABLE => StatusCode::UNAVAILABLE,
-
             default => StatusCode::INTERNAL,
         };
     }
@@ -98,7 +98,9 @@ final class ErrorStatusMapper
      * so the success code is excluded explicitly rather than relying on tryFrom() alone; that is
      * why this delegates to forFailure() instead of duplicating the null check.
      *
-     * @return 3|4|5|6|7|8|10|13|14|16
+     * @param int $code
+     * @return int
+     * @phpstan-return 3|4|5|6|7|8|10|13|14|16
      */
     public static function forExceptionCode(int $code): int
     {

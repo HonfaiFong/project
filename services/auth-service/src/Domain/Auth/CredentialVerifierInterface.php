@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Services\AuthService\Domain\Auth;
 
+use RuntimeException;
+
 interface CredentialVerifierInterface
 {
     /**
      * @param array<string, mixed> $credentials
-     * @throws \RuntimeException
+     * @throws RuntimeException
      */
     public function verify(string $phone, array $credentials): void;
 }

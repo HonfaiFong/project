@@ -23,6 +23,8 @@ use Illuminate\Translation\ArrayLoader;
 use Illuminate\Translation\Translator;
 use Illuminate\Validation\Factory as ValidationFactory;
 
+// Webman 配置键（apps/api-gateway/config/gateway.php），Laravel Idea 不识别该配置源，局部抑制误报。
+/** @noinspection LaravelUnknownConfigKeyInspection */
 $settings = config('gateway');
 $socialLoginRateLimitCounter = null;
 $trustedProxyCidrs = $settings['trusted_proxy_cidrs'];
@@ -120,9 +122,9 @@ $container->singleton(SocialBindRateLimitMiddleware::class, static fn (): Social
 ));
 $container->singleton(SocialBindUserRateLimitMiddleware::class, static fn (): SocialBindUserRateLimitMiddleware => new SocialBindUserRateLimitMiddleware(
     counter: $socialLoginRateLimitCounter,
-    environment: $settings['environment'],
     identityLimit: $settings['social_bind_rate_limit']['user_limit'],
     identityWindowSeconds: $settings['social_bind_rate_limit']['user_window_seconds'],
+    environment: $settings['environment'],
 ));
 
 return $container;

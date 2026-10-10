@@ -7,12 +7,12 @@ namespace Apps\ApiGateway\Http;
 use InvalidArgumentException;
 use Webman\Http\Request;
 
-final class TrustedProxyClientIpResolver
+final readonly class TrustedProxyClientIpResolver
 {
     /**
      * @var list<array{network: string, prefix: int, bytes: int}>
      */
-    private readonly array $trustedProxyNetworks;
+    private array $trustedProxyNetworks;
 
     /**
      * @param list<string> $trustedProxyCidrs
@@ -24,7 +24,7 @@ final class TrustedProxyClientIpResolver
 
     public function resolve(Request $request): string
     {
-        $peer = $this->normalizeIp(trim((string)$request->getRemoteIp()));
+        $peer = $this->normalizeIp(trim($request->getRemoteIp()));
         if (filter_var($peer, FILTER_VALIDATE_IP) === false) {
             return 'unknown';
         }
@@ -81,7 +81,7 @@ final class TrustedProxyClientIpResolver
         if ($packed === false || strlen($packed) !== 16) {
             return $ip;
         }
-        if (substr($packed, 0, 12) !== "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff") {
+        if (!str_starts_with($packed, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff")) {
             return $ip;
         }
 

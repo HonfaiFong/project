@@ -11,7 +11,7 @@ set_exception_handler(static function (Throwable $exception): void {
     if ($exception instanceof PDOException) {
         fwrite(
             STDERR,
-            sprintf("Phone migration database error (code=%s, type=PDOException).\n", (string)$exception->getCode())
+            sprintf("Phone migration database error (code=%s, type=PDOException).\n", $exception->getCode())
         );
     } else {
         fwrite(STDERR, $exception->getMessage() . PHP_EOL);
@@ -72,5 +72,8 @@ if (!$apply) {
         || ($requireClean && $plan['change_count'] > 0) ? 2 : 0);
 }
 
+// The set_exception_handler above reports uncaught failures to STDERR and
+// exits non-zero, so the migration is allowed to propagate here.
+/** @noinspection PhpUnhandledExceptionInspection */
 $result = $migration->apply($pdo);
 printf("Applied phone normalization to %d user(s).\n", $result['updated']);

@@ -7,24 +7,28 @@ namespace Services\AuthService\Infrastructure\Phone;
 use Contracts\Errors\ErrorCode;
 use Redis;
 use RuntimeException;
+use Throwable;
 use Services\AuthService\Infrastructure\Cache\RedisSocialBindSessionStore;
 use Services\AuthService\Domain\Phone\PhoneVerificationServiceInterface;
 use Services\AuthService\Domain\Phone\SmsSenderInterface;
 use Services\AuthService\Domain\Phone\VerificationScene;
 
-final class RedisPhoneVerificationService implements PhoneVerificationServiceInterface
+final readonly class RedisPhoneVerificationService implements PhoneVerificationServiceInterface
 {
     public function __construct(
-        private readonly Redis $redis,
-        private readonly SmsSenderInterface $smsSender,
-        private readonly string $codePepper,
-        private readonly int $codeTtl = 300,
-        private readonly int $resendInterval = 60,
-        private readonly int $maxAttempts = 5,
-        private readonly ?string $developmentCode = null,
+        private Redis $redis,
+        private SmsSenderInterface $smsSender,
+        private string $codePepper,
+        private int $codeTtl = 300,
+        private int $resendInterval = 60,
+        private int $maxAttempts = 5,
+        private ?string $developmentCode = null,
     ) {
     }
 
+    /**
+     * @throws Throwable the reservation is refunded and the send failure is rethrown unchanged
+     */
     public function send(
         string $phone,
         VerificationScene $scene,
@@ -104,7 +108,7 @@ LUA, [$cooldownKey, $verificationKey, $owner, $this->hashCode($code), time(), $t
             }
 
             $this->smsSender->sendVerificationCode($phone, $code, $scene);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             // Refund only this reservation; a later cooldown owner/window is untouched.
             $this->redis->eval(<<<'LUA'
 if redis.call('GET', KEYS[1]) == ARGV[1] then

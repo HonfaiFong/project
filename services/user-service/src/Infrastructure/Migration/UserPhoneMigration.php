@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Services\UserService\Infrastructure\Migration;
 
+use InvalidArgumentException;
 use Packages\Phone\PhoneNormalizer;
 use PDO;
 use RuntimeException;
@@ -27,7 +28,7 @@ final class UserPhoneMigration
         private readonly int $batchSize = 500,
     ) {
         if ($this->batchSize < 1) {
-            throw new \InvalidArgumentException('Phone migration batch size must be positive');
+            throw new InvalidArgumentException('Phone migration batch size must be positive');
         }
     }
 
@@ -57,6 +58,7 @@ final class UserPhoneMigration
 
     /**
      * @return array{updated: int}
+     * @throws Throwable when scanning or updating fails; owned transactions attempt rollback, caller-owned transactions remain the caller's responsibility
      */
     public function apply(PDO $pdo): array
     {

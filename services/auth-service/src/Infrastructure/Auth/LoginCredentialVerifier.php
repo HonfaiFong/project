@@ -7,7 +7,14 @@ namespace Services\AuthService\Infrastructure\Auth;
 use Contracts\Errors\ErrorCode;
 use RuntimeException;
 use Services\AuthService\Domain\Auth\CredentialVerifierInterface;
+use Throwable;
 
+/**
+ * Non-final by design so tests and future callers can substitute it with a
+ * stub; every property is already declared readonly.
+ *
+ * @noinspection PhpClassCanBeReadonlyInspection
+ */
 class LoginCredentialVerifier implements CredentialVerifierInterface
 {
     /**
@@ -25,12 +32,7 @@ class LoginCredentialVerifier implements CredentialVerifierInterface
     {
         $environment ??= $_ENV + $_SERVER;
         $appEnvironment = strtolower(trim((string)($environment['APP_ENV'] ?? getenv('APP_ENV') ?: 'production')));
-        $developmentCode = self::firstNonEmpty($environment, [
-            'AUTH_DEV_VERIFICATION_CODE',
-            'AUTH_DEV_LOGIN_CODE',
-            'DEV_VERIFICATION_CODE',
-            'DEV_LOGIN_CODE',
-        ]);
+        $developmentCode = self::firstNonEmpty($environment);
         $developmentEnabled = filter_var(
             (string)($environment['ENABLE_DEV_LOGIN'] ?? getenv('ENABLE_DEV_LOGIN') ?: 'false'),
             FILTER_VALIDATE_BOOL
@@ -61,7 +63,7 @@ class LoginCredentialVerifier implements CredentialVerifierInterface
 
         try {
             $verified = ($this->provider)($phone, $code, $password);
-        } catch (\Throwable) {
+        } catch (Throwable) {
             throw $this->invalidCredentials();
         }
 
@@ -91,10 +93,15 @@ class LoginCredentialVerifier implements CredentialVerifierInterface
 
     /**
      * @param array<string, mixed> $environment
-     * @param array<string> $keys
      */
-    private static function firstNonEmpty(array $environment, array $keys): ?string
+    private static function firstNonEmpty(array $environment): ?string
     {
+        $keys = [
+            'AUTH_DEV_VERIFICATION_CODE',
+            'AUTH_DEV_LOGIN_CODE',
+            'DEV_VERIFICATION_CODE',
+            'DEV_LOGIN_CODE',
+        ];
         foreach ($keys as $key) {
             $value = trim((string)($environment[$key] ?? getenv($key) ?: ''));
             if ($value !== '') {

@@ -20,8 +20,8 @@ use Packages\GrpcCommon\DeadlineEnv;
 final readonly class GrpcDeadlineConfig
 {
     public function __construct(
-        public readonly int $userDirectoryTimeoutMs,
-        public readonly int $gatewayAuthTimeoutMs,
+        public int $userDirectoryTimeoutMs,
+        public int $gatewayAuthTimeoutMs,
     ) {
     }
 

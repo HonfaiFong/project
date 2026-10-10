@@ -31,6 +31,7 @@ use Packages\GrpcCommon\ErrorStatusMapper;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
+use Random\RandomException;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Services\AuthService\Domain\Auth\SocialProvider;
 use Spiral\RoadRunner\GRPC\ContextInterface;
@@ -40,15 +41,19 @@ use Spiral\RoadRunner\GRPC\StatusCode;
 use RuntimeException;
 use Throwable;
 
-final class RoadRunnerAuthService implements AuthServiceInterface
+final readonly class RoadRunnerAuthService implements AuthServiceInterface
 {
     public function __construct(
-        private readonly AuthApplicationService $authService,
-        private readonly LoggerInterface $logger,
-        private readonly ?InternalRpcAuthorizer $authorizer = null,
+        private AuthApplicationService $authService,
+        private LoggerInterface $logger,
+        private ?InternalRpcAuthorizer $authorizer = null,
     ) {
     }
 
+    /**
+     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws GRPCException
+     */
     public function Login(ContextInterface $ctx, LoginRequest $in): LoginResponse
     {
         return $this->call($ctx, 'Login', function () use ($in): LoginResponse {
@@ -75,6 +80,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws GRPCException
+     */
     public function RefreshToken(ContextInterface $ctx, RefreshTokenRequest $in): RefreshTokenResponse
     {
         return $this->call($ctx, 'RefreshToken', function () use ($in): RefreshTokenResponse {
@@ -92,6 +101,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws GRPCException
+     */
     public function SocialLogin(ContextInterface $ctx, SocialLoginRequest $in): SocialLoginResponse
     {
         return $this->call($ctx, 'SocialLogin', function () use ($in): SocialLoginResponse {
@@ -127,6 +140,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         throw $this->rejectedLegacyRpc($ctx, 'BindSocialPhone');
     }
 
+    /**
+     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws GRPCException
+     */
     public function BindSocialIdentity(
         ContextInterface $ctx,
         BindSocialIdentityRequest $in
@@ -145,6 +162,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws GRPCException
+     */
     public function Logout(ContextInterface $ctx, LogoutRequest $in): LogoutResponse
     {
         return $this->call($ctx, 'Logout', function () use ($in): LogoutResponse {
@@ -157,11 +178,15 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             );
 
             return new LogoutResponse([
-                'success' => (bool)$success,
+                'success' => $success,
             ]);
         });
     }
 
+    /**
+     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws GRPCException
+     */
     public function VerifyToken(ContextInterface $ctx, VerifyTokenRequest $in): VerifyTokenResponse
     {
         return $this->call($ctx, 'VerifyToken', function () use ($in): VerifyTokenResponse {
@@ -181,6 +206,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         });
     }
 
+    /**
+     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws GRPCException
+     */
     public function CreateWsTicket(ContextInterface $ctx, CreateWsTicketRequest $in): CreateWsTicketResponse
     {
         return $this->call($ctx, 'CreateWsTicket', function () use ($in): CreateWsTicketResponse {
@@ -201,17 +230,21 @@ final class RoadRunnerAuthService implements AuthServiceInterface
      * @template T
      * @param callable(): T $operation
      * @return T
+     * @throws GRPCException
+     * @throws RandomException when the trace bootstrap cannot mint a UUIDv7; nothing
+     *                         swallows it here, the RoadRunner gRPC server turns it
+     *                         into an UNKNOWN response
      */
     private function call(ContextInterface $ctx, string $method, callable $operation): mixed
     {
-        if ($this->authorizer !== null) {
-            $this->authorizer->authorize($ctx, $method);
-        }
+        $this->authorizer?->authorize($ctx, $method);
 
         // Caller-supplied deadline is trusted only behind RPC authorization;
         // downstream hops clamp their budgets to whatever is left of it.
         $this->bindDeadlineContext($ctx);
 
+        // TraceContext::create() can throw RandomException; intentionally not
+        // caught so the failure surfaces to the gRPC server (see @throws above).
         $trace = TraceContext::create(
             requestId: $this->metadataValue($ctx, 'x-request-id'),
             traceId: $this->metadataValue($ctx, 'x-trace-id'),
@@ -222,7 +255,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             traceparent: $this->metadataValue($ctx, 'traceparent'),
         );
         TraceContext::setCurrent($trace);
-        $this->logger->info("Handling Auth gRPC call: {$method}", ['method' => $method]);
+        $this->logger->info("Handling Auth gRPC call: $method", ['method' => $method]);
 
         try {
             return $operation();
@@ -232,7 +265,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             // The gateway client maps the transport status via its own fallback table.
             throw $e;
         } catch (Throwable $e) {
-            $this->logger->error("Error in {$method}: " . $e->getMessage(), [
+            // Duplicated by design with the sibling services' RoadRunner
+            // transports: the error-code and trailer mapping stay service-owned.
+            /** @noinspection DuplicatedCode */
+            $this->logger->error("Error in $method: " . $e->getMessage(), [
                 'exception' => $e::class,
                 'error_code' => $e->getCode(),
             ]);
@@ -292,6 +328,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
 
     private function publicErrorMessage(Throwable $exception): string
     {
+        // PDOException::getCode() can return a SQLSTATE string at runtime even
+        // though the declared Throwable contract says int; normalize at the
+        // boundary before the typed appErrorCode() parameter.
+        /** @noinspection PhpCastIsUnnecessaryInspection */
         $error = $this->appErrorCode((int)$exception->getCode());
 
         return $error !== null ? $exception->getMessage() : ErrorCode::INTERNAL_SERVER_ERROR->message();
@@ -330,7 +370,7 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         // Authorize first: an unknown caller must not learn which RPCs exist.
         $this->authorizer?->authorize($ctx, $method);
 
-        $this->logger->warning("Rejected deprecated Auth gRPC call: {$method}", ['method' => $method]);
+        $this->logger->warning("Rejected deprecated Auth gRPC call: $method", ['method' => $method]);
         $this->attachAppErrorTrailer($ctx, ErrorCode::AUTH_UNAUTHORIZED->value);
 
         return GRPCException::create(
@@ -354,6 +394,9 @@ final class RoadRunnerAuthService implements AuthServiceInterface
 
     private function metadataValue(ContextInterface $ctx, string $key): ?string
     {
+        // Same lookup order as InternalRpcAuthorizer; the auth transport keeps
+        // its own reader and cross-service extraction is out of scope here.
+        /** @noinspection DuplicatedCode */
         $values = $ctx->getValues();
         $value = $values[$key] ?? null;
         if ($value === null && is_array($values['metadata'] ?? null)) {
@@ -385,11 +428,11 @@ final class RoadRunnerAuthService implements AuthServiceInterface
         $value = ltrim($value, '0') ?: '0';
 
         if (!ctype_digit($value)) {
-            throw GRPCException::create("{$field} must be a uint64", StatusCode::INVALID_ARGUMENT);
+            throw GRPCException::create("$field must be a uint64", StatusCode::INVALID_ARGUMENT);
         }
 
         if (strlen($value) > 20 || (strlen($value) === 20 && strcmp($value, '18446744073709551615') > 0)) {
-            throw GRPCException::create("{$field} must be a uint64", StatusCode::INVALID_ARGUMENT);
+            throw GRPCException::create("$field must be a uint64", StatusCode::INVALID_ARGUMENT);
         }
 
         return $value;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Controller;
 
+use Exception;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Response\ApiResponse;
@@ -11,12 +12,13 @@ use Apps\ApiGateway\Response\PersonaPresenter;
 use Contracts\Errors\ErrorCode;
 use Webman\Http\Response;
 
-final class UserController
+final readonly class UserController
 {
-    public function __construct(private readonly UserServiceClient $userClient)
+    public function __construct(private UserServiceClient $userClient)
     {
     }
 
+    /** @throws Exception */
     public function me(GatewayRequest $request): Response
     {
         $userId = $request->authContext['user_id'];

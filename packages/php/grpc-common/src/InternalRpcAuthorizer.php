@@ -17,15 +17,15 @@ use InvalidArgumentException;
  * optional method allow-list keeps a service with read-only needs from
  * reaching write methods on the same target.
  */
-final class InternalRpcAuthorizer
+final readonly class InternalRpcAuthorizer
 {
     /**
      * @param array<string, string> $callerTokens
      * @param array<string, array<string>> $allowedMethodsByCaller Empty means all methods for that caller
      */
     public function __construct(
-        private readonly array $callerTokens,
-        private readonly array $allowedMethodsByCaller = [],
+        private array $callerTokens,
+        private array $allowedMethodsByCaller = [],
     ) {
         if ($this->callerTokens === []) {
             throw new InvalidArgumentException('Internal RPC authorization requires callers and a token');
@@ -67,6 +67,10 @@ final class InternalRpcAuthorizer
         }
     }
 
+    /**
+     * Keep caller authentication independent of the service-specific trace readers.
+     * @noinspection DuplicatedCode
+     */
     private function metadataValue(ContextInterface $ctx, string $key): ?string
     {
         $values = $ctx->getValues();

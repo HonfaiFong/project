@@ -19,7 +19,7 @@ final class ModifySocialIdentityCollation extends AbstractMigration
     public function up(): void
     {
         $pdo = $this->pdo();
-        $schema = $this->schemaName($this->schemaPrefix(), 'auth_db');
+        $schema = $this->schemaName($this->schemaPrefix());
         $columns = $this->loadColumns($pdo, $schema);
 
         if ($columns === []) {
@@ -62,6 +62,7 @@ final class ModifySocialIdentityCollation extends AbstractMigration
         );
     }
 
+    /** @throws IrreversibleMigrationException */
     public function down(): void
     {
         throw new IrreversibleMigrationException(
@@ -110,7 +111,7 @@ final class ModifySocialIdentityCollation extends AbstractMigration
         if ($prefix === null) {
             return '';
         }
-        if (!is_string($prefix) || preg_match('/\A[a-zA-Z0-9_]*\z/D', $prefix) !== 1) {
+        if (!is_string($prefix) || preg_match('/\A[a-zA-Z0-9_]*\z/', $prefix) !== 1) {
             throw new RuntimeException('schema_prefix must contain only ASCII letters, digits, and underscores.');
         }
         if (strlen($prefix) > 64) {
@@ -120,9 +121,9 @@ final class ModifySocialIdentityCollation extends AbstractMigration
         return $prefix;
     }
 
-    private function schemaName(string $prefix, string $database): string
+    private function schemaName(string $prefix): string
     {
-        $schema = $prefix . $database;
+        $schema = $prefix . 'auth_db';
         if (strlen($schema) > 64) {
             throw new RuntimeException('Database name exceeds MySQL identifier length: ' . $schema);
         }

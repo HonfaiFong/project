@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Apps\ApiGateway\Grpc;
 
 use Contracts\Errors\ErrorCode;
+use Exception;
 use Contracts\Gen\Auth\V1\BindSocialIdentityRequest;
 use Contracts\Gen\Auth\V1\BindSocialIdentityResponse;
 use Contracts\Gen\Auth\V1\CreateWsTicketRequest;
@@ -36,14 +37,14 @@ use const Grpc\STATUS_UNAUTHENTICATED;
 
 final class AuthServiceClient implements HealthCheckClient, WsTicketClient
 {
-    private ?UnaryGrpcClient $client = null;
+    private ?UnaryGrpcClient $client;
 
     public function __construct(
         private readonly ?string $target = null,
         private readonly int $timeoutMs = 300,
         private readonly int $socialLoginTimeoutMs = 7000,
         private readonly int $socialBindTimeoutMs = 7000,
-        private readonly int $socialHttpTimeoutMs = 3000,
+        int $socialHttpTimeoutMs = 3000,
         ?UnaryGrpcClient $client = null,
         private readonly ?string $serviceToken = null,
     ) {
@@ -85,6 +86,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         }
     }
 
+    /** @throws Exception */
     public function login(string $phone, string $code, array $deviceInfo, ?string $password = null): array
     {
         $response = $this->call('/auth.v1.AuthService/Login', new LoginRequest([
@@ -99,6 +101,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
 
     /**
      * @return array{state: string, login: array<string, mixed>}
+     * @throws Exception
      */
     public function socialLogin(string $provider, string $code, array $deviceInfo): array
     {
@@ -127,6 +130,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
      * 用户 ID 绝不从请求体获取。
      *
      * @return array{user_id: string, provider: string}
+     * @throws Exception
      */
     public function bindSocialIdentity(string $provider, string $code, string $accessToken): array
     {
@@ -142,6 +146,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         ];
     }
 
+    /** @throws Exception */
     public function refreshToken(string $refreshToken, array $deviceInfo = []): array
     {
         $response = $this->call('/auth.v1.AuthService/RefreshToken', new RefreshTokenRequest([
@@ -157,6 +162,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         ];
     }
 
+    /** @throws Exception */
     public function logout(string $refreshToken, ?string $accessToken = null): array
     {
         $response = $this->call('/auth.v1.AuthService/Logout', new LogoutRequest([
@@ -167,6 +173,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         return ['success' => $response->getSuccess()];
     }
 
+    /** @throws Exception */
     public function verifyToken(string $accessToken): array
     {
         $response = $this->call('/auth.v1.AuthService/VerifyToken', new VerifyTokenRequest([
@@ -180,6 +187,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         ];
     }
 
+    /** @throws Exception */
     public function createWsTicket(string $userId, string $personaId, string $deviceId): array
     {
         $response = $this->call('/auth.v1.AuthService/CreateWsTicket', new CreateWsTicketRequest([
@@ -194,6 +202,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         ];
     }
 
+    /** @throws Exception */
     public function checkHealth(): array
     {
         $response = $this->call('/common.v1.HealthService/Check', new HealthCheckRequest(), HealthCheckResponse::class);
@@ -208,6 +217,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
      * @template T of Message
      * @param class-string<T> $responseClass
      * @return T
+     * @throws Exception
      */
     private function call(
         string $method,

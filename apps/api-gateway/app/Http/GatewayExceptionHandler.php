@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Http;
 
+use Random\RandomException;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Packages\Tracing\TraceContext;
@@ -24,8 +25,11 @@ final class GatewayExceptionHandler extends ExceptionHandler
         ]);
     }
 
+    /** @throws RandomException */
     public function render(Request $request, Throwable $exception): Response
     {
+        // PDOException::getCode() 可能返回 SQLSTATE 字符串（如 'HY000'），(int) 归一化为 0，并非冗余转换。
+        /** @noinspection PhpCastIsUnnecessaryInspection */
         $knownCode = $exception->getCode() > 0 ? ErrorCode::tryFrom((int)$exception->getCode()) : null;
         $errorCode = $knownCode && $knownCode !== ErrorCode::OK
             ? $knownCode

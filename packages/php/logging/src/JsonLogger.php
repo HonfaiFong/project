@@ -8,6 +8,7 @@ use Packages\Tracing\TraceContext;
 use Psr\Log\AbstractLogger;
 use Psr\Log\InvalidArgumentException;
 use Psr\Log\LogLevel;
+use Random\RandomException;
 use Stringable;
 
 final class JsonLogger extends AbstractLogger
@@ -32,6 +33,10 @@ final class JsonLogger extends AbstractLogger
     ) {
     }
 
+    /**
+     * @throws RandomException
+     * @throws InvalidArgumentException
+     */
     public function log($level, string|Stringable $message, array $context = []): void
     {
         if (!in_array($level, [

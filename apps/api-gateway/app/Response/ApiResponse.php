@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Response;
 
+use Random\RandomException;
 use Contracts\Errors\ErrorCode;
 use Packages\Tracing\TraceContext;
 use Webman\Http\Response;
@@ -12,6 +13,7 @@ final class ApiResponse
 {
     /**
      * @param array<string, mixed>|object|null $data
+     * @throws RandomException
      */
     public static function success(mixed $data = [], int $httpStatus = 200, ?TraceContext $trace = null): Response
     {
@@ -32,6 +34,7 @@ final class ApiResponse
 
     /**
      * @param array<string, mixed> $details
+     * @throws RandomException
      */
     public static function error(
         int $code,

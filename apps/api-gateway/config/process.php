@@ -16,7 +16,7 @@ return [
         'reusePort' => false,
         'constructor' => [
             'requestClass' => GatewayRequest::class,
-            'logger' => Log::channel('default'),
+            'logger' => Log::channel(),
             'appPath' => app_path(),
             'publicPath' => public_path(),
         ],

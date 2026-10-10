@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Packages\Tracing;
 
+use Random\RandomException;
+
 /**
  * Request tracing context holding correlation identifiers and trusted user context.
  *
@@ -34,6 +36,7 @@ final class TraceContext
     ) {
     }
 
+    /** @throws RandomException */
     public static function create(
         ?string $requestId = null,
         ?string $traceId = null,
@@ -63,6 +66,7 @@ final class TraceContext
         self::$current = $context;
     }
 
+    /** @throws RandomException */
     public static function current(): self
     {
         if (self::$current === null) {
@@ -103,6 +107,7 @@ final class TraceContext
         return $headers;
     }
 
+    /** @throws RandomException */
     public static function generateUuidV7(): string
     {
         // 48-bit timestamp in milliseconds

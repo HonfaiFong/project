@@ -4,15 +4,17 @@ declare(strict_types=1);
 
 namespace Services\AuthService\Infrastructure\Cache;
 
+use Random\RandomException;
 use Redis;
 use Services\AuthService\Domain\Repository\DistributedLockInterface;
 
-final class RedisDistributedLock implements DistributedLockInterface
+final readonly class RedisDistributedLock implements DistributedLockInterface
 {
-    public function __construct(private readonly Redis $redis)
+    public function __construct(private Redis $redis)
     {
     }
 
+    /** @throws RandomException when the CSPRNG cannot produce the lock owner */
     public function acquire(string $key, int $ttlSeconds): ?string
     {
         $owner = bin2hex(random_bytes(16));

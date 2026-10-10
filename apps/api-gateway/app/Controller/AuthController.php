@@ -22,7 +22,7 @@ final readonly class AuthController
     ) {
     }
 
-    /** @throws Exception 安全随机源不可用时抛出 */
+    /** @throws Exception 上游调用或响应追踪失败时抛出 */
     public function login(GatewayRequest $request): Response
     {
         $phone = trim((string)$request->post('phone', ''));
@@ -45,7 +45,7 @@ final readonly class AuthController
         return ApiResponse::success($login, $login['is_new_user'] ? 201 : 200);
     }
 
-    /** @throws Exception 安全随机源不可用时抛出 */
+    /** @throws Exception 上游调用或响应追踪失败时抛出 */
     public function socialLogin(GatewayRequest $request): Response
     {
         $provider = strtolower(trim((string)$request->post('provider', '')));
@@ -69,6 +69,7 @@ final readonly class AuthController
         ], $login['is_new_user'] ? 201 : 200);
     }
 
+    /** @throws Exception */
     public function socialBindIdentity(GatewayRequest $request): Response
     {
         $provider = strtolower(trim((string)$request->post('provider', '')));
@@ -91,6 +92,7 @@ final readonly class AuthController
         ]);
     }
 
+    /** @throws Exception */
     public function refresh(GatewayRequest $request): Response
     {
         $refreshToken = (string)$request->post('refresh_token', '');
@@ -109,6 +111,7 @@ final readonly class AuthController
         ]);
     }
 
+    /** @throws Exception */
     public function logout(GatewayRequest $request): Response
     {
         $refreshToken = (string)$request->post('refresh_token', '');
@@ -125,6 +128,7 @@ final readonly class AuthController
         return ApiResponse::success(['success' => true]);
     }
 
+    /** @throws Exception */
     public function createWsTicket(GatewayRequest $request): Response
     {
         $res = $this->createWsTicketAction->execute((array)$request->post(), $request->authContext);
@@ -135,6 +139,7 @@ final readonly class AuthController
         ]);
     }
 
+    /** @throws Exception */
     private function validateSocialCredentials(string $provider, string $code): ?Response
     {
         $validation = $this->validator->make(

@@ -8,15 +8,16 @@ use Contracts\Errors\ErrorCode;
 use GuzzleHttp\ClientInterface;
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
-final class GuzzleOAuthHttpClient implements OAuthHttpClientInterface
+final readonly class GuzzleOAuthHttpClient implements OAuthHttpClientInterface
 {
     public function __construct(
-        private readonly ClientInterface $client,
-        private readonly int $connectTimeoutMs = 1000,
-        private readonly int $timeoutMs = 3000,
-        private readonly int $maxBodyBytes = 65536,
-        private readonly bool $allowInsecureHttp = false,
+        private ClientInterface $client,
+        private int $connectTimeoutMs = 1000,
+        private int $timeoutMs = 3000,
+        private int $maxBodyBytes = 65536,
+        private bool $allowInsecureHttp = false,
     ) {
         if ($connectTimeoutMs < 1 || $timeoutMs < 1 || $connectTimeoutMs > $timeoutMs) {
             throw new InvalidArgumentException('OAuth HTTP timeouts must be positive and connect timeout must not exceed total timeout');
@@ -44,7 +45,7 @@ final class GuzzleOAuthHttpClient implements OAuthHttpClientInterface
                 'allow_redirects'  => false,
                 'headers'         => ['Accept' => 'application/json, text/plain;q=0.9'],
             ]);
-        } catch (\Throwable $e) {
+        } catch (Throwable $e) {
             throw new RuntimeException(
                 ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->message(),
                 ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->value,

@@ -58,20 +58,24 @@ $mysqlUser = getenv('MYSQL_USER') ?: 'root';
 $mysqlPass = getenv('MYSQL_PASSWORD') ?: 'root_password';
 $mysqlDb   = getenv('AUTH_DB_NAME') ?: 'auth_db';
 
+// The two bootstrap retry loops below stay intentionally independent: each
+// dependency keeps its own probe and logging, and cross-service de-duplication
+// is outside this start-up script.
+/** @noinspection DuplicatedCode */
 $maxRetries = 15;
 $pdo = null;
 
 for ($i = 0; $i < $maxRetries; $i++) {
     try {
-        $dsn = "mysql:host={$mysqlHost};port={$mysqlPort};dbname={$mysqlDb};charset=utf8mb4";
+        $dsn = "mysql:host=$mysqlHost;port=$mysqlPort;dbname=$mysqlDb;charset=utf8mb4";
         $pdo = new PDO($dsn, $mysqlUser, $mysqlPass, [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         ]);
-        $logger->info("Connected to MySQL successfully: {$mysqlDb}");
+        $logger->info("Connected to MySQL successfully: $mysqlDb");
         break;
-    } catch (\Throwable $e) {
-        $logger->warning("Waiting for MySQL ({$mysqlDb})... " . $e->getMessage());
+    } catch (Throwable $e) {
+        $logger->warning("Waiting for MySQL ($mysqlDb)... " . $e->getMessage());
         sleep(2);
     }
 }
@@ -97,10 +101,10 @@ for ($i = 0; $i < $maxRetries; $i++) {
         }
         $candidate->ping();
         $redis = $candidate;
-        $logger->info("Connected to Redis successfully: {$redisHost}:{$redisPort}");
+        $logger->info("Connected to Redis successfully: $redisHost:$redisPort");
         break;
     } catch (Throwable $e) {
-        $logger->warning("Waiting for Redis ({$redisHost}:{$redisPort})... " . $e->getMessage());
+        $logger->warning("Waiting for Redis ($redisHost:$redisPort)... " . $e->getMessage());
         sleep(2);
     }
 }
@@ -110,6 +114,10 @@ if (!$redis) {
     exit(1);
 }
 
+// WorkerId::resolve() reads the CSPRNG and may throw RandomException; the
+// worker cannot start without a stable worker id, so the failure must abort
+// startup instead of being swallowed.
+/** @noinspection PhpUnhandledExceptionInspection */
 $snowflake = new Snowflake(WorkerId::resolve());
 $authRepo = new EloquentAuthRepository($pdo, $snowflake);
 $jwtSecret = trim((string)getenv('JWT_SECRET'));

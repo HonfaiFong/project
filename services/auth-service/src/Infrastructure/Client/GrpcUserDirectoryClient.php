@@ -14,6 +14,7 @@ use Contracts\Gen\User\V1\GetUserResponse;
 use Packages\GrpcCommon\DeadlineContext;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
+use Exception;
 use InvalidArgumentException;
 use RuntimeException;
 use Services\AuthService\Domain\Client\UserDirectoryInterface;
@@ -39,6 +40,9 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
         }
     }
 
+    /**
+     * @throws Exception when the gRPC transport fails outside the mapped status path
+     */
     public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
     {
         $client = $this->client ??= new UnaryGrpcClient(
@@ -75,6 +79,9 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
         ];
     }
 
+    /**
+     * @throws Exception when the gRPC transport fails outside the mapped status path
+     */
     public function findOrCreateBySocialIdentity(string $registrationKey, string $registerChannel): array
     {
         $client = $this->client ??= new UnaryGrpcClient(
@@ -113,6 +120,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
 
     /**
      * @return array{user_id: string, status: int}
+     * @throws Exception when the gRPC transport fails outside the mapped status path
      */
     public function findById(string $userId): array
     {

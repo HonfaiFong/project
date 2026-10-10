@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Apps\ApiGateway\Controller;
 
+use Random\RandomException;
 use Apps\ApiGateway\Grpc\HealthCheckClient;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
@@ -11,16 +12,17 @@ use Contracts\Gen\Common\V1\HealthStatus;
 use Throwable;
 use Webman\Http\Response;
 
-final class HealthController
+final readonly class HealthController
 {
     /**
      * @param array<string, HealthCheckClient> $upstreamClients
      */
     public function __construct(
-        private readonly array $upstreamClients = []
+        private array $upstreamClients = []
     ) {
     }
 
+    /** @throws RandomException */
     public function check(): Response
     {
         $services = [

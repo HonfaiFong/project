@@ -60,6 +60,10 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
         $this->clientIpResolver = $clientIpResolver ?? new TrustedProxyClientIpResolver($trustedProxyCidrs);
     }
 
+    /**
+     * @throws RuntimeException
+     * @throws Throwable
+     */
     public function process(Request $request, callable $handler): Response
     {
         if ($this->counter === null) {

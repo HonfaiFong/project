@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Services\AuthService\Infrastructure\OAuth;
 
 use Contracts\Errors\ErrorCode;
+use JsonException;
 use RuntimeException;
 use Services\AuthService\Domain\Auth\ExternalIdentity;
 use Services\AuthService\Domain\Auth\SocialAuthProviderInterface;
@@ -87,7 +88,7 @@ final class WeChatOAuthProvider implements SocialAuthProviderInterface
     {
         try {
             $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-        } catch (\JsonException $e) {
+        } catch (JsonException $e) {
             throw new RuntimeException(
                 ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->message(),
                 ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->value,

@@ -7,22 +7,27 @@ namespace Apps\ApiGateway\Middleware;
 use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Contracts\Errors\ErrorCode;
+use LogicException;
 use Packages\Tracing\TraceContext;
+use Exception;
 use RuntimeException;
 use Webman\Http\Request;
 use Webman\Http\Response;
 use Webman\MiddlewareInterface;
 
-final class AuthMiddleware implements MiddlewareInterface
+final readonly class AuthMiddleware implements MiddlewareInterface
 {
-    public function __construct(private readonly AuthServiceClient $authClient)
+    public function __construct(private AuthServiceClient $authClient)
     {
     }
 
+    /**
+     * @throws Exception
+     */
     public function process(Request $request, callable $handler): Response
     {
         if (!$request instanceof GatewayRequest) {
-            throw new \LogicException('GatewayRequest is required');
+            throw new LogicException('GatewayRequest is required');
         }
         $authHeader = (string)$request->header('authorization', '');
         if (!str_starts_with($authHeader, 'Bearer ')) {
@@ -51,7 +56,6 @@ final class AuthMiddleware implements MiddlewareInterface
             requestId: $currentTrace->requestId,
             traceId: $currentTrace->traceId,
             userId: $userId,
-            personaId: null,
             deviceId: $deviceId ?: $currentTrace->deviceId,
             appVersion: $currentTrace->appVersion,
             traceparent: $currentTrace->traceparent
