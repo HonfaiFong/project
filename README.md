@@ -121,6 +121,8 @@ SOCIAL_TRUSTED_PROXY_CIDRS=100.64.0.0/10,10.0.0.0/8
 | IP + 设备 | 客户端 IP × device_uuid | `SOCIAL_LOGIN_RATE_DEVICE_LIMIT=20` / 60s | 压制单设备脚本行为，辅助风险信号 |
 | 用户 + 绑定 | 已认证 user_id | `SOCIAL_BIND_USER_RATE_LIMIT=10` / 3600s | 单账号反复绑定独立受限，与来源 IP 无关 |
 
+绑定接口按「IP/场景/设备前置限流 → AuthMiddleware 验证 JWT → 已验证用户限流」执行。IP 超限时不会再调用 VerifyToken，认证后阶段只增加用户桶，每个请求不会重复增加 IP 桶。
+
 IPv4 按完整地址分桶；IPv6 归一到 /64 前缀分桶（终端用户可自由轮换低 64 位接口标识，按全址分桶等于无限桶；/64 是单个订阅者的常规粒度）。IPv4-mapped IPv6 地址按二进制归一化为内嵌 IPv4 后再参与受信代理匹配与分桶，`::ffff:10.1.0.1`、`::FFFF:10.1.0.1`、`::ffff:a01:1` 等所有文本写法等价。目标用户多在中国大陆，部分用户经运营商 CGNAT 共享公网 IPv4，因此 IP 全局桶刻意保持宽裕、由场景/设备/用户桶承担精细限制；部署时按实际 NAT 共享度调整全局阈值。设备维度只是附加信号：伪造/轮换 `device_uuid` 只会新增设备桶，永远不会解除 IP 桶限制。限流计数依赖 Redis，生产环境 Redis 不可用时拒绝请求（HTTP 503 fail-closed），开发环境放行。
 
 ### gRPC 超时约束
@@ -131,15 +133,26 @@ IPv4 按完整地址分桶；IPv6 归一到 /64 前缀分桶（终端用户可�
 | :--- | :--- | :--- | :--- |
 | `GRPC_AUTH_TIMEOUT_MS` | 300 | Gateway→Auth 普通调用外层截止时间；必须为正整数 | Gateway `config/gateway.php` 加载即校验 |
 | `GRPC_USER_DIRECTORY_TIMEOUT_MS` | 250 | Auth→User 目录跳预算；必须为正整数，且 **小于** `GRPC_AUTH_TIMEOUT_MS` | `DeadlineEnv` 严格解析 + AuthService 启动时对部署对做跨服务校验（compose.yaml 会把 `GRPC_AUTH_TIMEOUT_MS` 一并注入 auth-service 容器） |
-| `GRPC_SOCIAL_LOGIN_TIMEOUT_MS` | 7000 | 社交登录 RPC 截止；必须 **大于** `2 × SOCIAL_HTTP_TIMEOUT_MS`（QQ 最坏两跳 OAuth HTTP） | Gateway `AuthServiceClient` 构造校验 |
+| `GRPC_SOCIAL_LOGIN_TIMEOUT_MS` | 7000 | 社交登录 RPC 截止；必须 **大于** `2 × SOCIAL_HTTP_TIMEOUT_MS`（QQ 最坏两跳 OAuth HTTP） | Gateway 配置加载即校验，`AuthServiceClient` 构造时再次保护 |
 | `GRPC_SOCIAL_BIND_TIMEOUT_MS` | 7000 | 社交绑定 RPC 截止；同上 | 同上 |
-| `SOCIAL_HTTP_TIMEOUT_MS` | 3000 | OAuth 上游单次 HTTP 超时；必须为正整数 | Gateway 配置加载即校验 |
+| `SOCIAL_HTTP_TIMEOUT_MS` | 3000 | OAuth 上游单次 HTTP 超时；必须为正整数 | Gateway 配置加载与 AuthService 启动即校验 |
+| `SOCIAL_HTTP_CONNECT_TIMEOUT_MS` | 1000 | OAuth 连接超时；必须为正整数且不大于总 HTTP 超时 | AuthService 启动即校验，OAuth 客户端构造时再次保护 |
 
 非法值（`0`、负数、非数字、带单位的字符串）在任何部署环境都会让对应 worker 拒绝启动——不会像旧的 `max(1, (int)...)` 那样把 `abc` 悄悄钳制成 1ms。严格解析逻辑在 `Packages\GrpcCommon\DeadlineEnv` 中由 Gateway 与 AuthService 共享。
 
 **剩余截止时间的运行时传播**：RoadRunner 不会把传入调用的 gRPC deadline 交给 PHP worker，因此网关在每次调用上以 `x-deadline-unix-ms` 元数据携带绝对截止时间；AuthService 在内部 RPC 授权通过后读取该值（`DeadlineContext`），Auth→User 目录跳的实际预算取 `min(配置值, 剩余值)`，剩余时间耗尽则立刻返回 `RPC_TIMEOUT` 而不是重新花一个完整预算。该元数据只能缩短内部跳预算、永远不能延长，伪造它的最坏效果是让自己的请求更早超时。
 
-`GRPC_AUTH_TIMEOUT_MS − GRPC_USER_DIRECTORY_TIMEOUT_MS` 是 Auth 侧自身每调用 ~50ms 的工作预算；worker 启动预热（Eloquent、protobuf 描述符池、JWT 编解码）正是为了把暖路径成本压在该预算内，`tests/Unit/GrpcDeadlineBudgetBenchmarkTest.php` 守住编解码份额，`tests/Integration/AuthWarmPathLatencyTest.php` 用真实 MySQL/Redis 度量 VerifyToken 暖路径的 P50/P95/P99，`scripts/auth_latency_probe.sh`（`make latency-probe`，也包含在 `make e2e`）对完整链路（Gateway→gRPC→OAuth/MySQL/Redis→User gRPC）输出 P50/P95/P99 报告并守住 P95 预算；`tests/Unit/GrpcDeadlineConfigContractTest.php` 校验 compose.yaml 与 .env.example 的默认值满足上述跨服务关系及启动校验本身。
+`GRPC_AUTH_TIMEOUT_MS − GRPC_USER_DIRECTORY_TIMEOUT_MS` 是 Auth 侧自身每调用 ~50ms 的工作预算；worker 启动预热（Eloquent、protobuf 描述符池、JWT 编解码）正是为了把暖路径成本压在该预算内，`tests/Unit/GrpcDeadlineBudgetBenchmarkTest.php` 守住编解码份额，`tests/Integration/AuthWarmPathLatencyTest.php` 用真实 MySQL/Redis 和 JWT 编解码度量实际 `AuthApplicationService::verifyToken()` 的累计暖路径 P50/P95/P99，并将累计 P95 与 50ms 预算比较（UserDirectory 使用 ACTIVE stub，不包含真实 UserService 网络跳），`scripts/auth_latency_probe.sh`（`make latency-probe`，也包含在 `make e2e`）对完整链路（Gateway→gRPC→OAuth/MySQL/Redis→User gRPC）输出 P50/P95/P99 报告并守住 P95 预算；`tests/Unit/GrpcDeadlineConfigContractTest.php` 校验 compose.yaml 与 .env.example 的默认值满足上述跨服务关系及启动校验本身。
+
+已认证 HTTP 链路另有可选探针 `scripts/verify_token_latency_probe.php`，从环境变量 `VERIFY_TOKEN_PROBE_TOKEN` 读取现有测试用户的有效 access token，以 GET `/api/v1/personas`（或 `/api/v1/me`）采样；无需反复社交登录，因此不会消耗登录限流额度。配置请求数、预热数、并发数及 P95 门禁后执行，例如：
+
+```bash
+VERIFY_TOKEN_PROBE_REQUESTS=500 VERIFY_TOKEN_PROBE_WARMUP=20 \
+VERIFY_TOKEN_PROBE_CONCURRENCY=16 VERIFY_TOKEN_PROBE_BUDGET_MS=1000 \
+php scripts/verify_token_latency_probe.php
+```
+
+每个样本包含 HTTP、Gateway 的 VerifyToken 调用及接口后续 UserService 查询，报告 P50/P95/P99、失败数与超时率；这些值是整个受认证 HTTP 请求的耗时，不能当作单独 VerifyToken RPC 的耗时。HTTP、业务、传输、超时错误或 P95 达到或超过预算都会让探针失败；P95/P99 的稳定性仍取决于样本量、持续时间和负载。探针不自动执行生产压测或重启服务；部署前应在专用环境中分别采集冷启动/重启、Redis/MySQL 延迟扰动和不同并发度的结果，并结合连接池容量判断。
 
 内部 gRPC 当前明确使用明文传输：`UnaryGrpcClient` 使用 `ChannelCredentials::createInsecure()`，RoadRunner 未配置 TLS。请求、手机号、会话数据和 `x-service-token` 都可能被能够监听内部网络的主体读取。当前部署仅适用于单机、受控且隔离的 Compose 网络；不得发布 Auth/User RPC 端口，不得把不可信容器接入该网络。应用层 token 和方法白名单提供调用授权，不提供传输机密性。
 

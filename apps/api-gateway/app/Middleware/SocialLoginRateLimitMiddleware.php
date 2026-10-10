@@ -207,7 +207,7 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
      * The verified user id published by AuthMiddleware. Empty before
      * authentication (login) or when wiring runs the limiter pre-auth.
      */
-    private function authenticatedUserId(Request $request): string
+    protected function authenticatedUserId(Request $request): string
     {
         $context = property_exists($request, 'authContext') ? ($request->authContext ?? null) : null;
 

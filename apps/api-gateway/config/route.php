@@ -9,6 +9,7 @@ use Apps\ApiGateway\Controller\UserController;
 use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindRateLimitMiddleware;
+use Apps\ApiGateway\Middleware\SocialBindUserRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\TraceMiddleware;
 use Apps\ApiGateway\Response\ApiResponse;
@@ -36,11 +37,10 @@ Route::group('/api/v1', static function (): void {
     Route::patch('/personas/{personaId:[0-9]+}', [PersonaController::class, 'update']);
 })->middleware([AuthMiddleware::class]);
 
-// Bind lives on its own chain instead of the auth group: webman runs route
-// middleware in registration order, so AuthMiddleware publishes the verified
-// user id before the bind rate limiter reads it for the per-user bucket.
+// Reject abusive IP/device traffic before VerifyToken; count the verified
+// user separately afterwards, without incrementing the IP buckets twice.
 Route::post('/api/v1/auth/social/bind', [AuthController::class, 'socialBindIdentity'])
-    ->middleware([AuthMiddleware::class, SocialBindRateLimitMiddleware::class]);
+    ->middleware([SocialBindRateLimitMiddleware::class, AuthMiddleware::class, SocialBindUserRateLimitMiddleware::class]);
 
 Route::fallback(static fn () => ApiResponse::error(
     ErrorCode::INVALID_ARGUMENT->value,

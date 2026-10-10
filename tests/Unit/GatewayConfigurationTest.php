@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
+use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 final class GatewayConfigurationTest extends TestCase
@@ -133,6 +135,26 @@ final class GatewayConfigurationTest extends TestCase
         putenv('APP_ENV=production');
 
         $this->assertSame('development', $loaded['environment']);
+    }
+
+    #[DataProvider('invalidSocialDeadlineRelationships')]
+    public function testSocialDeadlineRelationshipsAreRejectedDuringConfigLoad(string $name, string $value): void
+    {
+        putenv($name . '=' . $value);
+        $this->expectException(InvalidArgumentException::class);
+        $this->loadGatewayConfig();
+    }
+
+    /** @return list<array{string, string}> */
+    public static function invalidSocialDeadlineRelationships(): array
+    {
+        return [
+            ['GRPC_SOCIAL_LOGIN_TIMEOUT_MS', '6000'],
+            ['GRPC_SOCIAL_LOGIN_TIMEOUT_MS', '5999'],
+            ['GRPC_SOCIAL_BIND_TIMEOUT_MS', '6000'],
+            ['GRPC_SOCIAL_BIND_TIMEOUT_MS', '5999'],
+            ['SOCIAL_HTTP_TIMEOUT_MS', '3500'],
+        ];
     }
 
     /**

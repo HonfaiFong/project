@@ -47,11 +47,21 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         ?UnaryGrpcClient $client = null,
         private readonly ?string $serviceToken = null,
     ) {
+        self::validateTimeouts($timeoutMs, $socialLoginTimeoutMs, $socialBindTimeoutMs, $socialHttpTimeoutMs);
+        $this->client = $client;
+    }
+
+    public static function validateTimeouts(
+        int $timeoutMs,
+        int $socialLoginTimeoutMs,
+        int $socialBindTimeoutMs,
+        int $socialHttpTimeoutMs,
+    ): void {
         foreach ([
-            'GRPC_AUTH_TIMEOUT_MS' => $this->timeoutMs,
-            'GRPC_SOCIAL_LOGIN_TIMEOUT_MS' => $this->socialLoginTimeoutMs,
-            'GRPC_SOCIAL_BIND_TIMEOUT_MS' => $this->socialBindTimeoutMs,
-            'SOCIAL_HTTP_TIMEOUT_MS' => $this->socialHttpTimeoutMs,
+            'GRPC_AUTH_TIMEOUT_MS' => $timeoutMs,
+            'GRPC_SOCIAL_LOGIN_TIMEOUT_MS' => $socialLoginTimeoutMs,
+            'GRPC_SOCIAL_BIND_TIMEOUT_MS' => $socialBindTimeoutMs,
+            'SOCIAL_HTTP_TIMEOUT_MS' => $socialHttpTimeoutMs,
         ] as $setting => $milliseconds) {
             if ($milliseconds < 1) {
                 throw new InvalidArgumentException(
@@ -60,7 +70,7 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
             }
         }
 
-        if ($this->socialLoginTimeoutMs <= 2 * $this->socialHttpTimeoutMs) {
+        if ($socialLoginTimeoutMs <= 2 * $socialHttpTimeoutMs) {
             throw new InvalidArgumentException(
                 'SocialLogin gRPC deadline must exceed two social HTTP timeouts'
             );
@@ -68,13 +78,11 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
 
         // Binding runs the same worst-case OAuth sequence (QQ sends two HTTP
         // requests) and verifies the access token twice, so it needs the same budget.
-        if ($this->socialBindTimeoutMs <= 2 * $this->socialHttpTimeoutMs) {
+        if ($socialBindTimeoutMs <= 2 * $socialHttpTimeoutMs) {
             throw new InvalidArgumentException(
                 'SocialBindIdentity gRPC deadline must exceed two social HTTP timeouts'
             );
         }
-
-        $this->client = $client;
     }
 
     public function login(string $phone, string $code, array $deviceInfo, ?string $password = null): array

@@ -8,6 +8,7 @@ use GuzzleHttp\Client;
 use Packages\Database\EloquentConnection;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\DeadlineEnv;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
@@ -39,6 +40,14 @@ use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
 use Spiral\RoadRunner\Worker;
+
+// Reject invalid deadlines before opening database or Redis connections.
+$deadlineConfig = GrpcDeadlineConfig::fromEnvironment();
+$socialHttpConnectTimeoutMs = DeadlineEnv::positiveMilliseconds('SOCIAL_HTTP_CONNECT_TIMEOUT_MS', 1000);
+$socialHttpTimeoutMs = DeadlineEnv::positiveMilliseconds('SOCIAL_HTTP_TIMEOUT_MS', 3000);
+if ($socialHttpConnectTimeoutMs > $socialHttpTimeoutMs) {
+    throw new InvalidArgumentException('SOCIAL_HTTP_CONNECT_TIMEOUT_MS must not exceed SOCIAL_HTTP_TIMEOUT_MS');
+}
 
 $logger = new JsonLogger('auth-service', getenv('SERVICE_INSTANCE_ID') ?: 'auth-01');
 
@@ -117,7 +126,6 @@ $userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
 // Strict parsing plus the cross-service relationship check: an invalid
 // deadline or a directory budget that eats the gateway's whole auth deadline
 // refuses startup instead of degrading into RPC_TIMEOUT traffic.
-$deadlineConfig = GrpcDeadlineConfig::fromEnvironment();
 $userDirectory = new GrpcUserDirectoryClient(
     target: $userServiceTarget,
     timeoutMs: $deadlineConfig->userDirectoryTimeoutMs,
@@ -153,8 +161,8 @@ if (!$isDevelopment && (($weChatTokenEndpoint !== '' && $weChatTokenEndpoint !==
 
 $oauthHttpClient = new GuzzleOAuthHttpClient(
     new Client(),
-    (int)(getenv('SOCIAL_HTTP_CONNECT_TIMEOUT_MS') ?: 1000),
-    (int)(getenv('SOCIAL_HTTP_TIMEOUT_MS') ?: 3000),
+    $socialHttpConnectTimeoutMs,
+    $socialHttpTimeoutMs,
     allowInsecureHttp: $allowInsecureOAuthHttp,
 );
 $socialProviders = [];

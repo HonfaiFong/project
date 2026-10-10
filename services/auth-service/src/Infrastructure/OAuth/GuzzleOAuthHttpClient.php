@@ -6,6 +6,7 @@ namespace Services\AuthService\Infrastructure\OAuth;
 
 use Contracts\Errors\ErrorCode;
 use GuzzleHttp\ClientInterface;
+use InvalidArgumentException;
 use RuntimeException;
 
 final class GuzzleOAuthHttpClient implements OAuthHttpClientInterface
@@ -17,6 +18,9 @@ final class GuzzleOAuthHttpClient implements OAuthHttpClientInterface
         private readonly int $maxBodyBytes = 65536,
         private readonly bool $allowInsecureHttp = false,
     ) {
+        if ($connectTimeoutMs < 1 || $timeoutMs < 1 || $connectTimeoutMs > $timeoutMs) {
+            throw new InvalidArgumentException('OAuth HTTP timeouts must be positive and connect timeout must not exceed total timeout');
+        }
     }
 
     public function get(string $url, array $query = []): string

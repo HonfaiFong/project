@@ -15,6 +15,7 @@ use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
 use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindRateLimitMiddleware;
+use Apps\ApiGateway\Middleware\SocialBindUserRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Validation\Factory;
@@ -115,6 +116,11 @@ $container->singleton(SocialBindRateLimitMiddleware::class, static fn (): Social
     environment: $settings['environment'],
     scenarioLimit: $settings['social_login_rate_limit']['scenario_limit'],
     deviceLimit: $settings['social_login_rate_limit']['device_limit'],
+    identityLimit: 0,
+));
+$container->singleton(SocialBindUserRateLimitMiddleware::class, static fn (): SocialBindUserRateLimitMiddleware => new SocialBindUserRateLimitMiddleware(
+    counter: $socialLoginRateLimitCounter,
+    environment: $settings['environment'],
     identityLimit: $settings['social_bind_rate_limit']['user_limit'],
     identityWindowSeconds: $settings['social_bind_rate_limit']['user_window_seconds'],
 ));

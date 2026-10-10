@@ -12,8 +12,12 @@ use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
+use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
+use Apps\ApiGateway\Middleware\SocialBindRateLimitMiddleware;
+use Apps\ApiGateway\Middleware\SocialBindUserRateLimitMiddleware;
 use Apps\ApiGateway\Process\Http;
 use Contracts\Errors\ErrorCode;
+use Contracts\Gen\Auth\V1\BindSocialIdentityResponse;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use Contracts\Gen\User\V1\GetPersonaRequest;
@@ -144,6 +148,56 @@ final class GatewayWebmanWiringTest extends TestCase
         $this->assertSame('missing-123', json_decode($response->rawBody(), true)['request_id']);
     }
 
+    #[RunInSeparateProcess]
+    public function testBindRateLimitsUseTheConfiguredContainerAndWebmanPipeline(): void
+    {
+        putenv('APP_ENV=testing');
+        putenv('REDIS_HOST');
+        putenv('SOCIAL_LOGIN_RATE_LIMIT=2');
+        putenv('SOCIAL_LOGIN_RATE_SCENARIO_LIMIT=100');
+        putenv('SOCIAL_LOGIN_RATE_DEVICE_LIMIT=100');
+        putenv('SOCIAL_BIND_USER_RATE_LIMIT=1');
+        $gatewayPath = dirname(__DIR__, 2) . '/apps/api-gateway';
+        Config::load($gatewayPath . '/config', ['route']);
+        Middleware::load(config('middleware'));
+        Route::load([$gatewayPath . '/config']);
+        $grpc = $this->createMock(UnaryGrpcClient::class);
+        $grpc->expects($this->exactly(3))->method('call')->willReturnCallback(
+            static function (string $method): Message {
+                if ($method === '/auth.v1.AuthService/VerifyToken') {
+                    return new VerifyTokenResponse(['valid' => true, 'user_id' => '42', 'device_id' => '7']);
+                }
+                self::assertSame('/auth.v1.AuthService/BindSocialIdentity', $method);
+                return new BindSocialIdentityResponse(['user_id' => '42', 'provider' => 1]);
+            },
+        );
+        $container = config('container');
+        $container->instance(AuthServiceClient::class, new AuthServiceClient(client: $grpc));
+        $keys = [];
+        $counter = static function (string $key) use (&$keys): int {
+            return $keys[$key] = ($keys[$key] ?? 0) + 1;
+        };
+        // Replace only the external counter; retain real container limit/window wiring.
+        $counterProperty = new \ReflectionProperty(SocialLoginRateLimitMiddleware::class, 'counter');
+        foreach ([SocialBindRateLimitMiddleware::class, SocialBindUserRateLimitMiddleware::class] as $class) {
+            $counterProperty->setValue($container->get($class), $counter);
+        }
+        new Http(GatewayRequest::class, new Logger('test'), $gatewayPath . '/app', $gatewayPath . '/public');
+        [, $route] = Route::dispatch('POST', '/api/v1/auth/social/bind');
+        $callback = Http::getCallback('', 'ApiGateway', $route['callback'], [], true, $route['route']);
+        foreach ([200, 429, 429, 429] as $expectedStatus) {
+            $request = new GatewayRequest("POST /api/v1/auth/social/bind HTTP/1.1\r\nHost: localhost\r\n"
+                . "Authorization: Bearer access-token\r\nContent-Type: application/json\r\n\r\n"
+                . '{"provider":"wechat","code":"code","device":{"device_uuid":"device-1"},"user_id":"999"}');
+            $response = $callback($request);
+            $this->assertSame($expectedStatus, $response->getStatusCode());
+        }
+        $this->assertSame(4, $keys['auth:gateway:social-login:' . hash('sha256', '0.0.0.0')]);
+        $this->assertSame(2, $keys['auth:gateway:social-login:bind:' . hash('sha256', '0.0.0.0')]);
+        $this->assertSame(2, $keys['auth:gateway:social-login:device:' . hash('sha256', '0.0.0.0|device-1')]);
+        $this->assertSame(2, $keys['auth:gateway:social-login:user:bind:' . hash('sha256', '42')]);
+    }
+
     /**
      * Webman includes config/ once per process at worker startup, so the values
      * (including the environment) are snapshots taken at load time.
@@ -161,7 +215,7 @@ final class GatewayWebmanWiringTest extends TestCase
         $this->assertSame('development', Config::get('gateway.environment'));
         $this->assertSame('auth-service:50051', Config::get('gateway.grpc.auth.target'));
         $this->assertSame('user-service:50052', Config::get('gateway.grpc.user.target'));
-        $this->assertSame(30, Config::get('gateway.social_login_rate_limit.limit'));
+        $this->assertSame(60, Config::get('gateway.social_login_rate_limit.limit'));
         $this->assertSame(60, Config::get('gateway.social_login_rate_limit.window_seconds'));
 
         // The pipeline value is the one captured when the config was loaded:

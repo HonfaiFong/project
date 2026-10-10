@@ -38,10 +38,11 @@ for i in $(seq 1 "$REQUESTS"); do
   # the authoritative success check.
   if [[ "$http_code" != "201" && "$http_code" != "200" ]]; then
     echo "FAILED: probe login $i returned HTTP ${http_code}" >&2
-    cat "$BODY_FILE" >&2
     exit 1
   fi
-  business_code="$(php -r '$b=json_decode(file_get_contents($argv[1]), true); echo is_array($b) ? (string)($b["code"] ?? "") : "";' "$BODY_FILE")"
+  # Never echo the raw body: report only a numeric business code (int or digit
+  # string); any other payload collapses to the fixed word "invalid".
+  business_code="$(php -r '$b=json_decode(file_get_contents($argv[1]), true); $c=is_array($b) ? ($b["code"] ?? null) : null; echo (is_int($c) || (is_string($c) && preg_match("/^-?\\d+$/", $c) === 1)) ? (string) $c : "invalid";' "$BODY_FILE")"
   if [[ "$business_code" != "0" ]]; then
     echo "FAILED: probe login $i returned business code ${business_code}" >&2
     exit 1
@@ -49,17 +50,16 @@ for i in $(seq 1 "$REQUESTS"); do
   printf '%s\n' "$time_total" >> "$TIMINGS_FILE"
 done
 
-summary="$(sort -g "$TIMINGS_FILE" | awk -v n="$REQUESTS" '
+# One sorted pass feeds both the printed report and the budget gate: the
+# reported p95 and the enforced p95 can never diverge.
+percentiles="$(sort -g "$TIMINGS_FILE" | awk -v n="$REQUESTS" '
   NR == int((n * 50 + 99) / 100) { p50 = $1 }
   NR == int((n * 95 + 99) / 100) { p95 = $1 }
   NR == int((n * 99 + 99) / 100) { p99 = $1 }
-  END {
-    printf "social login full-chain latency (%d requests):\n  p50 = %.1f ms\n  p95 = %.1f ms\n  p99 = %.1f ms\n", n, p50 * 1000, p95 * 1000, p99 * 1000
-  }')"
-p95_ms="$(awk -v n="$REQUESTS" '
-  NR == int((n * 95 + 99) / 100) { p95 = $1 }
-  END { printf "%.1f\n", p95 * 1000 }' "$TIMINGS_FILE")"
-echo "$summary"
+  END { printf "%.1f %.1f %.1f\n", p50 * 1000, p95 * 1000, p99 * 1000 }')"
+read -r p50_ms p95_ms p99_ms <<<"$percentiles"
+printf 'social login full-chain latency (%s requests):\n  p50 = %s ms\n  p95 = %s ms\n  p99 = %s ms\n' \
+  "$REQUESTS" "$p50_ms" "$p95_ms" "$p99_ms"
 
 if awk -v p="$p95_ms" -v b="$BUDGET_MS" 'BEGIN { exit !(p >= b) }'; then
   echo "FAILED: p95 ${p95_ms} ms exceeds the ${BUDGET_MS} ms budget (set AUTH_LATENCY_BUDGET_MS to adjust)" >&2

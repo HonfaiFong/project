@@ -16,6 +16,7 @@ parameters:
         - contracts/errors
         - contracts/events
         - tests
+        - scripts/verify_token_latency_probe.php
     excludePaths:
         # generated protobuf code
         - contracts/gen

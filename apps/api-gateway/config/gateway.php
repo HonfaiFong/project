@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Packages\GrpcCommon\DeadlineEnv;
 
 /*
@@ -27,6 +28,14 @@ $grpcDeadlineSettings = [
     'GRPC_SOCIAL_BIND_TIMEOUT_MS'   => $deadlineSetting('GRPC_SOCIAL_BIND_TIMEOUT_MS', 7000),
     'SOCIAL_HTTP_TIMEOUT_MS'        => $deadlineSetting('SOCIAL_HTTP_TIMEOUT_MS', 3000),
 ];
+
+// Validate relationships while loading config, before lazy client resolution.
+AuthServiceClient::validateTimeouts(
+    $grpcDeadlineSettings['GRPC_AUTH_TIMEOUT_MS'],
+    $grpcDeadlineSettings['GRPC_SOCIAL_LOGIN_TIMEOUT_MS'],
+    $grpcDeadlineSettings['GRPC_SOCIAL_BIND_TIMEOUT_MS'],
+    $grpcDeadlineSettings['SOCIAL_HTTP_TIMEOUT_MS'],
+);
 
 // Rate limit windows are counters, not deadlines, but the same rule applies:
 // garbage from the environment must fail loudly at worker start.

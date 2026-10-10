@@ -10,9 +10,14 @@ use Packages\IdGenerator\Snowflake;
 use PDO;
 use Redis;
 use RuntimeException;
+use Services\AuthService\Application\Service\AuthApplicationService;
+use Services\AuthService\Domain\Client\UserDirectoryInterface;
+use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
 use Services\AuthService\Infrastructure\Model\Device as DeviceModel;
 use Services\AuthService\Infrastructure\Repository\EloquentAuthRepository;
+use Services\AuthService\Infrastructure\Token\JwtTokenCodec;
+use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 use Tests\TestCase;
 use Throwable;
 
@@ -176,6 +181,97 @@ final class AuthWarmPathLatencyTest extends TestCase
             self::AUTH_SIDE_BUDGET_MS,
             $this->percentile($redisTimings, 0.95),
             'P95 of the warm revocation lookup exceeded the auth-side deadline budget'
+        );
+    }
+
+    /**
+     * Measures the cumulative auth-side work of one real AuthApplicationService::verifyToken()
+     * call: JWT decode + Redis revocation lookup + MySQL device-ownership query + the
+     * user-directory status check. The UserDirectory is stubbed as ACTIVE because the real
+     * auth->user hop is a network RPC; the 50 ms budget therefore applies to this cumulative
+     * auth-side number, not to each part in isolation.
+     */
+    public function testCumulativeVerifyTokenAuthSideWorkKeepsP95InsideTheAuthSideBudget(): void
+    {
+        $now = date('Y-m-d H:i:s.v');
+        EloquentConnection::model(DeviceModel::class, $this->pdo)->newQuery()->insert([
+            'id'             => 5252525252,
+            'user_id'        => 8484848484,
+            'device_uuid'    => 'latency-verify-token-device',
+            'platform'       => 'ios',
+            'app_version'    => '1.0.0',
+            'last_active_at' => $now,
+            'created_at'     => $now,
+            'updated_at'     => $now,
+        ]);
+
+        $codec = new JwtTokenCodec('warm-path-verify-token-jwt-secret-1234567890');
+        $service = new AuthApplicationService(
+            authRepo: new EloquentAuthRepository($this->pdo, new Snowflake(31)),
+            jwtCodec: $codec,
+            wsTicketIssuer: new WsTicketIssuer('warm-path-verify-token-ws-secret-1234567890', 60),
+            credentialVerifier: new LoginCredentialVerifier('local', 'unused-code', null, true),
+            userDirectory: new class implements UserDirectoryInterface {
+                public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
+                {
+                    throw new RuntimeException('findOrCreateByPhone is not used by verifyToken');
+                }
+
+                public function findOrCreateBySocialIdentity(string $registrationKey, string $registerChannel): array
+                {
+                    throw new RuntimeException('findOrCreateBySocialIdentity is not used by verifyToken');
+                }
+
+                public function findById(string $userId): array
+                {
+                    // Fixture contract: the JWT subject, the device row user_id and
+                    // this stub must all describe user 8484848484 / device 5252525252.
+                    return ['user_id' => $userId, 'status' => UserDirectoryInterface::STATUS_ACTIVE];
+                }
+            },
+            accessTokenRevocationStore: new RedisAccessTokenRevocationStore($this->redis),
+        );
+
+        $token = $codec->encode([
+            'sub'       => '8484848484',
+            'device_id' => '5252525252',
+            'iat'       => time(),
+            'exp'       => time() + 300,
+        ]);
+        $this->redisKeys[] = 'auth:access-token-revoked:' . hash('sha256', $token);
+        $this->redisKeys[] = 'auth:access-device-revoked:5252525252';
+
+        $verify = static fn (): array => $service->verifyToken($token);
+
+        // setUp() already warmed the model and the token is encoded above, so this
+        // first sample is not a worker cold start; it is reported for reference only.
+        $firstMs = $this->measureOnce($verify);
+
+        $timings = $this->measure($verify);
+
+        printf(
+            "Auth warm-path cumulative verifyToken report (%d iterations):\n" .
+            "  first verifyToken call before sampling: %8.2f ms\n" .
+            "  cumulative auth-side verifyToken:   p50=%6.2f ms  p95=%6.2f ms  p99=%6.2f ms  (budget %d ms)\n" .
+            "  scope: JWT decode + Redis revocation + MySQL device ownership + UserDirectory stub;\n" .
+            "         the real user-service network hop is NOT included, so the budget covers the\n" .
+            "         cumulative auth-side number, not each part in isolation.\n",
+            self::WARM_ITERATIONS,
+            $firstMs,
+            $this->percentile($timings, 0.50),
+            $this->percentile($timings, 0.95),
+            $this->percentile($timings, 0.99),
+            self::AUTH_SIDE_BUDGET_MS,
+        );
+
+        $this->assertSame(
+            ['valid' => true, 'user_id' => '8484848484', 'device_id' => '5252525252'],
+            $verify()
+        );
+        $this->assertLessThan(
+            self::AUTH_SIDE_BUDGET_MS,
+            $this->percentile($timings, 0.95),
+            'P95 of the cumulative warm verifyToken auth-side work exceeded the auth-side deadline budget'
         );
     }
 
