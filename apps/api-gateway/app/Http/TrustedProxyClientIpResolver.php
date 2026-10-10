@@ -68,17 +68,33 @@ final class TrustedProxyClientIpResolver
      * one hop and the plain form on another, and a mismatch would silently
      * demote a trusted hop to untrusted (collapsing every client into one
      * shared socket-peer rate bucket) or split one client across two keys.
+     *
+     * The check is binary, not textual: inet_pton accepts several spellings of
+     * the same mapped address (::ffff:10.1.0.1, ::FFFF:10.1.0.1,
+     * ::ffff:a01:1, 0:0:0:0:0:ffff:a01:1), and only the 96-bit zero-plus-ffff
+     * prefix of the packed form decides — a str_starts_with('::ffff:') match
+     * would miss the other spellings and re-break trusted-hop matching.
      */
     private function normalizeIp(string $ip): string
     {
-        if (str_starts_with($ip, '::ffff:')) {
-            $embedded = substr($ip, strlen('::ffff:'));
-            if (filter_var($embedded, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
-                return $embedded;
-            }
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            return $ip;
         }
 
-        return $ip;
+        $packed = inet_pton($ip);
+        if ($packed === false || strlen($packed) !== 16) {
+            return $ip;
+        }
+        if (substr($packed, 0, 12) !== "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff") {
+            return $ip;
+        }
+
+        $embedded = inet_ntop(substr($packed, 12));
+        if ($embedded === false) {
+            return $ip;
+        }
+
+        return $embedded;
     }
 
     private function isTrustedProxy(string $ip): bool

@@ -14,6 +14,7 @@ use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
 use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
+use Apps\ApiGateway\Middleware\SocialBindRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
 use Illuminate\Container\Container;
 use Illuminate\Contracts\Validation\Factory;
@@ -101,6 +102,21 @@ $container->singleton(SocialLoginRateLimitMiddleware::class, static fn (): Socia
     trustedProxyCidrs: $trustedProxyCidrs,
     clientIpResolver: $trustedProxyClientIpResolver,
     environment: $settings['environment'],
+    scenario: 'login',
+    scenarioLimit: $settings['social_login_rate_limit']['scenario_limit'],
+    deviceLimit: $settings['social_login_rate_limit']['device_limit'],
+));
+$container->singleton(SocialBindRateLimitMiddleware::class, static fn (): SocialBindRateLimitMiddleware => new SocialBindRateLimitMiddleware(
+    counter: $socialLoginRateLimitCounter,
+    limit: $settings['social_login_rate_limit']['limit'],
+    windowSeconds: $settings['social_login_rate_limit']['window_seconds'],
+    trustedProxyCidrs: $trustedProxyCidrs,
+    clientIpResolver: $trustedProxyClientIpResolver,
+    environment: $settings['environment'],
+    scenarioLimit: $settings['social_login_rate_limit']['scenario_limit'],
+    deviceLimit: $settings['social_login_rate_limit']['device_limit'],
+    identityLimit: $settings['social_bind_rate_limit']['user_limit'],
+    identityWindowSeconds: $settings['social_bind_rate_limit']['user_window_seconds'],
 ));
 
 return $container;

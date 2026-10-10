@@ -6,6 +6,7 @@ namespace Tests\Unit;
 
 use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 use Webman\Http\Request;
 
@@ -92,6 +93,45 @@ final class TrustedProxyClientIpResolverTest extends TestCase
                 '::ffff:10.1.0.1',
                 ['x-forwarded-for' => '::ffff:198.51.100.10']
             ))
+        );
+    }
+
+    #[DataProvider('ipv4MappedSpellings')]
+    public function testEveryIpv4MappedTextualSpellingBehavesIdentically(string $spelling): void
+    {
+        // inet_pton parses all of these to the same 16 bytes; a prefix-based
+        // normalizer only handled the dotted lowercase one and would demote
+        // the same trusted LB to untrusted for the others.
+        $resolver = new TrustedProxyClientIpResolver(['10.0.0.0/8']);
+
+        $this->assertSame(
+            '198.51.100.10',
+            $resolver->resolve($this->request(
+                $spelling,
+                ['x-forwarded-for' => '198.51.100.10']
+            )),
+            $spelling . ' must normalize to the embedded 10.1.0.1 and stay a trusted proxy'
+        );
+    }
+
+    /** @return list<array{string}> */
+    public static function ipv4MappedSpellings(): array
+    {
+        return [
+            ['::ffff:10.1.0.1'],
+            ['::FFFF:10.1.0.1'],
+            ['::ffff:a01:1'],
+            ['0:0:0:0:0:ffff:a01:1'],
+        ];
+    }
+
+    public function testNonMappedIpv6AddressesAreNotTouched(): void
+    {
+        $resolver = new TrustedProxyClientIpResolver(['fd00::/8']);
+
+        $this->assertSame(
+            '2001:db8::1',
+            $resolver->resolve($this->request('fd00::1', ['x-forwarded-for' => '2001:db8::1']))
         );
     }
 

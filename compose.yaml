@@ -181,6 +181,9 @@ services:
       # Per-hop budget for the AuthService -> UserService directory calls; must
       # stay below the gateway's GRPC_AUTH_TIMEOUT_MS so the outer deadline rules.
       - GRPC_USER_DIRECTORY_TIMEOUT_MS=${GRPC_USER_DIRECTORY_TIMEOUT_MS:-250}
+      # The gateway's outer auth deadline, injected here as well so the worker
+      # can reject a deployed pair that violates the relationship at startup.
+      - GRPC_AUTH_TIMEOUT_MS=${GRPC_AUTH_TIMEOUT_MS:-300}
       - APP_ENV=${APP_ENV:-production}
       # Snowflake service slot (0-31). Replicas of this service must use
       # distinct values; WorkerId::resolve() spreads rr worker processes
@@ -300,8 +303,14 @@ services:
       - GRPC_AUTH_TIMEOUT_MS=${GRPC_AUTH_TIMEOUT_MS:-300}
       - GRPC_SOCIAL_LOGIN_TIMEOUT_MS=${GRPC_SOCIAL_LOGIN_TIMEOUT_MS:-7000}
       - GRPC_SOCIAL_BIND_TIMEOUT_MS=${GRPC_SOCIAL_BIND_TIMEOUT_MS:-7000}
-      - SOCIAL_LOGIN_RATE_LIMIT=${SOCIAL_LOGIN_RATE_LIMIT:-30}
+      # Layered social rate limits: global per-IP ceiling (CGNAT-sized), then
+      # per-IP-per-scenario, per-(IP, device), and per-user bind buckets.
+      - SOCIAL_LOGIN_RATE_LIMIT=${SOCIAL_LOGIN_RATE_LIMIT:-60}
       - SOCIAL_LOGIN_RATE_WINDOW_SECONDS=${SOCIAL_LOGIN_RATE_WINDOW_SECONDS:-60}
+      - SOCIAL_LOGIN_RATE_SCENARIO_LIMIT=${SOCIAL_LOGIN_RATE_SCENARIO_LIMIT:-30}
+      - SOCIAL_LOGIN_RATE_DEVICE_LIMIT=${SOCIAL_LOGIN_RATE_DEVICE_LIMIT:-20}
+      - SOCIAL_BIND_USER_RATE_LIMIT=${SOCIAL_BIND_USER_RATE_LIMIT:-10}
+      - SOCIAL_BIND_USER_RATE_WINDOW_SECONDS=${SOCIAL_BIND_USER_RATE_WINDOW_SECONDS:-3600}
       - SOCIAL_TRUSTED_PROXY_CIDRS=${SOCIAL_TRUSTED_PROXY_CIDRS:-}
     volumes:
       - .:/app

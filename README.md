@@ -98,11 +98,11 @@ AuthService 与 UserService 的 gRPC 端口只在 Compose 内部网络暴露，�
 
 MySQL、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 服务之间继续使用内部 hostname 通信，需要外部访问时再显式设置对应的 `*_BIND_ADDRESS`。
 
-生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`ENABLE_DEV_SMS=false` 且固定验证码为空。当前没有生产短信适配器，QQ/微信开关必须保持关闭；强行开启时 AuthService 拒绝启动。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
+生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`DEV_LOGIN_CODE` 为空。当前没有生产短信适配器，手机号验证码登录仅在本地/测试环境可用（Gateway 路由与 AuthService 双重门禁，生产直接关闭）；微信/QQ OAuth 登录不依赖短信，首次登录自动注册，配置真实 `WECHAT_APP_ID`/`QQ_APP_ID` 凭证并保持官方 HTTPS endpoint 后即可在生产开启。开发环境的 endpoint 覆盖（`WECHAT_TOKEN_ENDPOINT` 等）与 `SOCIAL_OAUTH_ALLOW_INSECURE_HTTP` 在生产环境会触发启动拒绝。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
 
 ### 受信代理链与客户端 IP 限流
 
-`SOCIAL_TRUSTED_PROXY_CIDRS` 接受逗号分隔的多个 CIDR（IPv4/IPv6 均可），用于描述 Gateway 前面的全部受控代理跳数，例如双 CDN + LB 拓扑：
+`SOCIAL_TRUSTED_PROXY_CIDRS` 接受逗号分隔的多个 CIDR（IPv4/IPv6 均可），用于描述 Gateway 前面的全部受控代理跳数。下面是**示例拓扑的示例网段**，`100.64.0.0/10` 与 `10.0.0.0/8` 只是本地测试/文档演示值，不能直接当成 Cloudflare、EdgeOne 或云厂商 SLB 的真实回源网段；生产必须替换为你实际 CDN/LB 链路的受控节点地址（厂商通常发布回源 IP 列表，且可能变更，需要纳入配置管理），同时确保源站只接受这些代理的访问、不能被客户端直连绕过：
 
 ```text
 SOCIAL_TRUSTED_PROXY_CIDRS=100.64.0.0/10,10.0.0.0/8
@@ -112,21 +112,34 @@ SOCIAL_TRUSTED_PROXY_CIDRS=100.64.0.0/10,10.0.0.0/8
 
 客户端 IP 的解析规则是「从最右侧可信代理向左走，第一个不受信地址即客户端」，因此客户端伪造的左侧 XFF 条目（包括伪造一个位于受信网段内的地址）无法改变解析结果；只有当 socket peer 本身落在受信网段内时才读取 `X-Forwarded-For`，不受信 peer 的任何转发头一律忽略。IPv4-mapped IPv6 地址（如 `::ffff:10.1.0.1`）先归一化为内嵌 IPv4 再做网段匹配，避免双栈 LB 因表示形式不同被误判为不受信、导致所有客户端共享一个限流桶。非法 CIDR（含 `0.0.0.0/0`、`::/0`）在 worker 启动时抛错拒绝服务，属于 fail-fast 而不是降级。
 
-社交登录/绑定限流按解析后的客户端 IP 分桶：IPv4 按完整地址，IPv6 归一到 /64 前缀分桶（终端用户可自由轮换低 64 位接口标识，按全址分桶等于无限桶；/64 是单个订阅者的常规粒度）。限流计数依赖 Redis，生产环境 Redis 不可用时拒绝请求（HTTP 503 fail-closed），开发环境放行。
+社交登录/绑定限流是**多层分桶**模型，一次请求必须同时通过所有命中的桶，任一超限即拒绝：
+
+| 桶 | Key 维度 | 默认阈值 | 作用 |
+| :--- | :--- | :--- | :--- |
+| IP 全局 | 客户端 IP | `SOCIAL_LOGIN_RATE_LIMIT=60` / 60s | 单 IP 总天花板，登录+绑定共用 |
+| IP + 场景 | 客户端 IP × login/bind | `SOCIAL_LOGIN_RATE_SCENARIO_LIMIT=30` / 60s | 登录与绑定互不挤占额度 |
+| IP + 设备 | 客户端 IP × device_uuid | `SOCIAL_LOGIN_RATE_DEVICE_LIMIT=20` / 60s | 压制单设备脚本行为，辅助风险信号 |
+| 用户 + 绑定 | 已认证 user_id | `SOCIAL_BIND_USER_RATE_LIMIT=10` / 3600s | 单账号反复绑定独立受限，与来源 IP 无关 |
+
+IPv4 按完整地址分桶；IPv6 归一到 /64 前缀分桶（终端用户可自由轮换低 64 位接口标识，按全址分桶等于无限桶；/64 是单个订阅者的常规粒度）。IPv4-mapped IPv6 地址按二进制归一化为内嵌 IPv4 后再参与受信代理匹配与分桶，`::ffff:10.1.0.1`、`::FFFF:10.1.0.1`、`::ffff:a01:1` 等所有文本写法等价。目标用户多在中国大陆，部分用户经运营商 CGNAT 共享公网 IPv4，因此 IP 全局桶刻意保持宽裕、由场景/设备/用户桶承担精细限制；部署时按实际 NAT 共享度调整全局阈值。设备维度只是附加信号：伪造/轮换 `device_uuid` 只会新增设备桶，永远不会解除 IP 桶限制。限流计数依赖 Redis，生产环境 Redis 不可用时拒绝请求（HTTP 503 fail-closed），开发环境放行。
 
 ### gRPC 超时约束
 
-各超时旋钮不是独立自由值，启动与测试门禁会强制以下关系，违反即拒绝启动：
+各超时旋钮不是独立自由值，以下关系同时由**运行时启动校验**与测试门禁强制，违反即拒绝启动（不是只校验 `.env.example` 默认值）：
 
-| 变量 | 默认 | 约束 |
-| :--- | :--- | :--- |
-| `GRPC_AUTH_TIMEOUT_MS` | 300 | Gateway→Auth 普通调用外层截止时间；必须为正整数 |
-| `GRPC_USER_DIRECTORY_TIMEOUT_MS` | 250 | Auth→User 目录跳预算；必须 **小于** `GRPC_AUTH_TIMEOUT_MS`（保证外层截止先生效），且为正 |
-| `GRPC_SOCIAL_LOGIN_TIMEOUT_MS` | 7000 | 社交登录 RPC 截止；必须 **大于** `2 × SOCIAL_HTTP_TIMEOUT_MS`（QQ 最坏两跳 OAuth HTTP） |
-| `GRPC_SOCIAL_BIND_TIMEOUT_MS` | 7000 | 社交绑定 RPC 截止；同上 |
-| `SOCIAL_HTTP_TIMEOUT_MS` | 3000 | OAuth 上游单次 HTTP 超时 |
+| 变量 | 默认 | 约束 | 强制位置 |
+| :--- | :--- | :--- | :--- |
+| `GRPC_AUTH_TIMEOUT_MS` | 300 | Gateway→Auth 普通调用外层截止时间；必须为正整数 | Gateway `config/gateway.php` 加载即校验 |
+| `GRPC_USER_DIRECTORY_TIMEOUT_MS` | 250 | Auth→User 目录跳预算；必须为正整数，且 **小于** `GRPC_AUTH_TIMEOUT_MS` | `DeadlineEnv` 严格解析 + AuthService 启动时对部署对做跨服务校验（compose.yaml 会把 `GRPC_AUTH_TIMEOUT_MS` 一并注入 auth-service 容器） |
+| `GRPC_SOCIAL_LOGIN_TIMEOUT_MS` | 7000 | 社交登录 RPC 截止；必须 **大于** `2 × SOCIAL_HTTP_TIMEOUT_MS`（QQ 最坏两跳 OAuth HTTP） | Gateway `AuthServiceClient` 构造校验 |
+| `GRPC_SOCIAL_BIND_TIMEOUT_MS` | 7000 | 社交绑定 RPC 截止；同上 | 同上 |
+| `SOCIAL_HTTP_TIMEOUT_MS` | 3000 | OAuth 上游单次 HTTP 超时；必须为正整数 | Gateway 配置加载即校验 |
 
-`GRPC_AUTH_TIMEOUT_MS − GRPC_USER_DIRECTORY_TIMEOUT_MS` 是 Auth 侧自身每调用 ~50ms 的工作预算；worker 启动预热（Eloquent、protobuf 描述符池、JWT 编解码）正是为了把暖路径成本压在该预算内，`tests/Unit/GrpcDeadlineBudgetBenchmarkTest.php` 以基准测试守住这一点，`tests/Unit/GrpcDeadlineConfigContractTest.php` 校验 compose.yaml 与 .env.example 的默认值满足上述跨服务关系。
+非法值（`0`、负数、非数字、带单位的字符串）在任何部署环境都会让对应 worker 拒绝启动——不会像旧的 `max(1, (int)...)` 那样把 `abc` 悄悄钳制成 1ms。严格解析逻辑在 `Packages\GrpcCommon\DeadlineEnv` 中由 Gateway 与 AuthService 共享。
+
+**剩余截止时间的运行时传播**：RoadRunner 不会把传入调用的 gRPC deadline 交给 PHP worker，因此网关在每次调用上以 `x-deadline-unix-ms` 元数据携带绝对截止时间；AuthService 在内部 RPC 授权通过后读取该值（`DeadlineContext`），Auth→User 目录跳的实际预算取 `min(配置值, 剩余值)`，剩余时间耗尽则立刻返回 `RPC_TIMEOUT` 而不是重新花一个完整预算。该元数据只能缩短内部跳预算、永远不能延长，伪造它的最坏效果是让自己的请求更早超时。
+
+`GRPC_AUTH_TIMEOUT_MS − GRPC_USER_DIRECTORY_TIMEOUT_MS` 是 Auth 侧自身每调用 ~50ms 的工作预算；worker 启动预热（Eloquent、protobuf 描述符池、JWT 编解码）正是为了把暖路径成本压在该预算内，`tests/Unit/GrpcDeadlineBudgetBenchmarkTest.php` 守住编解码份额，`tests/Integration/AuthWarmPathLatencyTest.php` 用真实 MySQL/Redis 度量 VerifyToken 暖路径的 P50/P95/P99，`scripts/auth_latency_probe.sh`（`make latency-probe`，也包含在 `make e2e`）对完整链路（Gateway→gRPC→OAuth/MySQL/Redis→User gRPC）输出 P50/P95/P99 报告并守住 P95 预算；`tests/Unit/GrpcDeadlineConfigContractTest.php` 校验 compose.yaml 与 .env.example 的默认值满足上述跨服务关系及启动校验本身。
 
 内部 gRPC 当前明确使用明文传输：`UnaryGrpcClient` 使用 `ChannelCredentials::createInsecure()`，RoadRunner 未配置 TLS。请求、手机号、会话数据和 `x-service-token` 都可能被能够监听内部网络的主体读取。当前部署仅适用于单机、受控且隔离的 Compose 网络；不得发布 Auth/User RPC 端口，不得把不可信容器接入该网络。应用层 token 和方法白名单提供调用授权，不提供传输机密性。
 
@@ -213,11 +226,11 @@ buf lint
 
 ## 8. 端到端 E2E 验证
 
-`make e2e` 运行 Phase 1 业务流及社交登录 HTTP → gRPC → MySQL/Redis 测试。社交测试复用开发短信发送器作为 Fake SMS，通过独立 `fake-oauth` 服务模拟 QQ/微信上游；不调用真实 OAuth 或短信平台。在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
+`make e2e` 运行 Phase 1 业务流、社交登录 HTTP → gRPC → MySQL/Redis 测试，以及真实链路延迟探针（社交登录全链路 P50/P95/P99 报告，见 `make latency-probe`）。微信/QQ 社交登录通过独立 `fake-oauth` 服务模拟上游；手机号登录走开发验证码（`ENABLE_DEV_LOGIN` / `DEV_LOGIN_CODE`），该入口仅供本地与 E2E 测试，**不作为正式登录方式**，生产环境由路由环境门禁与 AuthService 双重关闭。不调用真实 OAuth 或短信平台。在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
 
 ```bash
 export APP_ENV=testing ENABLE_WECHAT_LOGIN=true ENABLE_QQ_LOGIN=true
-export ENABLE_DEV_SMS=true DEV_SMS_CODE=123456 SMS_CODE_PEPPER=e2e-only-sms-code-pepper
+export ENABLE_DEV_LOGIN=true DEV_LOGIN_CODE=123456
 export WECHAT_APP_ID=e2e-wechat-app WECHAT_APP_SECRET=e2e-wechat-secret
 export QQ_APP_ID=e2e-qq-app QQ_APP_KEY=e2e-qq-key QQ_REDIRECT_URI=http://e2e.test/callback
 export SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=true
@@ -229,7 +242,7 @@ docker compose --profile e2e up -d fake-oauth
 make e2e
 ```
 
-**fake-oauth 授权码语义（与真实上游一致的单次兑换）**：测试码格式为 `<provider>-<scenario>-<identity>~<nonce>`，`~nonce` 之前的部分决定外部身份（openid/unionid），完整码串是一次性授权码。fake 上游对每个码只接受一次兑换——包括 503 瞬时失败的尝试也会烧毁该码，重放已消费码返回上游的 invalid code 错误（业务码 `1001009` / HTTP 401）。因此 E2E 中每一次失败恢复（上游瞬时故障、跨服务超时后的重试）都必须携带同身份的**全新**授权码（新 nonce），并断言恢复的是同一本地 User、不产生重复账号；这一契约由 `tests/Unit/SocialAuthServiceTest.php` 与 `scripts/social_e2e_test.sh` 共同守护。
+**fake-oauth 授权码语义（与真实上游一致的单次兑换）**：测试码格式为 `<provider>-<scenario>-<identity>~<nonce>`，`~nonce` 之前的部分决定外部身份（openid/unionid），完整码串是一次性授权码。fake 上游对每个码只接受一次兑换——包括 503 瞬时失败的尝试也会烧毁该码，重放已消费码返回上游的 invalid code 错误（业务码 `1001009` / HTTP 401）。已消费状态记录在状态文件中，读—检查—写的整个周期由 `flock(LOCK_EX)` 保护，多 worker 并发兑换同一码时仍只有一个成功（`tests/Unit/FakeOAuthCodeConsumptionTest.php` 守护）。因此 E2E 中每一次失败恢复（上游瞬时故障、跨服务超时后的重试）都必须携带同身份的**全新**授权码（新 nonce），并断言恢复的是同一本地 User、不产生重复账号；这一契约由 `tests/Unit/SocialAuthServiceTest.php` 与 `scripts/social_e2e_test.sh` 共同守护。
 
 测试会创建用户/会话并修改测试用户状态，应只使用专用测试环境。endpoint 覆盖和 HTTP 开关在生产环境会被启动检查拒绝。仅运行社交部分：
 
@@ -255,7 +268,8 @@ MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TE
 | `make lint` | 执行 PHP 语法校验与 Go vet |
 | `make analyse` | 执行 PHPStan 静态分析 |
 | `make test` | 执行全套单元测试 |
-| `make e2e` | 执行端到端接口冒烟测试 |
+| `make e2e` | 执行端到端接口冒烟测试与全链路延迟探针 |
+| `make latency-probe` | 社交登录真实链路 P50/P95/P99 延迟报告（需已启动的栈） |
 | `make logs` | 查看所有容器运行日志 |
 | `make migrate` | 使用 Phinx 接管历史 Schema 并应用待执行迁移 |
 | `make clean` | 停止并清除本地数据卷 |

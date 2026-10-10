@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -102,6 +103,88 @@ final class GrpcDeadlineConfigContractTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         new \Services\AuthService\Infrastructure\Client\GrpcUserDirectoryClient(timeoutMs: 0);
+    }
+
+    /**
+     * The auth-service bootstrap must reject the same garbage the gateway
+     * rejects: (int) casting in bin/server.php used to clamp 'abc' to 1 ms
+     * and '-100' to a valid-looking positive deadline before the constructor
+     * ever saw it.
+     */
+    #[DataProvider('invalidDeadlineValues')]
+    public function testAuthServiceRejectsInvalidUserDirectoryDeadlineValues(string $value): void
+    {
+        $this->withEnvironment('GRPC_USER_DIRECTORY_TIMEOUT_MS', $value, function (): void {
+            $this->expectException(InvalidArgumentException::class);
+
+            \Services\AuthService\Infrastructure\Config\GrpcDeadlineConfig::fromEnvironment();
+        });
+    }
+
+    /** @return list<array{string}> */
+    public static function invalidDeadlineValues(): array
+    {
+        return [
+            ['0'],
+            ['-100'],
+            ['abc'],
+            ['250ms'],
+            ['7.5'],
+        ];
+    }
+
+    public function testAuthServiceRejectsADirectoryBudgetThatEatsTheGatewayDeadline(): void
+    {
+        $this->withEnvironment('GRPC_AUTH_TIMEOUT_MS', '300', function (): void {
+            $this->withEnvironment('GRPC_USER_DIRECTORY_TIMEOUT_MS', '500', function (): void {
+                $this->expectException(InvalidArgumentException::class);
+                $this->expectExceptionMessageMatches('/must stay below/');
+
+                \Services\AuthService\Infrastructure\Config\GrpcDeadlineConfig::fromEnvironment();
+            });
+        });
+    }
+
+    public function testAuthServiceResolvesAValidDeployedPair(): void
+    {
+        $this->withEnvironment('GRPC_AUTH_TIMEOUT_MS', '300', function (): void {
+            $this->withEnvironment('GRPC_USER_DIRECTORY_TIMEOUT_MS', '250', function (): void {
+                $config = \Services\AuthService\Infrastructure\Config\GrpcDeadlineConfig::fromEnvironment();
+
+                $this->assertSame(250, $config->userDirectoryTimeoutMs);
+                $this->assertSame(300, $config->gatewayAuthTimeoutMs);
+            });
+        });
+    }
+
+    /**
+     * compose.yaml must keep injecting the gateway deadline into the
+     * auth-service container, or the startup cross-check silently stops
+     * seeing the deployed pair.
+     */
+    public function testComposePassesTheGatewayAuthDeadlineToAuthService(): void
+    {
+        $compose = (string)file_get_contents(dirname(__DIR__, 2) . '/compose.yaml');
+        $authServiceSection = substr($compose, (int)strpos($compose, '  auth-service:'));
+        $authServiceSection = substr($authServiceSection, 0, (int)strpos($authServiceSection, '  user-service:'));
+
+        $this->assertMatchesRegularExpression(
+            '/GRPC_AUTH_TIMEOUT_MS=\$\{GRPC_AUTH_TIMEOUT_MS:-300\}/',
+            $authServiceSection,
+            'auth-service environment must carry the gateway GRPC_AUTH_TIMEOUT_MS default'
+        );
+    }
+
+    private function withEnvironment(string $name, string $value, callable $body): void
+    {
+        $previous = getenv($name);
+        putenv($name . '=' . $value);
+
+        try {
+            $body();
+        } finally {
+            $previous === false ? putenv($name) : putenv($name . '=' . $previous);
+        }
     }
 
     /** @return array<string, int> */

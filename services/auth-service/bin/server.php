@@ -20,6 +20,7 @@ use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
+use Services\AuthService\Infrastructure\Config\GrpcDeadlineConfig;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
 use Services\AuthService\Infrastructure\Client\GrpcUserDirectoryClient;
 use Services\AuthService\Infrastructure\Model\Device;
@@ -113,10 +114,13 @@ if (!$credentialVerifier->isDevelopment() && !$credentialVerifier->hasProvider()
     $logger->info('Phone credential login is disabled in production; configured OAuth providers authenticate users.');
 }
 $userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
-$userDirectoryTimeoutMs = max(1, (int)(getenv('GRPC_USER_DIRECTORY_TIMEOUT_MS') ?: '250'));
+// Strict parsing plus the cross-service relationship check: an invalid
+// deadline or a directory budget that eats the gateway's whole auth deadline
+// refuses startup instead of degrading into RPC_TIMEOUT traffic.
+$deadlineConfig = GrpcDeadlineConfig::fromEnvironment();
 $userDirectory = new GrpcUserDirectoryClient(
     target: $userServiceTarget,
-    timeoutMs: $userDirectoryTimeoutMs,
+    timeoutMs: $deadlineConfig->userDirectoryTimeoutMs,
     serviceToken: trim((string)(getenv('GRPC_USER_SERVICE_TOKEN') ?: '')) ?: null,
 );
 $internalRpcToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_AUTH_TOKEN') ?: ''));

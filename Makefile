@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone mysql-ready redis-ready seed e2e e2e-social logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone mysql-ready redis-ready seed e2e e2e-social latency-probe logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -130,9 +130,15 @@ phpstan: analyse
 e2e:
 	bash scripts/e2e_test.sh
 	bash scripts/social_e2e_test.sh
+	bash scripts/auth_latency_probe.sh
 
 e2e-social:
 	bash scripts/social_e2e_test.sh
+
+# P50/P95/P99 report for the real social-login chain (gateway -> gRPC ->
+# OAuth/MySQL/Redis -> user-service) against a running stack.
+latency-probe:
+	bash scripts/auth_latency_probe.sh
 
 logs:
 	docker compose logs -f

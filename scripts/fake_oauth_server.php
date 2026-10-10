@@ -19,7 +19,57 @@ declare(strict_types=1);
 
 function consumedCodeStateFile(): string
 {
-    return sys_get_temp_dir() . '/social-e2e-oauth-consumed-codes.json';
+    // Overridable so tests can point concurrent workers at an isolated file.
+    $directory = getenv('FAKE_OAUTH_STATE_DIR');
+    return ($directory !== false && $directory !== '' ? $directory : sys_get_temp_dir())
+        . '/social-e2e-oauth-consumed-codes.json';
+}
+
+/**
+ * Runs a read-check-write cycle on a JSON state file under an exclusive flock.
+ * file_put_contents(..., LOCK_EX) only guards the write: two workers could
+ * both read "not consumed" and both win the check. The lock must cover the
+ * whole cycle, or single-use semantics break the moment the fake server runs
+ * with more than one worker.
+ *
+ * @template T
+ * @param callable(array<string, mixed>&): T $operation
+ * @return T
+ */
+function withLockedState(string $stateFile, callable $operation): mixed
+{
+    $handle = fopen($stateFile, 'c+');
+    if ($handle === false) {
+        throw new RuntimeException('Cannot open fake OAuth state file: ' . $stateFile);
+    }
+
+    try {
+        if (!flock($handle, LOCK_EX)) {
+            throw new RuntimeException('Cannot lock fake OAuth state file: ' . $stateFile);
+        }
+
+        try {
+            $raw = stream_get_contents($handle);
+            $state = $raw === false || $raw === '' ? [] : json_decode($raw, true);
+            if (!is_array($state)) {
+                $state = [];
+            }
+
+            $result = $operation($state);
+
+            $encoded = json_encode($state, JSON_THROW_ON_ERROR);
+            rewind($handle);
+            fwrite($handle, $encoded);
+            ftruncate($handle, strlen($encoded));
+            fflush($handle);
+
+            return $result;
+        } finally {
+            flock($handle, LOCK_UN);
+        }
+    } finally {
+        fclose($handle);
+    }
 }
 
 /**
@@ -28,22 +78,19 @@ function consumedCodeStateFile(): string
  */
 function consumeCode(string $provider, string $code): bool
 {
-    $stateFile = consumedCodeStateFile();
-    $state = [];
-    if (is_file($stateFile)) {
-        $decoded = json_decode((string)file_get_contents($stateFile), true);
-        $state = is_array($decoded) ? $decoded : [];
-    }
+    return withLockedState(
+        consumedCodeStateFile(),
+        static function (array &$state) use ($provider, $code): bool {
+            $key = $provider . ':' . $code;
+            if (isset($state[$key])) {
+                return false;
+            }
 
-    $key = $provider . ':' . $code;
-    if (isset($state[$key])) {
-        return false;
-    }
+            $state[$key] = true;
 
-    $state[$key] = true;
-    file_put_contents($stateFile, json_encode($state, JSON_THROW_ON_ERROR), LOCK_EX);
-
-    return true;
+            return true;
+        }
+    );
 }
 
 function jsonResponse(int $status, array $payload): never
@@ -56,19 +103,17 @@ function jsonResponse(int $status, array $payload): never
 
 function failTransientOnce(string $key): bool
 {
-    $stateFile = sys_get_temp_dir() . '/social-e2e-oauth-failures.json';
-    $state = [];
-    if (is_file($stateFile)) {
-        $decoded = json_decode((string)file_get_contents($stateFile), true);
-        $state = is_array($decoded) ? $decoded : [];
-    }
-    if (isset($state[$key])) {
-        return false;
-    }
-    $state[$key] = true;
-    file_put_contents($stateFile, json_encode($state, JSON_THROW_ON_ERROR), LOCK_EX);
+    return withLockedState(
+        sys_get_temp_dir() . '/social-e2e-oauth-failures.json',
+        static function (array &$state) use ($key): bool {
+            if (isset($state[$key])) {
+                return false;
+            }
+            $state[$key] = true;
 
-    return true;
+            return true;
+        }
+    );
 }
 
 function queryCode(): string
@@ -88,6 +133,12 @@ function parseScenario(string $code, string $provider): array
     $identitySuffix = explode('~', $parts[2], 2)[0];
 
     return [$parts[1], preg_replace('/[^A-Za-z0-9]/', '', $identitySuffix) ?: 'unknown'];
+}
+
+// The router script only dispatches when serving requests (php -S); under
+// plain CLI it is included by tests exercising the locking helpers above.
+if (PHP_SAPI !== 'cli-server') {
+    return;
 }
 
 $path = parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/';

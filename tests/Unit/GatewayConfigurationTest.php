@@ -70,8 +70,12 @@ final class GatewayConfigurationTest extends TestCase
         $this->assertNull($config['grpc']['auth']['service_token']);
         $this->assertSame('user-service:50052', $config['grpc']['user']['target']);
         $this->assertNull($config['grpc']['user']['service_token']);
-        $this->assertSame(30, $config['social_login_rate_limit']['limit']);
+        $this->assertSame(60, $config['social_login_rate_limit']['limit']);
         $this->assertSame(60, $config['social_login_rate_limit']['window_seconds']);
+        $this->assertSame(30, $config['social_login_rate_limit']['scenario_limit']);
+        $this->assertSame(20, $config['social_login_rate_limit']['device_limit']);
+        $this->assertSame(10, $config['social_bind_rate_limit']['user_limit']);
+        $this->assertSame(3600, $config['social_bind_rate_limit']['user_window_seconds']);
     }
 
     public function testEnvironmentVariablesOverrideTheGatewayConfig(): void

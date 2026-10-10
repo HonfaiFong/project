@@ -26,6 +26,7 @@ use Contracts\Gen\Auth\V1\RefreshTokenRequest;
 use Contracts\Gen\Auth\V1\RefreshTokenResponse;
 use Contracts\Gen\Auth\V1\VerifyTokenRequest;
 use Contracts\Gen\Auth\V1\VerifyTokenResponse;
+use Packages\GrpcCommon\DeadlineContext;
 use Packages\GrpcCommon\ErrorStatusMapper;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Psr\Log\LoggerInterface;
@@ -207,6 +208,10 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             $this->authorizer->authorize($ctx, $method);
         }
 
+        // Caller-supplied deadline is trusted only behind RPC authorization;
+        // downstream hops clamp their budgets to whatever is left of it.
+        $this->bindDeadlineContext($ctx);
+
         $trace = TraceContext::create(
             requestId: $this->metadataValue($ctx, 'x-request-id'),
             traceId: $this->metadataValue($ctx, 'x-trace-id'),
@@ -244,7 +249,24 @@ final class RoadRunnerAuthService implements AuthServiceInterface
             );
         } finally {
             TraceContext::reset();
+            DeadlineContext::reset();
         }
+    }
+
+    /**
+     * The gateway propagates its absolute deadline as x-deadline-unix-ms
+     * because RoadRunner does not surface the transport deadline to PHP
+     * workers. Garbage or missing values leave the configured budgets in
+     * charge; the value can only shrink downstream hop budgets, never extend
+     * them, so a misbehaving authorized caller can only time out its own
+     * request earlier.
+     */
+    private function bindDeadlineContext(ContextInterface $ctx): void
+    {
+        $deadline = $this->metadataValue($ctx, 'x-deadline-unix-ms');
+        DeadlineContext::setCurrent(
+            $deadline !== null && ctype_digit($deadline) ? (int)$deadline : null
+        );
     }
 
     /**

@@ -66,6 +66,12 @@ final class GrpcClientContext
             $metadata['x-service-token'] = [$serviceToken];
         }
 
+        // Absolute deadline in epoch milliseconds. RoadRunner does not expose
+        // the incoming call's remaining time to PHP workers, so receiving
+        // services read this metadata (after caller authorization) to clamp
+        // their own downstream hops to the caller's deadline.
+        $metadata['x-deadline-unix-ms'] = [(string)(DeadlineContext::nowEpochMs() + $timeoutMs)];
+
         return [
             'timeout'  => $timeoutMs * 1000, // microseconds for grpc extension / client
             'metadata' => $metadata,

@@ -11,6 +11,7 @@ use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityRequest;
 use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityResponse;
 use Contracts\Gen\User\V1\GetUserRequest;
 use Contracts\Gen\User\V1\GetUserResponse;
+use Packages\GrpcCommon\DeadlineContext;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
 use InvalidArgumentException;
@@ -54,7 +55,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
                     'register_channel' => $registerChannel,
                 ]),
                 FindOrCreateByPhoneResponse::class,
-                $this->timeoutMs
+                $this->hopTimeoutMs()
             );
         } catch (GrpcCallException $e) {
             $code = $e->appErrorCode ?? match ($e->grpcStatus) {
@@ -90,7 +91,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
                     'register_channel' => $registerChannel,
                 ]),
                 FindOrCreateBySocialIdentityResponse::class,
-                $this->timeoutMs
+                $this->hopTimeoutMs()
             );
         } catch (GrpcCallException $e) {
             $code = $e->appErrorCode ?? match ($e->grpcStatus) {
@@ -126,7 +127,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
                 '/user.v1.UserService/GetUser',
                 new GetUserRequest(['user_id' => $userId]),
                 GetUserResponse::class,
-                $this->timeoutMs
+                $this->hopTimeoutMs()
             );
         } catch (GrpcCallException $e) {
             $code = $e->appErrorCode ?? match ($e->grpcStatus) {
@@ -149,5 +150,24 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
             'user_id' => (string)$user->getId(),
             'status'  => $user->getStatus(),
         ];
+    }
+
+    /**
+     * The configured budget is a ceiling, not an entitlement: when the gateway
+     * propagated its deadline, only the remaining slice may be spent on this
+     * hop so the outer deadline rules. An already-expired deadline fails fast
+     * instead of firing a fresh full-budget network call.
+     */
+    private function hopTimeoutMs(): int
+    {
+        $timeoutMs = DeadlineContext::clampHopBudgetMs($this->timeoutMs);
+        if ($timeoutMs === null) {
+            throw new RuntimeException(
+                ErrorCode::RPC_TIMEOUT->message(),
+                ErrorCode::RPC_TIMEOUT->value
+            );
+        }
+
+        return $timeoutMs;
     }
 }

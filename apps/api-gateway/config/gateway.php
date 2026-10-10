@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Packages\GrpcCommon\DeadlineEnv;
+
 /*
  * API gateway runtime settings.
  *
@@ -13,21 +15,11 @@ declare(strict_types=1);
 
 $environment = strtolower(trim((string)(getenv('APP_ENV') ?: 'production')));
 
-// Deadlines become gRPC timeouts in microseconds, so a zero, negative, or
-// non-numeric value would either expire every call immediately or silently
-// fall back through the falsy "?:" idiom. Resolve explicitly and fail loudly.
-$deadlineSetting = static function (string $name, int $default): int {
-    $raw = getenv($name);
-    $raw = $raw === false ? '' : trim($raw);
-    if ($raw === '') {
-        return $default;
-    }
-    if (!ctype_digit($raw) || (int)$raw < 1) {
-        throw new InvalidArgumentException($name . ' must resolve to a positive deadline in milliseconds, got \'' . $raw . '\'');
-    }
-
-    return (int)$raw;
-};
+// Shared with the auth-service bootstrap (Packages\GrpcCommon\DeadlineEnv):
+// deadlines become gRPC timeouts in microseconds, so a zero, negative, or
+// non-numeric value must fail loudly instead of clamping or falling back
+// through the falsy "?:" idiom.
+$deadlineSetting = DeadlineEnv::positiveMilliseconds(...);
 
 $grpcDeadlineSettings = [
     'GRPC_AUTH_TIMEOUT_MS'          => $deadlineSetting('GRPC_AUTH_TIMEOUT_MS', 300),
@@ -35,6 +27,21 @@ $grpcDeadlineSettings = [
     'GRPC_SOCIAL_BIND_TIMEOUT_MS'   => $deadlineSetting('GRPC_SOCIAL_BIND_TIMEOUT_MS', 7000),
     'SOCIAL_HTTP_TIMEOUT_MS'        => $deadlineSetting('SOCIAL_HTTP_TIMEOUT_MS', 3000),
 ];
+
+// Rate limit windows are counters, not deadlines, but the same rule applies:
+// garbage from the environment must fail loudly at worker start.
+$rateLimitSetting = static function (string $name, int $default): int {
+    $raw = getenv($name);
+    $raw = $raw === false ? '' : trim($raw);
+    if ($raw === '') {
+        return $default;
+    }
+    if (!ctype_digit($raw) || (int)$raw < 1) {
+        throw new InvalidArgumentException($name . ' must resolve to a positive integer, got \'' . $raw . '\'');
+    }
+
+    return (int)$raw;
+};
 
 return [
     // Only two behaviours exist: development (local, development, dev, testing)
@@ -68,7 +75,16 @@ return [
         ],
     ],
     'social_login_rate_limit' => [
-        'limit' => (int)(getenv('SOCIAL_LOGIN_RATE_LIMIT') ?: 30),
-        'window_seconds' => (int)(getenv('SOCIAL_LOGIN_RATE_WINDOW_SECONDS') ?: 60),
+        // Layered buckets: one generous per-IP ceiling across login + bind
+        // (carrier CGNAT shares one IPv4 across real users), then tighter
+        // per-IP-per-scenario, per-(IP, device), and per-user (bind) limits.
+        'limit' => $rateLimitSetting('SOCIAL_LOGIN_RATE_LIMIT', 60),
+        'window_seconds' => $rateLimitSetting('SOCIAL_LOGIN_RATE_WINDOW_SECONDS', 60),
+        'scenario_limit' => $rateLimitSetting('SOCIAL_LOGIN_RATE_SCENARIO_LIMIT', 30),
+        'device_limit' => $rateLimitSetting('SOCIAL_LOGIN_RATE_DEVICE_LIMIT', 20),
+    ],
+    'social_bind_rate_limit' => [
+        'user_limit' => $rateLimitSetting('SOCIAL_BIND_USER_RATE_LIMIT', 10),
+        'user_window_seconds' => $rateLimitSetting('SOCIAL_BIND_USER_RATE_WINDOW_SECONDS', 3600),
     ],
 ];
