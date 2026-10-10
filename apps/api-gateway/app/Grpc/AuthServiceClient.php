@@ -47,6 +47,19 @@ final class AuthServiceClient implements HealthCheckClient, WsTicketClient
         ?UnaryGrpcClient $client = null,
         private readonly ?string $serviceToken = null,
     ) {
+        foreach ([
+            'GRPC_AUTH_TIMEOUT_MS' => $this->timeoutMs,
+            'GRPC_SOCIAL_LOGIN_TIMEOUT_MS' => $this->socialLoginTimeoutMs,
+            'GRPC_SOCIAL_BIND_TIMEOUT_MS' => $this->socialBindTimeoutMs,
+            'SOCIAL_HTTP_TIMEOUT_MS' => $this->socialHttpTimeoutMs,
+        ] as $setting => $milliseconds) {
+            if ($milliseconds < 1) {
+                throw new InvalidArgumentException(
+                    $setting . ' must resolve to a positive deadline in milliseconds'
+                );
+            }
+        }
+
         if ($this->socialLoginTimeoutMs <= 2 * $this->socialHttpTimeoutMs) {
             throw new InvalidArgumentException(
                 'SocialLogin gRPC deadline must exceed two social HTTP timeouts'

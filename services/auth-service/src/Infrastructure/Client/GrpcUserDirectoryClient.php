@@ -13,6 +13,7 @@ use Contracts\Gen\User\V1\GetUserRequest;
 use Contracts\Gen\User\V1\GetUserResponse;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
+use InvalidArgumentException;
 use RuntimeException;
 use Services\AuthService\Domain\Client\UserDirectoryInterface;
 use const Grpc\STATUS_DEADLINE_EXCEEDED;
@@ -27,6 +28,14 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
         private readonly int $timeoutMs = 150,
         private readonly ?string $serviceToken = null,
     ) {
+        // GRPC_USER_DIRECTORY_TIMEOUT_MS becomes the per-call deadline in
+        // microseconds; zero or negative values would expire the call
+        // immediately, so misconfiguration must fail loudly at construction.
+        if ($this->timeoutMs < 1) {
+            throw new InvalidArgumentException(
+                'GRPC_USER_DIRECTORY_TIMEOUT_MS must resolve to a positive deadline in milliseconds'
+            );
+        }
     }
 
     public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array

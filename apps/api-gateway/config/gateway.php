@@ -13,6 +13,29 @@ declare(strict_types=1);
 
 $environment = strtolower(trim((string)(getenv('APP_ENV') ?: 'production')));
 
+// Deadlines become gRPC timeouts in microseconds, so a zero, negative, or
+// non-numeric value would either expire every call immediately or silently
+// fall back through the falsy "?:" idiom. Resolve explicitly and fail loudly.
+$deadlineSetting = static function (string $name, int $default): int {
+    $raw = getenv($name);
+    $raw = $raw === false ? '' : trim($raw);
+    if ($raw === '') {
+        return $default;
+    }
+    if (!ctype_digit($raw) || (int)$raw < 1) {
+        throw new InvalidArgumentException($name . ' must resolve to a positive deadline in milliseconds, got \'' . $raw . '\'');
+    }
+
+    return (int)$raw;
+};
+
+$grpcDeadlineSettings = [
+    'GRPC_AUTH_TIMEOUT_MS'          => $deadlineSetting('GRPC_AUTH_TIMEOUT_MS', 300),
+    'GRPC_SOCIAL_LOGIN_TIMEOUT_MS'  => $deadlineSetting('GRPC_SOCIAL_LOGIN_TIMEOUT_MS', 7000),
+    'GRPC_SOCIAL_BIND_TIMEOUT_MS'   => $deadlineSetting('GRPC_SOCIAL_BIND_TIMEOUT_MS', 7000),
+    'SOCIAL_HTTP_TIMEOUT_MS'        => $deadlineSetting('SOCIAL_HTTP_TIMEOUT_MS', 3000),
+];
+
 return [
     // Only two behaviours exist: development (local, development, dev, testing)
     // and production (everything else, including a missing APP_ENV).
@@ -33,10 +56,10 @@ return [
     'grpc' => [
         'auth' => [
             'target' => getenv('GRPC_AUTH_SERVICE') ?: 'auth-service:50051',
-            'timeout_ms' => (int)(getenv('GRPC_AUTH_TIMEOUT_MS') ?: 300),
-            'social_login_timeout_ms' => (int)(getenv('GRPC_SOCIAL_LOGIN_TIMEOUT_MS') ?: 7000),
-            'social_bind_timeout_ms' => (int)(getenv('GRPC_SOCIAL_BIND_TIMEOUT_MS') ?: 7000),
-            'social_http_timeout_ms' => (int)(getenv('SOCIAL_HTTP_TIMEOUT_MS') ?: 3000),
+            'timeout_ms' => $grpcDeadlineSettings['GRPC_AUTH_TIMEOUT_MS'],
+            'social_login_timeout_ms' => $grpcDeadlineSettings['GRPC_SOCIAL_LOGIN_TIMEOUT_MS'],
+            'social_bind_timeout_ms' => $grpcDeadlineSettings['GRPC_SOCIAL_BIND_TIMEOUT_MS'],
+            'social_http_timeout_ms' => $grpcDeadlineSettings['SOCIAL_HTTP_TIMEOUT_MS'],
             'service_token' => trim((string)(getenv('GRPC_AUTH_TOKEN') ?: '')) ?: null,
         ],
         'user' => [
