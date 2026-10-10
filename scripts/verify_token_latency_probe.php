@@ -17,6 +17,9 @@ declare(strict_types=1);
  * The probe never logs in, never writes accounts, and never prints the access
  * token, request headers, or exception URLs. The token is read only from
  * VERIFY_TOKEN_PROBE_TOKEN.
+ * Before warmup or sampling, an invalid JWT must receive an authentication
+ * rejection and the valid JWT must receive the endpoint's expected data shape.
+ * These two preflight requests are never included in latency statistics.
  *
  * Usage:
  *   VERIFY_TOKEN_PROBE_TOKEN=<access token> php scripts/verify_token_latency_probe.php
@@ -159,6 +162,22 @@ final class VerifyTokenLatencyProbe
             'connect_timeout' => $this->connectTimeoutMs / 1000,
         ];
 
+        foreach ([true, false] as $negative) {
+            $preflightOptions = $options;
+            if ($negative) {
+                // Deliberately malformed JWT; keep Bearer authentication present
+                // so this checks token verification rather than a missing header.
+                $preflightOptions['headers']['Authorization'] = 'Bearer invalid.jwt.probe';
+            }
+            $preflight = $this->preflight($client, $url, $preflightOptions, $negative);
+            if ($preflight['category'] !== 'ok') {
+                return [
+                    'timings_ms' => [],
+                    'outcomes' => [['phase' => $negative ? 'preflight_invalid' : 'preflight_valid'] + $preflight],
+                ];
+            }
+        }
+
         $outcomes = [];
         for ($i = 0; $i < $this->warmup; $i++) {
             $outcomes[] = ['phase' => 'warmup'] + $this->attempt($client, $url, $options);
@@ -207,6 +226,51 @@ final class VerifyTokenLatencyProbe
         ksort($durations);
 
         return ['timings_ms' => array_values($durations), 'outcomes' => $outcomes];
+    }
+
+    /** @param array<string, mixed> $options */
+    private function preflight(Client $client, string $url, array $options, bool $negative): array
+    {
+        try {
+            $response = $client->request('GET', $url, $options);
+        } catch (Throwable $error) {
+            return self::classify(null, $error);
+        }
+
+        $decoded = json_decode((string)$response->getBody());
+        $code = is_object($decoded) && is_int($decoded->code ?? null) ? $decoded->code : null;
+        if ($negative) {
+            $accepted = $response->getStatusCode() === 401 && in_array($code, [
+                ErrorCode::AUTH_TOKEN_INVALID->value,
+                ErrorCode::AUTH_UNAUTHORIZED->value,
+            ], true);
+            return [
+                'category' => $accepted ? 'ok' : 'business',
+                'http_status' => $response->getStatusCode(),
+                'business_code' => $code,
+                'message' => $accepted ? null : 'invalid JWT must receive HTTP 401 with an authentication error code',
+            ];
+        }
+
+        $outcome = self::classify($response, null);
+        if ($outcome['category'] !== 'ok') {
+            // Never report a target-controlled message during preflight.
+            $outcome['message'] = 'valid JWT preflight request failed';
+            return $outcome;
+        }
+        $data = $decoded->data ?? null;
+        $validData = is_object($data) && is_array($data->personas ?? null);
+        if ($this->path === self::ALLOWED_ME_PATH) {
+            $validData = $validData && is_object($data->user ?? null)
+                && is_string($data->user->id ?? null)
+                && $data->user->id !== '';
+        }
+        if (!$validData) {
+            $outcome['category'] = 'business';
+            $outcome['message'] = 'valid JWT response is missing the expected endpoint data structure';
+        }
+
+        return $outcome;
     }
 
     /** @param array<string, mixed> $options */
@@ -402,6 +466,7 @@ final class VerifyTokenLatencyProbe
             'VerifyToken full-chain latency probe (opt-in, concurrent HTTP)',
             sprintf('  target:  GET %s on %s', $this->path, $this->baseUrl),
             sprintf('  samples: %d measured + %d warmup, concurrency %d', $this->requests, $this->warmup, $this->concurrency),
+            '  preflight: invalid JWT rejected and valid JWT data checked (2 unmeasured requests)',
             '  scope:   one sample = the complete authenticated HTTP request: gateway AuthMiddleware',
             '           -> VerifyToken gRPC (JWT + Redis revocation + MySQL device ownership',
             '           + user-service lookup) -> endpoint user-service work. Complete request',
@@ -427,7 +492,13 @@ final class VerifyTokenLatencyProbe
     {
         $run = $this->run($handler);
         if ($run['timings_ms'] === []) {
-            fwrite(STDERR, 'FAILED: no timing samples were recorded' . PHP_EOL);
+            $failure = $run['outcomes'][0] ?? null;
+            fwrite(STDERR, 'FAILED: ' . ($failure === null ? 'no timing samples were recorded' : sprintf(
+                '%s (%s): %s; sampling was not started',
+                $failure['phase'],
+                $failure['category'],
+                $failure['message'] ?? 'authentication preflight failed',
+            )) . PHP_EOL);
 
             return 1;
         }

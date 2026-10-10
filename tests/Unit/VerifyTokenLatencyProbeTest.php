@@ -45,7 +45,11 @@ final class VerifyTokenLatencyProbeTest extends TestCase
     /** @param list<Response|ConnectException> $queue */
     private function mockHandler(array $queue): MockHandler
     {
-        return new MockHandler($queue);
+        return new MockHandler([
+            new Response(401, [], '{"code":' . ErrorCode::AUTH_TOKEN_INVALID->value . '}'),
+            new Response(200, [], '{"code":0,"data":{"personas":[],"user":{"id":"123"}}}'),
+            ...$queue,
+        ]);
     }
 
     /**
@@ -70,7 +74,9 @@ final class VerifyTokenLatencyProbeTest extends TestCase
                 $batch = $tickets;
                 $tickets = [];
                 foreach ($batch as $ticket) {
-                    $response = new Response(200, [], '{"code":0}');
+                    $response = $log['settled'] === 0
+                        ? new Response(401, [], '{"code":' . ErrorCode::AUTH_TOKEN_INVALID->value . '}')
+                        : new Response(200, [], '{"code":0,"data":{"personas":[]}}');
                     $onStats = $ticket['options']['on_stats'] ?? null;
                     if (is_callable($onStats)) {
                         $onStats(new TransferStats($ticket['request'], $response, $transferSeconds, null));
@@ -303,7 +309,7 @@ final class VerifyTokenLatencyProbeTest extends TestCase
         // A fixed 0.25 s TransferStats must surface as exactly 250 ms.
         $this->assertSame([250.0, 250.0, 250.0], $run['timings_ms']);
         $this->assertSame(2, $log['max_inflight']);
-        $this->assertSame(3, $log['settled']);
+        $this->assertSame(5, $log['settled']);
         $this->assertSame(0, $log['inflight']);
 
         $summary = VerifyTokenLatencyProbe::summary($run['timings_ms']);
@@ -333,6 +339,160 @@ final class VerifyTokenLatencyProbeTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('VERIFY_TOKEN_PROBE_TOKEN');
         VerifyTokenLatencyProbe::fromEnvironment([]);
+    }
+
+    /** @return array<string, array{int, string}> */
+    public static function invalidJwtResponses(): array
+    {
+        return [
+            'static success' => [200, '{"code":0}'],
+            'success with data' => [200, '{"code":0,"data":{"personas":[]}}'],
+            'bare 401' => [401, 'Unauthorized'],
+            '401 success code' => [401, '{"code":0}'],
+            '401 unrelated code' => [401, '{"code":9001006}'],
+            '401 string code' => [401, '{"code":"1001003"}'],
+            'wrong HTTP status' => [403, '{"code":1001003}'],
+            'redirect' => [302, '{"code":1001003}'],
+            'unavailable' => [503, '{"code":9001006}'],
+        ];
+    }
+
+    #[DataProvider('invalidJwtResponses')]
+    public function testNegativePreflightRejectsTargetsWithoutExplicitAuthenticationFailure(int $status, string $body): void
+    {
+        $handler = new MockHandler([new Response($status, [], $body)]);
+        $requests = 0;
+        $run = $this->probe(['VERIFY_TOKEN_PROBE_WARMUP' => '3'])->run(
+            static function (RequestInterface $request, array $options) use ($handler, &$requests): PromiseInterface {
+                $requests++;
+                return $handler($request, $options);
+            }
+        );
+
+        $this->assertSame([], $run['timings_ms']);
+        $this->assertCount(1, $run['outcomes']);
+        $this->assertSame('preflight_invalid', $run['outcomes'][0]['phase']);
+        $this->assertSame('business', $run['outcomes'][0]['category']);
+        $this->assertSame(1, $requests);
+        $this->assertCount(0, $handler);
+    }
+
+    /** @return array<string, array{string, string}> */
+    public static function invalidSuccessData(): array
+    {
+        return [
+            'static success' => ['/api/v1/personas', '{"code":0}'],
+            'null data' => ['/api/v1/personas', '{"code":0,"data":null}'],
+            'missing personas' => ['/api/v1/personas', '{"code":0,"data":{}}'],
+            'object personas' => ['/api/v1/personas', '{"code":0,"data":{"personas":{"bad":1}}}'],
+            'empty object personas' => ['/api/v1/personas', '{"code":0,"data":{"personas":{}}}'],
+            'null personas' => ['/api/v1/personas', '{"code":0,"data":{"personas":null}}'],
+            'missing user' => ['/api/v1/me', '{"code":0,"data":{"personas":[]}}'],
+            'empty user id' => ['/api/v1/me', '{"code":0,"data":{"personas":[],"user":{"id":""}}}'],
+            'numeric user id' => ['/api/v1/me', '{"code":0,"data":{"personas":[],"user":{"id":123}}}'],
+            'business failure' => ['/api/v1/personas', '{"code":7,"message":"unit-test-token-never-printed"}'],
+            'invalid JSON' => ['/api/v1/personas', 'not-json'],
+        ];
+    }
+
+    #[DataProvider('invalidSuccessData')]
+    public function testPositivePreflightRequiresTheEndpointDataStructure(string $path, string $body): void
+    {
+        $handler = new MockHandler([
+            new Response(401, [], '{"code":' . ErrorCode::AUTH_TOKEN_INVALID->value . '}'),
+            new Response(200, [], $body),
+        ]);
+        $requests = 0;
+        $run = $this->probe(['VERIFY_TOKEN_PROBE_PATH' => $path])->run(
+            static function (RequestInterface $request, array $options) use ($handler, &$requests): PromiseInterface {
+                $requests++;
+                return $handler($request, $options);
+            }
+        );
+
+        $this->assertSame([], $run['timings_ms']);
+        $this->assertSame('preflight_valid', $run['outcomes'][0]['phase']);
+        $this->assertSame('business', $run['outcomes'][0]['category']);
+        $this->assertStringNotContainsString('unit-test-token-never-printed', $run['outcomes'][0]['message']);
+        $this->assertSame(2, $requests);
+        $this->assertCount(0, $handler);
+    }
+
+    public function testPreflightsUseTheSameTargetBeforeWarmupAndDoNotEnterStatistics(): void
+    {
+        $seen = [];
+        $queue = new MockHandler([
+            new Response(401, [], '{"code":' . ErrorCode::AUTH_UNAUTHORIZED->value . '}'),
+            new Response(200, [], '{"code":0,"data":{"personas":[]}}'),
+            new Response(200, [], '{"code":0}'),
+            new Response(200, [], '{"code":0}'),
+        ]);
+        $handler = static function (RequestInterface $request, array $options) use ($queue, &$seen): PromiseInterface {
+            $seen[] = $request;
+            return $queue($request, $options);
+        };
+        $run = $this->probe(['VERIFY_TOKEN_PROBE_WARMUP' => '1', 'VERIFY_TOKEN_PROBE_REQUESTS' => '1'])->run($handler);
+
+        $this->assertCount(4, $seen);
+        $this->assertSame('Bearer invalid.jwt.probe', $seen[0]->getHeaderLine('Authorization'));
+        foreach ($seen as $index => $request) {
+            $this->assertSame('GET', $request->getMethod());
+            $this->assertSame('http://127.0.0.1:1/api/v1/personas', (string)$request->getUri());
+            if ($index > 0) {
+                $this->assertSame('Bearer unit-test-token-never-printed', $request->getHeaderLine('Authorization'));
+            }
+        }
+        $this->assertSame(['warmup', 'measured'], array_column($run['outcomes'], 'phase'));
+        $this->assertCount(1, $run['timings_ms']);
+    }
+
+    public function testPositivePreflightAcceptsNonEmptyPersonaList(): void
+    {
+        $run = $this->probe(['VERIFY_TOKEN_PROBE_REQUESTS' => '1'])->run(new MockHandler([
+            new Response(401, [], '{"code":' . ErrorCode::AUTH_TOKEN_INVALID->value . '}'),
+            new Response(200, [], '{"code":0,"data":{"personas":[{"id":"456"}]}}'),
+            new Response(200, [], '{"code":0}'),
+        ]));
+
+        $this->assertCount(1, $run['timings_ms']);
+        $this->assertSame(['measured'], array_column($run['outcomes'], 'phase'));
+    }
+
+    public function testPositivePreflightHttpFailureStopsSampling(): void
+    {
+        $run = $this->probe()->run(new MockHandler([
+            new Response(401, [], '{"code":' . ErrorCode::AUTH_TOKEN_INVALID->value . '}'),
+            new Response(503, [], '{"code":' . ErrorCode::SERVICE_UNAVAILABLE->value . '}'),
+        ]));
+
+        $this->assertSame([], $run['timings_ms']);
+        $this->assertSame('preflight_valid', $run['outcomes'][0]['phase']);
+        $this->assertSame('http', $run['outcomes'][0]['category']);
+    }
+
+    public function testPreflightTransportFailureStopsSamplingAndRedactsExceptionContext(): void
+    {
+        $handler = new MockHandler([new ConnectException(
+            'timed out: unit-test-token-never-printed https://secret.invalid',
+            new Request('GET', 'http://127.0.0.1:1/api/v1/personas'),
+            null,
+            ['errno' => 28],
+        )]);
+        $run = $this->probe()->run($handler);
+
+        $this->assertSame([], $run['timings_ms']);
+        $this->assertSame('timeout', $run['outcomes'][0]['category']);
+        $this->assertSame('ConnectException', $run['outcomes'][0]['message']);
+    }
+
+    public function testExecuteFailsWithoutPrintingLatencyWhenAuthenticationPreflightFails(): void
+    {
+        ob_start();
+        $exitCode = $this->probe()->execute(new MockHandler([new Response(200, [], '{"code":0}') ]));
+        $stdout = (string)ob_get_clean();
+
+        $this->assertSame(1, $exitCode);
+        $this->assertSame('', $stdout);
     }
 
     public function testInvalidNumericSettingIsRejected(): void

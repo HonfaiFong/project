@@ -146,6 +146,8 @@ IPv4 按完整地址分桶；IPv6 归一到 /64 前缀分桶（终端用户可�
 
 已认证 HTTP 链路另有可选探针 `scripts/verify_token_latency_probe.php`，从环境变量 `VERIFY_TOKEN_PROBE_TOKEN` 读取现有测试用户的有效 access token，以 GET `/api/v1/personas`（或 `/api/v1/me`）采样；无需反复社交登录，因此不会消耗登录限流额度。配置请求数、预热数、并发数及 P95 门禁后执行，例如：
 
+探针先对同一接口进行两次不计入延迟统计的认证预检查：无效 JWT 必须返回 HTTP 401 和整数认证错误码 `AUTH_TOKEN_INVALID` 或 `AUTH_UNAUTHORIZED`；有效 JWT 必须返回成功业务码及 `data.personas` JSON 列表，`/api/v1/me` 还要求 `data.user.id` 为非空字符串。两项均通过后才执行预热与正式采样；任一失败立即以退出码 1 停止，不输出延迟指标，避免错误目标或静态成功响应造成虚假通过。
+
 ```bash
 VERIFY_TOKEN_PROBE_REQUESTS=500 VERIFY_TOKEN_PROBE_WARMUP=20 \
 VERIFY_TOKEN_PROBE_CONCURRENCY=16 VERIFY_TOKEN_PROBE_BUDGET_MS=1000 \
