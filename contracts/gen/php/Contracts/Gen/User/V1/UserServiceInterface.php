@@ -76,6 +76,15 @@ interface UserServiceInterface extends GRPC\ServiceInterface
 
     /**
     * @param GRPC\ContextInterface $ctx
+    * @param ValidatePersonaOwnershipRequest $in
+    * @return ValidatePersonaOwnershipResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function ValidatePersonaOwnership(GRPC\ContextInterface $ctx, ValidatePersonaOwnershipRequest $in): ValidatePersonaOwnershipResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
     * @param BatchGetPersonasRequest $in
     * @return BatchGetPersonasResponse
     *

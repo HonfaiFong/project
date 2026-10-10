@@ -28,6 +28,8 @@ use Contracts\Gen\User\V1\UpdateUserRequest;
 use Contracts\Gen\User\V1\UpdateUserResponse;
 use Contracts\Gen\User\V1\UserProfile;
 use Contracts\Gen\User\V1\UserServiceInterface;
+use Contracts\Gen\User\V1\ValidatePersonaOwnershipRequest;
+use Contracts\Gen\User\V1\ValidatePersonaOwnershipResponse;
 use Packages\GrpcCommon\ErrorStatusMapper;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Psr\Log\LoggerInterface;
@@ -176,6 +178,27 @@ final readonly class UserGrpcService implements UserServiceInterface
             $persona = $this->userService->getPersona($this->requireId($in->getPersonaId(), 'persona_id'));
 
             return (new GetPersonaResponse())->setPersona($this->toPersonaProfile($persona));
+        });
+    }
+
+    /**
+     * Internal identity authorization used by gateway actions before they
+     * promote a requested persona into trusted request context.
+     *
+     * @throws RandomException
+     * @throws GRPCException
+     */
+    public function ValidatePersonaOwnership(
+        ContextInterface $ctx,
+        ValidatePersonaOwnershipRequest $in
+    ): ValidatePersonaOwnershipResponse {
+        return $this->call($ctx, 'ValidatePersonaOwnership', function () use ($in): ValidatePersonaOwnershipResponse {
+            $persona = $this->userService->assertPersonaUsableByUser(
+                userId: $this->requireId($in->getUserId(), 'user_id'),
+                personaId: $this->requireId($in->getPersonaId(), 'persona_id'),
+            );
+
+            return (new ValidatePersonaOwnershipResponse())->setPersona($this->toPersonaProfile($persona));
         });
     }
 

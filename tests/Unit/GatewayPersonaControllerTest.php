@@ -42,6 +42,32 @@ final class GatewayPersonaControllerTest extends TestCase
         $this->assertArrayNotHasKey('user_id', json_decode($response->rawBody(), true)['data']);
     }
 
+    public function testCreateUsesAuthenticatedUserAndAlwaysLeavesLegacyTypeUnset(): void
+    {
+        $grpc = $this->createMock(UnaryGrpcClient::class);
+        $grpc->expects($this->once())->method('call')->with(
+            '/user.v1.UserService/CreatePersona',
+            $this->callback(static function (CreatePersonaRequest $request): bool {
+                self::assertSame('42', (string)$request->getUserId());
+                self::assertSame(0, $request->getType());
+                self::assertSame('alias', $request->getNickname());
+
+                return true;
+            }),
+            CreatePersonaResponse::class,
+            150,
+        )->willReturn(new CreatePersonaResponse(['persona' => new PersonaProfile(['id' => '7'])]));
+
+        $request = $this->request([
+            'nickname' => 'alias',
+            'user_id' => '99999',
+            'type' => 1,
+        ]);
+        $response = $this->controller($grpc)->create($request);
+
+        $this->assertSame(201, $response->getStatusCode());
+    }
+
     #[DataProvider('optionalFields')]
     public function testUpdatePreservesFieldPresenceForPatch(array $fields, string $expected, bool $present): void
     {

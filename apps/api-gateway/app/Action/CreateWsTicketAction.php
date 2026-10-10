@@ -8,6 +8,7 @@ use Exception;
 use Contracts\Errors\ErrorCode;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
+use Throwable;
 
 final readonly class CreateWsTicketAction
 {
@@ -41,9 +42,12 @@ final readonly class CreateWsTicketAction
             throw new RuntimeException('unauthorized', ErrorCode::AUTH_UNAUTHORIZED->value);
         }
 
-        $personaRes = $this->userClient->getPersona($personaId);
+        // UserService performs the authoritative account, ownership and
+        // current-status check. The client-provided persona id is not trusted
+        // until this RPC succeeds.
+        $personaRes = $this->userClient->validatePersonaOwnership($userId, $personaId);
         $persona = $personaRes['persona'] ?? null;
-        if (!is_array($persona) || (string)($persona['user_id'] ?? '') !== $userId) {
+        if (!is_array($persona) || (string)($persona['id'] ?? '') !== $personaId) {
             throw new RuntimeException('forbidden persona access', ErrorCode::PERSONA_FORBIDDEN->value);
         }
 
@@ -51,7 +55,10 @@ final readonly class CreateWsTicketAction
             throw new RuntimeException('persona is inactive', ErrorCode::PERSONA_FORBIDDEN->value);
         }
 
-        // 仅在 UserService 校验 persona 归属通过后，才把身份提升进可信 TraceContext。
+        // The validated persona must be present while AuthService issues the
+        // ticket so its audit/metadata path receives the same trusted identity.
+        // Restore the previous context if issuance fails because this worker
+        // may serve another request after the exception is handled.
         $currentTrace = TraceContext::current();
         TraceContext::setCurrent(TraceContext::create(
             requestId: $currentTrace->requestId,
@@ -63,11 +70,16 @@ final readonly class CreateWsTicketAction
             traceparent: $currentTrace->traceparent
         ));
 
-        $res = $this->authClient->createWsTicket($userId, $personaId, $deviceId);
+        try {
+            $res = $this->authClient->createWsTicket($userId, $personaId, $deviceId);
 
-        return [
-            'ticket'     => (string)$res['ticket'],
-            'expires_at' => (string)$res['expires_at'],
-        ];
+            return [
+                'ticket'     => (string)$res['ticket'],
+                'expires_at' => (string)$res['expires_at'],
+            ];
+        } catch (Throwable $exception) {
+            TraceContext::setCurrent($currentTrace);
+            throw $exception;
+        }
     }
 }

@@ -17,6 +17,7 @@ use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Contracts\Gen\User\V1\FindOrCreateByPhoneRequest;
 use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityRequest;
 use Contracts\Gen\User\V1\GetUserRequest;
+use Contracts\Gen\User\V1\ValidatePersonaOwnershipRequest;
 use Contracts\Gen\User\V1\UserServiceInterface;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Infrastructure\Model\PersonaModel;
@@ -89,6 +90,7 @@ $phoneNormalizer = new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGIO
 (new FindOrCreateByPhoneRequest())->serializeToString();
 (new FindOrCreateBySocialIdentityRequest())->serializeToString();
 (new GetUserRequest())->serializeToString();
+(new ValidatePersonaOwnershipRequest())->serializeToString();
 $phoneNormalizer->normalize('+8613800000000');
 $gatewayRpcToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_USER_TOKEN') ?: ''));
 $authRpcToken = trim((string)(getenv('INTERNAL_RPC_AUTH_USER_TOKEN') ?: ''));
@@ -98,6 +100,22 @@ $internalRpcAuthorizer = new InternalRpcAuthorizer(
         'auth-service' => $authRpcToken,
     ],
     allowedMethodsByCaller: [
+        // Keep the gateway's public surface explicit so adding an internal
+        // RPC cannot accidentally widen either caller's privileges.
+        'api-gateway' => [
+            'FindOrCreateByPhone',
+            'FindOrCreateBySocialIdentity',
+            'GetUser',
+            'BatchGetUsers',
+            'UpdateUser',
+            'CreatePersona',
+            'GetPersona',
+            'ValidatePersonaOwnership',
+            'BatchGetPersonas',
+            'UpdatePersona',
+            'ListPersonas',
+            'Check',
+        ],
         'auth-service' => ['FindOrCreateByPhone', 'FindOrCreateBySocialIdentity', 'GetUser'],
     ],
 );

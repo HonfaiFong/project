@@ -14,6 +14,7 @@ use RuntimeException;
 use Random\RandomException;
 use Throwable;
 use Services\UserService\Domain\Entity\Persona;
+use Services\UserService\Domain\Entity\PersonaType;
 use Services\UserService\Domain\Entity\User;
 use Services\UserService\Domain\Exception\DuplicateUserException;
 use Services\UserService\Domain\Repository\PersonaRepositoryInterface;
@@ -23,6 +24,9 @@ use Services\UserService\Domain\Repository\UserRepositoryInterface;
 final class UserApplicationService
 {
     private const MAX_PERSONAS_PER_USER = 5;
+    private const MAX_PERSONA_NICKNAME_LENGTH = 64;
+    private const MAX_PERSONA_AVATAR_KEY_LENGTH = 255;
+    private const MAX_PERSONA_BIO_LENGTH = 500;
 
     /** Kept in sync with the users.social_registration_key column width. */
     private const MAX_REGISTRATION_KEY_LENGTH = 128;
@@ -204,7 +208,15 @@ final class UserApplicationService
         });
     }
 
-    /** @throws Throwable */
+    /**
+     * Compatibility entry point for the legacy RPC.
+     *
+     * The old `type` field is retained in the protobuf so older clients can
+     * be upgraded independently. Zero (the proto3 default) and ALIAS both
+     * mean "create an alias"; MAIN and unknown values are rejected.
+     *
+     * @throws Throwable
+     */
     public function createPersona(
         string $userId,
         int $type,
@@ -212,10 +224,41 @@ final class UserApplicationService
         ?string $avatarKey = null,
         ?string $bio = null
     ): Persona {
-        return $this->transaction(function () use ($userId, $type, $nickname, $avatarKey, $bio): Persona {
+        if ($type === PersonaType::MAIN->value) {
+            throw new RuntimeException(
+                'The main persona is created during registration and cannot be created here',
+                ErrorCode::PERSONA_FORBIDDEN->value,
+            );
+        }
+        if ($type !== 0 && $type !== PersonaType::ALIAS->value) {
+            throw new RuntimeException('Unsupported persona type', ErrorCode::INVALID_ARGUMENT->value);
+        }
+
+        return $this->createAliasPersona($userId, $nickname, $avatarKey, $bio);
+    }
+
+    /** @throws Throwable */
+    public function createAliasPersona(
+        string $userId,
+        string $nickname,
+        ?string $avatarKey = null,
+        ?string $bio = null
+    ): Persona {
+        $nickname = $this->normalizePersonaNickname($nickname);
+        $avatarKey = $this->normalizePersonaNullableText(
+            $avatarKey,
+            self::MAX_PERSONA_AVATAR_KEY_LENGTH,
+            'avatar_key',
+        );
+        $bio = $this->normalizePersonaNullableText($bio, self::MAX_PERSONA_BIO_LENGTH, 'bio');
+
+        return $this->transaction(function () use ($userId, $nickname, $avatarKey, $bio): Persona {
             $user = $this->userRepo->findByIdForUpdate($userId);
             if (!$user) {
                 throw new RuntimeException('User not found', ErrorCode::USER_NOT_FOUND->value);
+            }
+            if (!$user->isActive()) {
+                throw new RuntimeException(ErrorCode::USER_BANNED->message(), ErrorCode::USER_BANNED->value);
             }
 
             $count = $this->personaRepo->countByUserId($userId);
@@ -224,7 +267,14 @@ final class UserApplicationService
             }
 
             $id = $this->snowflake->nextId();
-            $persona = $this->personaRepo->create($id, $userId, $type, $nickname, $avatarKey, $bio);
+            $persona = $this->personaRepo->create(
+                $id,
+                $userId,
+                PersonaType::ALIAS->value,
+                $nickname,
+                $avatarKey,
+                $bio,
+            );
             $this->recordEvent(
                 aggregateType: 'persona',
                 aggregateId: $persona->id,
@@ -235,6 +285,28 @@ final class UserApplicationService
 
             return $persona;
         });
+    }
+
+    /**
+     * Validate the account and persona together before an identity-bearing
+     * operation. Callers must use the returned entity and never trust a
+     * client-supplied user_id or persona status after this point.
+     *
+     * @throws RuntimeException
+     */
+    public function assertPersonaUsableByUser(string $userId, string $personaId): Persona
+    {
+        $persona = $this->personaRepo->findById($personaId);
+        if (!$persona || $persona->userId !== $userId || $persona->status !== 1) {
+            throw new RuntimeException(ErrorCode::PERSONA_FORBIDDEN->message(), ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+
+        $user = $this->userRepo->findById($userId);
+        if (!$user || !$user->isActive()) {
+            throw new RuntimeException(ErrorCode::USER_BANNED->message(), ErrorCode::USER_BANNED->value);
+        }
+
+        return $persona;
     }
 
     public function getPersona(string $personaId): Persona
@@ -264,13 +336,14 @@ final class UserApplicationService
         ?string $bio = null
     ): Persona {
         return $this->transaction(function () use ($personaId, $userId, $nickname, $avatarKey, $bio): Persona {
-            $persona = $this->personaRepo->findById($personaId);
-            if (!$persona) {
-                throw new RuntimeException('Persona not found', ErrorCode::PERSONA_NOT_FOUND->value);
-            }
-            if ($persona->userId !== $userId) {
-                throw new RuntimeException('Forbidden persona modification', ErrorCode::PERSONA_FORBIDDEN->value);
-            }
+            $this->assertPersonaUsableByUser($userId, $personaId);
+            $nickname = $nickname !== null ? $this->normalizePersonaNickname($nickname) : null;
+            $avatarKey = $this->normalizePersonaNullableText(
+                $avatarKey,
+                self::MAX_PERSONA_AVATAR_KEY_LENGTH,
+                'avatar_key',
+            );
+            $bio = $this->normalizePersonaNullableText($bio, self::MAX_PERSONA_BIO_LENGTH, 'bio');
 
             $updated = $this->personaRepo->update($personaId, $userId, $nickname, $avatarKey, $bio);
             if (!$updated) {
@@ -294,6 +367,14 @@ final class UserApplicationService
      */
     public function listPersonas(string $userId): array
     {
+        $user = $this->userRepo->findById($userId);
+        if (!$user) {
+            throw new RuntimeException('User not found', ErrorCode::USER_NOT_FOUND->value);
+        }
+        if (!$user->isActive()) {
+            throw new RuntimeException(ErrorCode::USER_BANNED->message(), ErrorCode::USER_BANNED->value);
+        }
+
         return $this->personaRepo->findByUserId($userId);
     }
 
@@ -332,7 +413,7 @@ final class UserApplicationService
         $persona = $this->personaRepo->create(
             id: $personaId,
             userId: $id,
-            type: 1,
+            type: PersonaType::MAIN->value,
             nickname: 'User_' . substr($id, -4),
             avatarKey: null,
             bio: null
@@ -374,6 +455,36 @@ final class UserApplicationService
         }
 
         return $registrationKey;
+    }
+
+    private function normalizePersonaNickname(string $nickname): string
+    {
+        $nickname = trim($nickname);
+        if ($nickname === '') {
+            throw new RuntimeException('nickname is required', ErrorCode::INVALID_ARGUMENT->value);
+        }
+        if ($this->personaTextLength($nickname) > self::MAX_PERSONA_NICKNAME_LENGTH) {
+            throw new RuntimeException('nickname is too long', ErrorCode::INVALID_ARGUMENT->value);
+        }
+
+        return $nickname;
+    }
+
+    private function normalizePersonaNullableText(?string $value, int $maxLength, string $field): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+        if ($this->personaTextLength($value) > $maxLength) {
+            throw new RuntimeException($field . ' is too long', ErrorCode::INVALID_ARGUMENT->value);
+        }
+
+        return $value;
+    }
+
+    private function personaTextLength(string $value): int
+    {
+        return function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value);
     }
 
     /**

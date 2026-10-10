@@ -20,7 +20,9 @@ message PersonaProfile {
 
 message CreatePersonaRequest {
   uint64 user_id = 1;
-  int32 type = 2;
+  // Deprecated compatibility field. The create endpoint always creates an
+  // ALIAS; zero (omitted) and 2 are accepted, while MAIN is rejected.
+  int32 type = 2 [deprecated = true];
   string nickname = 3;
   string avatar_key = 4;
   string bio = 5;
@@ -35,6 +37,17 @@ message GetPersonaRequest {
 }
 
 message GetPersonaResponse {
+  PersonaProfile persona = 1;
+}
+
+// Validates that a persona belongs to the authenticated account and is usable.
+// The response is an internal profile; public callers must use a presenter.
+message ValidatePersonaOwnershipRequest {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+}
+
+message ValidatePersonaOwnershipResponse {
   PersonaProfile persona = 1;
 }
 

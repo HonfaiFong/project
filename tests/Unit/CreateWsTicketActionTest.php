@@ -14,6 +14,12 @@ use Tests\TestCase;
 
 final class CreateWsTicketActionTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        TraceContext::reset();
+        parent::tearDown();
+    }
+
     public function testRejectsMismatchedPersonaIds(): void
     {
         $action = new CreateWsTicketAction(
@@ -47,10 +53,10 @@ final class CreateWsTicketActionTest extends TestCase
     public function testRejectsPersonaNotOwnedByUser(): void
     {
         $userClient = $this->createMock(PersonaLookup::class);
-        $userClient->method('getPersona')->willReturn([
+        $userClient->method('validatePersonaOwnership')->willReturn([
             'persona' => [
-                'id'      => '30001',
-                'user_id' => '99999', // Different user
+                'id'      => '99999',
+                'user_id' => '99999', // 不同用户
                 'status'  => 1,
             ],
         ]);
@@ -73,7 +79,7 @@ final class CreateWsTicketActionTest extends TestCase
     public function testRejectsInactivePersona(): void
     {
         $userClient = $this->createMock(PersonaLookup::class);
-        $userClient->method('getPersona')->willReturn([
+        $userClient->method('validatePersonaOwnership')->willReturn([
             'persona' => [
                 'id'      => '30001',
                 'user_id' => '20001',
@@ -99,7 +105,7 @@ final class CreateWsTicketActionTest extends TestCase
     public function testElevatesTraceContextAndIssuesTicket(): void
     {
         $userClient = $this->createMock(PersonaLookup::class);
-        $userClient->method('getPersona')->willReturn([
+        $userClient->method('validatePersonaOwnership')->willReturn([
             'persona' => [
                 'id'      => '30001',
                 'user_id' => '20001',
@@ -108,10 +114,15 @@ final class CreateWsTicketActionTest extends TestCase
         ]);
 
         $authClient = $this->createMock(WsTicketClient::class);
-        $authClient->method('createWsTicket')->willReturn([
-            'ticket'     => 'test-ticket-xyz',
-            'expires_at' => '1700000060',
-        ]);
+        $authClient->method('createWsTicket')->willReturnCallback(function (): array {
+            $this->assertSame('20001', TraceContext::current()->userId);
+            $this->assertSame('30001', TraceContext::current()->personaId);
+
+            return [
+                'ticket'     => 'test-ticket-xyz',
+                'expires_at' => '1700000060',
+            ];
+        });
 
         $action = new CreateWsTicketAction($authClient, $userClient);
 
@@ -124,5 +135,36 @@ final class CreateWsTicketActionTest extends TestCase
         $this->assertSame('1700000060', $result['expires_at']);
         $this->assertSame('30001', TraceContext::current()->personaId);
         $this->assertSame('20001', TraceContext::current()->userId);
+    }
+
+    public function testRestoresTraceContextWhenTicketIssuanceFails(): void
+    {
+        $original = TraceContext::create(
+            requestId: 'request-before-ticket',
+            traceId: str_repeat('a', 32),
+            userId: '20001',
+            personaId: null,
+            deviceId: 'dev-001',
+        );
+        TraceContext::setCurrent($original);
+
+        $userClient = $this->createMock(PersonaLookup::class);
+        $userClient->method('validatePersonaOwnership')->willReturn([
+            'persona' => ['id' => '30001', 'status' => 1],
+        ]);
+        $authClient = $this->createMock(WsTicketClient::class);
+        $authClient->method('createWsTicket')->willThrowException(new RuntimeException('issuer unavailable'));
+
+        try {
+            (new CreateWsTicketAction($authClient, $userClient))->execute(
+                ['persona_id' => '30001'],
+                ['user_id' => '20001', 'device_id' => 'dev-001'],
+            );
+            $this->fail('Expected ticket issuance to fail');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('issuer unavailable', $exception->getMessage());
+        }
+
+        $this->assertSame($original, TraceContext::current());
     }
 }

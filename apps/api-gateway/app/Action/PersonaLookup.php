@@ -10,4 +10,9 @@ interface PersonaLookup
      * @return array{persona?: array<string, mixed>}
      */
     public function getPersona(string $personaId): array;
+
+    /**
+     * @return array{persona?: array<string, mixed>}
+     */
+    public function validatePersonaOwnership(string $userId, string $personaId): array;
 }

@@ -15,6 +15,7 @@ use Packages\Database\EloquentConnection;
 use Packages\Outbox\Model\OutboxEvent;
 use Phinx\Db\Adapter\MysqlAdapter;
 use Phinx\Migration\IrreversibleMigrationException;
+use Phinx\Migration\AbstractMigration;
 use Services\AuthService\Infrastructure\Model\SocialIdentity;
 use Services\AuthService\Infrastructure\Model\SocialIdentityAlias;
 use Services\UserService\Infrastructure\Model\UserModel;
@@ -111,6 +112,76 @@ final class PhinxMigrationTest extends TestCase
         $this->assertSame(1, $this->model(SocialIdentity::class, 'auth_db')->newQuery()->count());
         $this->assertSame('Abc', $this->model(SocialIdentity::class, 'auth_db')->newQuery()
             ->whereKey('100000000000000001')->value('openid'));
+    }
+
+    public function testPersonaMainUniquenessIncludesSoftDeletedRows(): void
+    {
+        $this->assertMigrationSucceeds();
+        $this->assertColumnExists('user_db', 'personas', 'main_user_id');
+        $this->assertIndexExists('user_db', 'personas', 'uniq_main_persona_user');
+        $this->assertIndexExists('user_db', 'personas', 'idx_user_type_status');
+
+        $table = '`' . $this->prefix . 'user_db`.`personas`';
+        $now = gmdate('Y-m-d H:i:s.v');
+        $insert = $this->pdo->prepare(
+            'INSERT INTO ' . $table . ' '
+            . '(`id`, `user_id`, `type`, `nickname`, `avatar_key`, `bio`, `status`, `created_at`, `updated_at`, `deleted_at`) '
+            . 'VALUES (:id, :user_id, :type, :nickname, NULL, NULL, 1, :created_at, :updated_at, :deleted_at)',
+        );
+        $insert->execute([
+            'id' => '700000000000000001', 'user_id' => '800000000000000001', 'type' => 1,
+            'nickname' => 'Deleted main', 'created_at' => $now, 'updated_at' => $now, 'deleted_at' => $now,
+        ]);
+
+        try {
+            $insert->execute([
+                'id' => '700000000000000002', 'user_id' => '800000000000000001', 'type' => 1,
+                'nickname' => 'Replacement main', 'created_at' => $now, 'updated_at' => $now, 'deleted_at' => null,
+            ]);
+            $this->fail('A soft-deleted main persona must keep the account uniqueness slot');
+        } catch (PDOException $exception) {
+            $this->assertSame('23000', $exception->getCode());
+            $this->assertStringContainsString('uniq_main_persona_user', $exception->getMessage());
+        }
+
+        $insert->execute([
+            'id' => '700000000000000003', 'user_id' => '800000000000000001', 'type' => 2,
+            'nickname' => 'Alias', 'created_at' => $now, 'updated_at' => $now, 'deleted_at' => null,
+        ]);
+        $this->assertNull($this->pdo->query(
+            'SELECT `main_user_id` FROM ' . $table . ' WHERE `id` = 700000000000000003',
+        )->fetchColumn());
+    }
+
+    public function testPersonaConstraintMigrationRejectsDriftedGeneratedColumn(): void
+    {
+        $this->assertMigrationSucceeds();
+        $table = '`' . $this->prefix . 'user_db`.`personas`';
+        $this->pdo->exec(
+            'ALTER TABLE ' . $table
+            . ' DROP INDEX `uniq_main_persona_user`, DROP COLUMN `main_user_id`, '
+            . 'ADD COLUMN `main_user_id` BIGINT UNSIGNED GENERATED ALWAYS AS '
+            . '(CASE WHEN `type` = 2 THEN `user_id` ELSE NULL END) STORED, '
+            . 'ADD UNIQUE KEY `uniq_main_persona_user` (`main_user_id`)',
+        );
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('main_user_id exists but is not the expected generated column');
+        call_user_func([$this->personaConstraintMigration(), 'up']);
+    }
+
+    public function testPersonaConstraintMigrationRejectsDriftedNamedIndex(): void
+    {
+        $this->assertMigrationSucceeds();
+        $table = '`' . $this->prefix . 'user_db`.`personas`';
+        $this->pdo->exec(
+            'ALTER TABLE ' . $table
+            . ' DROP INDEX `idx_user_type_status`, ADD INDEX `idx_user_type_status` (`user_id`)',
+        );
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('idx_user_type_status has an unexpected definition');
+        call_user_func([$this->personaConstraintMigration(), 'up']);
     }
 
     /** @throws JsonException */
@@ -372,6 +443,20 @@ final class PhinxMigrationTest extends TestCase
         $this->assertSame($before, $this->migrationCounts());
         $this->assertColumnExists('user_db', 'users', 'social_registration_key');
         $this->assertTrue($this->schema()->hasTable($this->prefix . 'auth_db.social_identity_aliases'));
+    }
+
+    private function personaConstraintMigration(): object
+    {
+        require_once dirname(__DIR__, 2) . '/database/migrations/20261010000000_add_persona_identity_constraints.php';
+        /** @var class-string<AbstractMigration> $migrationClass */
+        $migrationClass = 'AddPersonaIdentityConstraints';
+        $migration = new $migrationClass('test', 20261010000000);
+        $migration->setAdapter(new MysqlAdapter([
+            'connection' => $this->pdo, 'name' => $this->prefix . 'meta',
+            'migration_table' => $this->prefix . 'meta.phinxlog', 'schema_prefix' => $this->prefix,
+        ]));
+
+        return $migration;
     }
 
     private function assertMigrationSucceeds(): void

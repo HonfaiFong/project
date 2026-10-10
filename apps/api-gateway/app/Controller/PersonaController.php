@@ -45,12 +45,11 @@ final readonly class PersonaController
             return ApiResponse::error(ErrorCode::INVALID_ARGUMENT->value, 'nickname is required');
         }
 
-        $type = (int)$request->post('type', 1);
-        // proto3 契约：'0' 等 falsy 值与缺失同义，故用 empty() 而非 filled()。
+        // Empty optional fields are persisted as NULL by the UserService.
         $avatarKey = empty($request->post('avatar_key')) ? null : (string)$request->post('avatar_key');
         $bio = empty($request->post('bio')) ? null : (string)$request->post('bio');
 
-        $res = $this->userClient->createPersona($userId, $type, $nickname, $avatarKey, $bio);
+        $res = $this->userClient->createPersona($userId, $nickname, $avatarKey, $bio);
 
         return ApiResponse::success(PersonaPresenter::one($res['persona'] ?? []), 201);
     }

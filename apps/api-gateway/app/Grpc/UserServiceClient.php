@@ -28,6 +28,8 @@ use Contracts\Gen\User\V1\UpdatePersonaResponse;
 use Contracts\Gen\User\V1\UpdateUserRequest;
 use Contracts\Gen\User\V1\UpdateUserResponse;
 use Contracts\Gen\User\V1\UserProfile;
+use Contracts\Gen\User\V1\ValidatePersonaOwnershipRequest;
+use Contracts\Gen\User\V1\ValidatePersonaOwnershipResponse;
 use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
@@ -115,15 +117,31 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
     /**
      * @throws Exception
      */
-    public function createPersona(string $userId, int $type, string $nickname, ?string $avatarKey, ?string $bio): array
+    public function createPersona(string $userId, string $nickname, ?string $avatarKey, ?string $bio): array
     {
         $response = $this->call('/user.v1.UserService/CreatePersona', new CreatePersonaRequest([
             'user_id'    => $userId,
-            'type'       => $type,
             'nickname'   => $nickname,
             'avatar_key' => $avatarKey ?? '',
             'bio'        => $bio ?? '',
         ]), CreatePersonaResponse::class);
+
+        return ['persona' => $this->persona($response->getPersona())];
+    }
+
+    /**
+     * @throws Exception
+     */
+    public function validatePersonaOwnership(string $userId, string $personaId): array
+    {
+        $response = $this->call(
+            '/user.v1.UserService/ValidatePersonaOwnership',
+            new ValidatePersonaOwnershipRequest([
+                'user_id'    => $userId,
+                'persona_id' => $personaId,
+            ]),
+            ValidatePersonaOwnershipResponse::class,
+        );
 
         return ['persona' => $this->persona($response->getPersona())];
     }

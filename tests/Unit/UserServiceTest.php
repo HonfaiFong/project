@@ -10,6 +10,7 @@ use Packages\IdGenerator\Snowflake;
 use Packages\Phone\PhoneNormalizer;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Domain\Entity\Persona;
+use Services\UserService\Domain\Entity\PersonaType;
 use Services\UserService\Domain\Entity\User;
 use Services\UserService\Domain\Exception\DuplicateUserException;
 use Services\UserService\Domain\Repository\PersonaRepositoryInterface;
@@ -247,6 +248,7 @@ final class UserServiceTest extends TestCase
         $personas = $this->userService->listPersonas($res['user']->id);
         $this->assertNotEmpty($personas);
         $this->assertSame($res['user']->id, $personas[0]->userId);
+        $this->assertSame(PersonaType::MAIN->value, $personas[0]->type);
 
         $userRegisteredEvents = $this->outbox->findByEventType(EventTypes::USER_REGISTERED);
         $this->assertCount(1, $userRegisteredEvents);
@@ -548,6 +550,173 @@ final class UserServiceTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('User not found');
         $this->userService->updateUser('999999', '+8613900000000');
+    }
+
+    public function testAliasCreationAlwaysUsesAliasType(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+
+        $alias = $this->userService->createAliasPersona($res['user']->id, '  Night Rain  ');
+
+        $this->assertSame(PersonaType::ALIAS->value, $alias->type);
+        $this->assertSame('Night Rain', $alias->nickname);
+        $this->assertCount(2, $this->userService->listPersonas($res['user']->id));
+    }
+
+    public function testLegacyPersonaCreationRejectsMainType(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->userService->createPersona(
+            $res['user']->id,
+            PersonaType::MAIN->value,
+            'Should not be created',
+        );
+    }
+
+    public function testLegacyZeroTypeCreatesAliasForProtoCompatibility(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+
+        $alias = $this->userService->createPersona($res['user']->id, 0, 'Legacy Alias');
+
+        $this->assertSame(PersonaType::ALIAS->value, $alias->type);
+    }
+
+    public function testLegacyPersonaCreationRejectsUnknownType(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+
+        $this->expectExceptionCode(ErrorCode::INVALID_ARGUMENT->value);
+        $this->userService->createPersona($res['user']->id, 99, 'Unknown Type');
+    }
+
+    public function testPersonaFieldsRespectStorageLengths(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $userId = $res['user']->id;
+
+        try {
+            $this->userService->createAliasPersona($userId, str_repeat('n', 65));
+            $this->fail('Expected an overlong nickname to be rejected');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame(ErrorCode::INVALID_ARGUMENT->value, $exception->getCode());
+        }
+
+        try {
+            $this->userService->createAliasPersona($userId, 'Valid', null, str_repeat('b', 501));
+            $this->fail('Expected an overlong bio to be rejected');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame(ErrorCode::INVALID_ARGUMENT->value, $exception->getCode());
+        }
+    }
+
+    public function testPersonaValidationRejectsInactiveAccount(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $userId = $res['user']->id;
+        $personaId = $this->userService->listPersonas($userId)[0]->id;
+
+        $this->userRepo->users[$userId] = new User(
+            id: $userId,
+            status: 0,
+            phone: $res['user']->phone,
+            email: $res['user']->email,
+            registerChannel: $res['user']->registerChannel,
+            riskLevel: $res['user']->riskLevel,
+        );
+
+        $this->expectExceptionCode(ErrorCode::USER_BANNED->value);
+        $this->userService->assertPersonaUsableByUser($userId, $personaId);
+    }
+
+    public function testPersonaValidationRejectsInactivePersona(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $userId = $res['user']->id;
+        $persona = $this->userService->listPersonas($userId)[0];
+        $this->personaRepo->personas[$persona->id] = new Persona(
+            id: $persona->id,
+            userId: $persona->userId,
+            type: $persona->type,
+            nickname: $persona->nickname,
+            avatarKey: $persona->avatarKey,
+            bio: $persona->bio,
+            status: 0,
+        );
+
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->userService->assertPersonaUsableByUser($userId, $persona->id);
+    }
+
+    public function testPersonaValidationRejectsCrossUserAndDeletedPersona(): void
+    {
+        $first = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $second = $this->userService->findOrCreateUserByPhone('+8613900000000');
+        $personaId = $this->userService->listPersonas($first['user']->id)[0]->id;
+
+        try {
+            $this->userService->assertPersonaUsableByUser($second['user']->id, $personaId);
+            $this->fail('A persona must not be usable by another account');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame(ErrorCode::PERSONA_FORBIDDEN->value, $exception->getCode());
+        }
+
+        try {
+            $this->userService->assertPersonaUsableByUser('missing-user', $personaId);
+            $this->fail('An unknown account must not authorize a persona');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame(ErrorCode::PERSONA_FORBIDDEN->value, $exception->getCode());
+        }
+
+        unset($this->personaRepo->personas[$personaId]);
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->userService->assertPersonaUsableByUser($first['user']->id, $personaId);
+    }
+
+    public function testUpdateRejectsInactivePersona(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $userId = $res['user']->id;
+        $persona = $this->userService->listPersonas($userId)[0];
+        $this->personaRepo->personas[$persona->id] = new Persona(
+            id: $persona->id,
+            userId: $persona->userId,
+            type: $persona->type,
+            nickname: $persona->nickname,
+            avatarKey: $persona->avatarKey,
+            bio: $persona->bio,
+            status: 0,
+        );
+
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->userService->updatePersona($persona->id, $userId, 'Inactive update');
+    }
+
+    public function testCreateAndUpdateRejectInactiveAccount(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $userId = $res['user']->id;
+        $personaId = $this->userService->listPersonas($userId)[0]->id;
+        $this->userRepo->users[$userId] = new User(
+            id: $userId,
+            status: 0,
+            phone: $res['user']->phone,
+            email: $res['user']->email,
+            registerChannel: $res['user']->registerChannel,
+            riskLevel: $res['user']->riskLevel,
+        );
+
+        try {
+            $this->userService->createAliasPersona($userId, 'Blocked alias');
+            $this->fail('A blocked account must not create an alias');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame(ErrorCode::USER_BANNED->value, $exception->getCode());
+        }
+
+        $this->expectExceptionCode(ErrorCode::USER_BANNED->value);
+        $this->userService->updatePersona($personaId, $userId, 'Blocked update');
     }
 
     public function testEnforcesPersonaOwnership(): void

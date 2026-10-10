@@ -75,4 +75,23 @@ final class InternalRpcAuthorizerTest extends TestCase
             $this->assertSame(StatusCode::PERMISSION_DENIED, $e->getCode());
         }
     }
+
+    public function testAuthServiceCannotInvokePersonaOwnershipAuthorization(): void
+    {
+        $authorizer = new InternalRpcAuthorizer(
+            callerTokens: ['auth-service' => self::TOKEN],
+            allowedMethodsByCaller: [
+                'auth-service' => ['FindOrCreateByPhone', 'FindOrCreateBySocialIdentity', 'GetUser'],
+            ],
+        );
+        $context = new Context([
+            'metadata' => [
+                'x-service-name'  => ['auth-service'],
+                'x-service-token' => [self::TOKEN],
+            ],
+        ]);
+
+        $this->expectExceptionCode(StatusCode::PERMISSION_DENIED);
+        $authorizer->authorize($context, 'ValidatePersonaOwnership');
+    }
 }

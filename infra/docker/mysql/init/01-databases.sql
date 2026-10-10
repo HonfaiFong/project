@@ -89,6 +89,9 @@ CREATE TABLE IF NOT EXISTS `personas` (
   `id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,
   `user_id` BIGINT UNSIGNED NOT NULL,
   `type` SMALLINT NOT NULL DEFAULT 1,
+  `main_user_id` BIGINT UNSIGNED GENERATED ALWAYS AS (
+    CASE WHEN `type` = 1 THEN `user_id` ELSE NULL END
+  ) STORED,
   `nickname` VARCHAR(64) NOT NULL,
   `avatar_key` VARCHAR(255) NULL,
   `bio` VARCHAR(500) NULL,
@@ -96,7 +99,10 @@ CREATE TABLE IF NOT EXISTS `personas` (
   `created_at` DATETIME(3) NOT NULL,
   `updated_at` DATETIME(3) NOT NULL,
   `deleted_at` DATETIME(3) NULL,
+  CONSTRAINT `chk_persona_type` CHECK (`type` IN (1, 2)),
+  UNIQUE KEY `uniq_main_persona_user` (`main_user_id`),
   INDEX `idx_user_status` (`user_id`, `status`),
+  INDEX `idx_user_type_status` (`user_id`, `type`, `status`, `deleted_at`),
   INDEX `idx_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
