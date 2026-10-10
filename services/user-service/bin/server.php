@@ -18,6 +18,7 @@ use Contracts\Gen\User\V1\FindOrCreateByPhoneRequest;
 use Contracts\Gen\User\V1\FindOrCreateBySocialIdentityRequest;
 use Contracts\Gen\User\V1\GetUserRequest;
 use Contracts\Gen\User\V1\ValidatePersonaOwnershipRequest;
+use Contracts\Gen\User\V1\ResolvePersonaModeRequest;
 use Contracts\Gen\User\V1\UserServiceInterface;
 use Services\UserService\Application\Service\UserApplicationService;
 use Services\UserService\Infrastructure\Model\PersonaModel;
@@ -91,6 +92,7 @@ $phoneNormalizer = new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGIO
 (new FindOrCreateBySocialIdentityRequest())->serializeToString();
 (new GetUserRequest())->serializeToString();
 (new ValidatePersonaOwnershipRequest())->serializeToString();
+(new ResolvePersonaModeRequest())->serializeToString();
 $phoneNormalizer->normalize('+8613800000000');
 $gatewayRpcToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_USER_TOKEN') ?: ''));
 $authRpcToken = trim((string)(getenv('INTERNAL_RPC_AUTH_USER_TOKEN') ?: ''));
@@ -111,6 +113,7 @@ $internalRpcAuthorizer = new InternalRpcAuthorizer(
             'CreatePersona',
             'GetPersona',
             'ValidatePersonaOwnership',
+            'ResolvePersonaMode',
             'BatchGetPersonas',
             'UpdatePersona',
             'ListPersonas',

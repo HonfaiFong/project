@@ -75,6 +75,7 @@ service UserService {
   rpc CreatePersona(CreatePersonaRequest) returns (CreatePersonaResponse);
   rpc GetPersona(GetPersonaRequest) returns (GetPersonaResponse);
   rpc ValidatePersonaOwnership(ValidatePersonaOwnershipRequest) returns (ValidatePersonaOwnershipResponse);
+  rpc ResolvePersonaMode(ResolvePersonaModeRequest) returns (ResolvePersonaModeResponse);
   rpc BatchGetPersonas(BatchGetPersonasRequest) returns (BatchGetPersonasResponse);
   rpc UpdatePersona(UpdatePersonaRequest) returns (UpdatePersonaResponse);
   rpc ListPersonas(ListPersonasRequest) returns (ListPersonasResponse);

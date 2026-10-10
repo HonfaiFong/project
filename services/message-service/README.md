@@ -29,3 +29,18 @@
 ## 6. Dependencies
 - MySQL (`message_db`)
 - Redis (sequence cache)
+
+## 7. Identity and implementation status
+
+SendMessage has no per-message identity selector. The sender identity comes
+from the conversation member/session snapshot selected at conversation
+creation, so a client cannot switch between MAIN and ALIAS on individual
+messages. Public responses must use an independent PublicMessage projection;
+internal sender user/persona ids remain authorization and persistence fields.
+The public RPC input is PublicSendMessageRequest and contains only the client
+message id, conversation id, type, and content. The older SendMessageRequest
+shape is source compatibility for internal code only and is not the RPC input.
+
+This service is currently a contract and README skeleton. Message business
+handlers, snapshot persistence, and the public projection are not yet
+implemented by the identity foundation.

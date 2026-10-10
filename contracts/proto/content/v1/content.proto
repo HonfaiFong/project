@@ -3,6 +3,7 @@ syntax = "proto3";
 package content.v1;
 
 import "common/v1/pagination.proto";
+import "common/v1/identity.proto";
 
 option go_package = "social-backend/contracts/gen/go/content/v1;contentv1";
 option php_namespace = "Contracts\\Gen\\Content\\V1";
@@ -33,6 +34,26 @@ message Post {
   repeated MediaItem media = 12;
   string published_at = 13;
   string created_at = 14;
+  common.v1.PublicAuthor author = 15;
+}
+
+// Public response shape. It deliberately has no internal user_id or
+// persona_id ownership fields; author identity is represented by PublicAuthor.
+message PublicPost {
+  uint64 post_id = 1;
+  int32 type = 2;
+  string content = 3;
+  int32 visibility = 4;
+  string emotion = 5;
+  int32 status = 6;
+  int32 moderation_status = 7;
+  uint64 like_count = 8;
+  uint64 comment_count = 9;
+  uint64 view_count = 10;
+  repeated MediaItem media = 11;
+  string published_at = 12;
+  string created_at = 13;
+  common.v1.PublicAuthor author = 14;
 }
 
 message CreatePostRequest {
@@ -43,10 +64,12 @@ message CreatePostRequest {
   int32 visibility = 5;
   string emotion = 6;
   repeated MediaItem media = 7;
+  common.v1.IdentityMode identity_mode = 8;
+  string alias_display_name = 9;
 }
 
 message CreatePostResponse {
-  Post post = 1;
+  PublicPost post = 1;
 }
 
 message GetPostRequest {
@@ -54,7 +77,7 @@ message GetPostRequest {
 }
 
 message GetPostResponse {
-  Post post = 1;
+  PublicPost post = 1;
 }
 
 message BatchGetPostsRequest {
@@ -62,12 +85,15 @@ message BatchGetPostsRequest {
 }
 
 message BatchGetPostsResponse {
-  repeated Post posts = 1;
+  repeated PublicPost posts = 1;
 }
 
 message DeletePostRequest {
   uint64 post_id = 1;
   uint64 persona_id = 2;
+  // Trusted authenticated account id. Authorization checks ownership by
+  // user id and does not require the snapshot author persona to be MAIN.
+  uint64 user_id = 3;
 }
 
 message DeletePostResponse {
@@ -84,6 +110,20 @@ message Comment {
   int32 status = 7;
   uint64 like_count = 8;
   string created_at = 9;
+  common.v1.PublicAuthor author = 10;
+}
+
+// Public response shape. The internal author ownership columns stay private.
+message PublicComment {
+  uint64 comment_id = 1;
+  uint64 post_id = 2;
+  uint64 parent_id = 3;
+  uint64 reply_to_comment_id = 4;
+  string content = 5;
+  int32 status = 6;
+  uint64 like_count = 7;
+  string created_at = 8;
+  common.v1.PublicAuthor author = 9;
 }
 
 message CreateCommentRequest {
@@ -93,10 +133,12 @@ message CreateCommentRequest {
   uint64 parent_id = 4;
   uint64 reply_to_comment_id = 5;
   string content = 6;
+  common.v1.IdentityMode identity_mode = 7;
+  string alias_display_name = 8;
 }
 
 message CreateCommentResponse {
-  Comment comment = 1;
+  PublicComment comment = 1;
 }
 
 message ListCommentsRequest {
@@ -106,7 +148,7 @@ message ListCommentsRequest {
 }
 
 message ListCommentsResponse {
-  repeated Comment comments = 1;
+  repeated PublicComment comments = 1;
   common.v1.PaginationResponse pagination = 2;
 }
 

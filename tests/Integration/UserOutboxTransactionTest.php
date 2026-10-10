@@ -10,6 +10,8 @@ use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use JsonException;
 use Packages\Database\EloquentConnection;
+use Packages\Identity\PersonaOperation;
+use Packages\Identity\PersonaMode;
 use Packages\IdGenerator\Snowflake;
 use Packages\Outbox\Model\OutboxEvent;
 use Packages\Outbox\OutboxRepository;
@@ -56,6 +58,7 @@ final class UserOutboxTransactionTest extends TestCase
             $table->string('id')->primary();
             $table->string('user_id');
             $table->integer('type');
+            $table->unsignedTinyInteger('is_internal_alias')->default(0);
             $table->string('nickname');
             $table->string('avatar_key')->nullable();
             $table->string('bio')->nullable();
@@ -112,12 +115,19 @@ final class UserOutboxTransactionTest extends TestCase
         $events = $this->outbox->newQuery()
             ->get(['aggregate_type', 'aggregate_id', 'event_key', 'trace_id', 'event_type', 'payload'])
             ->toArray();
-        $this->assertCount(2, $events);
-        $eventsByType = array_column($events, null, 'event_type');
-        $personaEvent = $eventsByType[EventTypes::PERSONA_UPDATED];
-        $userEvent = $eventsByType[EventTypes::USER_REGISTERED];
+        $this->assertCount(3, $events);
+        $userEvent = array_values(array_filter(
+            $events,
+            static fn (array $event): bool => $event['event_type'] === EventTypes::USER_REGISTERED,
+        ))[0];
+        $personaEvents = array_values(array_filter(
+            $events,
+            static fn (array $event): bool => $event['event_type'] === EventTypes::PERSONA_UPDATED,
+        ));
+        $this->assertCount(2, $personaEvents);
+        $personaEvent = $personaEvents[0];
         $this->assertSame('persona', $personaEvent['aggregate_type']);
-        $this->assertSame((string)$this->personas->newQuery()->value('id'), $personaEvent['aggregate_id']);
+        $this->assertSame((string)$this->personas->newQuery()->where('type', 1)->value('id'), $personaEvent['aggregate_id']);
         $this->assertSame($userId, json_decode($personaEvent['payload'], true, flags: JSON_THROW_ON_ERROR)['user_id']);
         $this->assertSame('user', $userEvent['aggregate_type']);
         $this->assertSame($userId, $userEvent['aggregate_id']);
@@ -126,6 +136,10 @@ final class UserOutboxTransactionTest extends TestCase
         $this->assertNotSame('', $userEvent['trace_id']);
         $this->assertSame($userEvent['trace_id'], $personaEvent['trace_id']);
         $this->assertSame($userId, json_decode($userEvent['payload'], true, flags: JSON_THROW_ON_ERROR)['id']);
+        $this->assertSame(
+            (string)$this->personas->newQuery()->where('is_internal_alias', 1)->value('id'),
+            $personaEvents[1]['aggregate_id'],
+        );
     }
 
     public function testOutboxInsertFailureRollsBackUserAndPersona(): void
@@ -158,7 +172,7 @@ final class UserOutboxTransactionTest extends TestCase
             (string)$this->users->newQuery()->where('social_registration_key', 'social:1001')->value('id'),
         );
         $this->assertSame($userId, (string)$this->personas->newQuery()->value('user_id'));
-        $this->assertSame(2, $this->outbox->newQuery()->count());
+        $this->assertSame(3, $this->outbox->newQuery()->count());
 
         $second = $this->service->findOrCreateUserBySocialIdentity('social:1001', 'qq');
 
@@ -166,8 +180,8 @@ final class UserOutboxTransactionTest extends TestCase
         $this->assertSame($userId, $second['user']->id);
         $this->assertSame('wechat', $second['user']->registerChannel);
         $this->assertSame(1, $this->users->newQueryWithoutScopes()->count());
-        $this->assertSame(1, $this->personas->newQuery()->count());
-        $this->assertSame(2, $this->outbox->newQuery()->count());
+        $this->assertSame(2, $this->personas->newQuery()->count());
+        $this->assertSame(3, $this->outbox->newQuery()->count());
     }
 
     public function testSocialRegistrationKeyUniquenessRejectsASecondAccount(): void
@@ -227,7 +241,23 @@ final class UserOutboxTransactionTest extends TestCase
         }
 
         $this->assertSame(1, $this->users->newQueryWithoutScopes()->count());
-        $this->assertSame(1, $this->personas->newQuery()->count());
+        $this->assertSame(2, $this->personas->newQuery()->count());
+    }
+
+    public function testSoftDeletedCanonicalAliasCannotBeRecreated(): void
+    {
+        $result = $this->service->findOrCreateUserByPhone('+8613800000000');
+        $aliasId = (string)$this->personas->newQuery()->where('is_internal_alias', 1)->value('id');
+        $this->personas->newQuery()->whereKey($aliasId)->update([
+            'deleted_at' => '2026-01-01 00:00:00',
+        ]);
+
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->service->resolvePersonaMode(
+            $result['user']->id,
+            PersonaMode::ALIAS->value,
+            PersonaOperation::CREATE_POST->value,
+        );
     }
 
     public function testOutboxInsertFailureRollsBackSocialRegistrationToo(): void

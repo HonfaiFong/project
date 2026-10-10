@@ -41,6 +41,7 @@
       "Packages\\Database\\": "packages/php/database/src/",
       "Packages\\GrpcCommon\\": "packages/php/grpc-common/src/",
       "Packages\\Phone\\": "packages/php/phone/src/",
+      "Packages\\Identity\\": "packages/php/identity/src/",
       "Apps\\ApiGateway\\": "apps/api-gateway/app/",
       "Services\\AuthService\\": "services/auth-service/src/",
       "Services\\UserService\\": "services/user-service/src/"

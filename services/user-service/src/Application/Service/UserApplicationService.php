@@ -10,6 +10,8 @@ use Packages\IdGenerator\Snowflake;
 use Packages\Phone\PhoneNormalizer;
 use Packages\Outbox\EventOutboxInterface;
 use Packages\Tracing\TraceContext;
+use Packages\Identity\PersonaMode;
+use Packages\Identity\PersonaOperation;
 use RuntimeException;
 use Random\RandomException;
 use Throwable;
@@ -23,7 +25,6 @@ use Services\UserService\Domain\Repository\UserRepositoryInterface;
 
 final class UserApplicationService
 {
-    private const MAX_PERSONAS_PER_USER = 5;
     private const MAX_PERSONA_NICKNAME_LENGTH = 64;
     private const MAX_PERSONA_AVATAR_KEY_LENGTH = 255;
     private const MAX_PERSONA_BIO_LENGTH = 500;
@@ -211,11 +212,13 @@ final class UserApplicationService
     /**
      * Compatibility entry point for the legacy RPC.
      *
-     * The old `type` field is retained in the protobuf so older clients can
-     * be upgraded independently. Zero (the proto3 default) and ALIAS both
-     * mean "create an alias"; MAIN and unknown values are rejected.
+     * The old method remains in the wire contract so clients can be upgraded
+     * independently, but it is intentionally disabled. Alias identities are
+     * server-owned and are resolved only by resolvePersonaMode(). Keeping the
+     * rejection before any normalization or transaction also guarantees that
+     * legacy calls cannot create database side effects.
      *
-     * @throws Throwable
+     * @throws RuntimeException
      */
     public function createPersona(
         string $userId,
@@ -224,35 +227,42 @@ final class UserApplicationService
         ?string $avatarKey = null,
         ?string $bio = null
     ): Persona {
-        if ($type === PersonaType::MAIN->value) {
-            throw new RuntimeException(
-                'The main persona is created during registration and cannot be created here',
-                ErrorCode::PERSONA_FORBIDDEN->value,
-            );
-        }
-        if ($type !== 0 && $type !== PersonaType::ALIAS->value) {
-            throw new RuntimeException('Unsupported persona type', ErrorCode::INVALID_ARGUMENT->value);
-        }
-
-        return $this->createAliasPersona($userId, $nickname, $avatarKey, $bio);
+        throw new RuntimeException(
+            'Creating personas is disabled; choose MAIN or a server-owned anonymous mode',
+            ErrorCode::PERSONA_FORBIDDEN->value,
+        );
     }
 
-    /** @throws Throwable */
+    /**
+     * Legacy alias creation is deliberately disabled. The method is retained
+     * only for source and wire compatibility; it must never normalize input,
+     * lock a user row, or open a transaction before rejecting the call.
+     *
+     * @throws RuntimeException
+     */
     public function createAliasPersona(
         string $userId,
         string $nickname,
         ?string $avatarKey = null,
         ?string $bio = null
     ): Persona {
-        $nickname = $this->normalizePersonaNickname($nickname);
-        $avatarKey = $this->normalizePersonaNullableText(
-            $avatarKey,
-            self::MAX_PERSONA_AVATAR_KEY_LENGTH,
-            'avatar_key',
+        throw new RuntimeException(
+            'Creating personas is disabled; anonymous identity is server-owned',
+            ErrorCode::PERSONA_FORBIDDEN->value,
         );
-        $bio = $this->normalizePersonaNullableText($bio, self::MAX_PERSONA_BIO_LENGTH, 'bio');
+    }
 
-        return $this->transaction(function () use ($userId, $nickname, $avatarKey, $bio): Persona {
+    /**
+     * Return or create the one server-owned anonymous identity for an account.
+     *
+     * This is deliberately separate from the legacy create RPC. Historical
+     * alias rows remain untouched and are never silently promoted.
+     *
+     * @throws Throwable
+     */
+    public function ensureInternalAlias(string $userId): Persona
+    {
+        return $this->transaction(function () use ($userId): Persona {
             $user = $this->userRepo->findByIdForUpdate($userId);
             if (!$user) {
                 throw new RuntimeException('User not found', ErrorCode::USER_NOT_FOUND->value);
@@ -261,19 +271,30 @@ final class UserApplicationService
                 throw new RuntimeException(ErrorCode::USER_BANNED->message(), ErrorCode::USER_BANNED->value);
             }
 
-            $count = $this->personaRepo->countByUserId($userId);
-            if ($count >= self::MAX_PERSONAS_PER_USER) {
-                throw new RuntimeException('Persona limit reached', ErrorCode::PERSONA_LIMIT_EXCEEDED->value);
+            // This lookup includes soft-deleted rows. The unique generated
+            // key intentionally reserves the identity name forever, so a
+            // deleted canonical alias must be repaired explicitly rather
+            // than turning a duplicate-key error into a generic 500.
+            $existing = $this->personaRepo->findInternalAliasByUserIdForUpdate($userId);
+            if ($existing !== null) {
+                if ($existing->deletedAt !== null || $existing->status !== 1) {
+                    throw new RuntimeException(
+                        'The account has no usable anonymous identity; manual recovery is required',
+                        ErrorCode::PERSONA_FORBIDDEN->value,
+                    );
+                }
+
+                return $existing;
             }
 
-            $id = $this->snowflake->nextId();
             $persona = $this->personaRepo->create(
-                $id,
-                $userId,
-                PersonaType::ALIAS->value,
-                $nickname,
-                $avatarKey,
-                $bio,
+                id: $this->snowflake->nextId(),
+                userId: $userId,
+                type: PersonaType::ALIAS->value,
+                nickname: '匿名用户',
+                avatarKey: 'system:anonymous',
+                bio: null,
+                isInternalAlias: true,
             );
             $this->recordEvent(
                 aggregateType: 'persona',
@@ -288,16 +309,54 @@ final class UserApplicationService
     }
 
     /**
+     * Resolve a requested mode to a current, account-owned persona.
+     *
+     * The caller supplies the authenticated account id; any user id in a
+     * business payload must be ignored by callers before invoking this method.
+     *
+     * @throws Throwable
+     */
+    public function resolvePersonaMode(string $userId, int $mode, int $operation): Persona
+    {
+        $requestedMode = PersonaMode::tryFrom($mode);
+        if ($requestedMode === null || $requestedMode === PersonaMode::UNSPECIFIED) {
+            throw new RuntimeException('identity mode is required', ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+        $requestedOperation = PersonaOperation::tryFrom($operation);
+        if ($requestedOperation === null || $requestedOperation === PersonaOperation::UNSPECIFIED) {
+            throw new RuntimeException('persona operation is required', ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+        if ($requestedMode === PersonaMode::ALIAS && !$requestedOperation->allowsAlias()) {
+            throw new RuntimeException(ErrorCode::PERSONA_FORBIDDEN->message(), ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+        $persona = match ($requestedMode) {
+            PersonaMode::MAIN => $this->findMainPersona($userId),
+            PersonaMode::ALIAS => $this->ensureInternalAlias($userId),
+        };
+
+        return $this->assertPersonaUsableByUser($userId, $persona->id, $operation);
+    }
+
+    /**
      * Validate the account and persona together before an identity-bearing
      * operation. Callers must use the returned entity and never trust a
      * client-supplied user_id or persona status after this point.
      *
      * @throws RuntimeException
      */
-    public function assertPersonaUsableByUser(string $userId, string $personaId): Persona
+    public function assertPersonaUsableByUser(string $userId, string $personaId, int $operation = 0): Persona
     {
+        $requestedOperation = PersonaOperation::tryFrom($operation);
+        if ($requestedOperation === null || $requestedOperation === PersonaOperation::UNSPECIFIED) {
+            throw new RuntimeException('persona operation is required', ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+
         $persona = $this->personaRepo->findById($personaId);
-        if (!$persona || $persona->userId !== $userId || $persona->status !== 1) {
+        if (!$persona
+            || $persona->userId !== $userId
+            || $persona->status !== 1
+            || $persona->deletedAt !== null
+        ) {
             throw new RuntimeException(ErrorCode::PERSONA_FORBIDDEN->message(), ErrorCode::PERSONA_FORBIDDEN->value);
         }
 
@@ -306,13 +365,23 @@ final class UserApplicationService
             throw new RuntimeException(ErrorCode::USER_BANNED->message(), ErrorCode::USER_BANNED->value);
         }
 
+        if ($persona->type === PersonaType::ALIAS->value && !$persona->isInternalAlias) {
+            throw new RuntimeException(ErrorCode::PERSONA_FORBIDDEN->message(), ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+        if ($persona->type === PersonaType::ALIAS->value && !$requestedOperation->allowsAlias()) {
+            throw new RuntimeException(ErrorCode::PERSONA_FORBIDDEN->message(), ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+        if ($persona->type !== PersonaType::MAIN->value && $persona->type !== PersonaType::ALIAS->value) {
+            throw new RuntimeException(ErrorCode::PERSONA_FORBIDDEN->message(), ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+
         return $persona;
     }
 
     public function getPersona(string $personaId): Persona
     {
         $persona = $this->personaRepo->findById($personaId);
-        if (!$persona) {
+        if (!$persona || $persona->type !== PersonaType::MAIN->value) {
             throw new RuntimeException('Persona not found', ErrorCode::PERSONA_NOT_FOUND->value);
         }
         return $persona;
@@ -324,7 +393,10 @@ final class UserApplicationService
      */
     public function batchGetPersonas(array $personaIds): array
     {
-        return $this->personaRepo->batchFindByIds($personaIds);
+        return array_values(array_filter(
+            $this->personaRepo->batchFindByIds($personaIds),
+            static fn (Persona $persona): bool => $persona->type === PersonaType::MAIN->value,
+        ));
     }
 
     /** @throws Throwable */
@@ -336,7 +408,7 @@ final class UserApplicationService
         ?string $bio = null
     ): Persona {
         return $this->transaction(function () use ($personaId, $userId, $nickname, $avatarKey, $bio): Persona {
-            $this->assertPersonaUsableByUser($userId, $personaId);
+            $this->assertPersonaUsableByUser($userId, $personaId, PersonaOperation::UPDATE_PROFILE->value);
             $nickname = $nickname !== null ? $this->normalizePersonaNickname($nickname) : null;
             $avatarKey = $this->normalizePersonaNullableText(
                 $avatarKey,
@@ -375,7 +447,11 @@ final class UserApplicationService
             throw new RuntimeException(ErrorCode::USER_BANNED->message(), ErrorCode::USER_BANNED->value);
         }
 
-        return $this->personaRepo->findByUserId($userId);
+        return array_values(array_filter(
+            $this->personaRepo->findByUserId($userId),
+            static fn (Persona $persona): bool =>
+                $persona->type === PersonaType::MAIN->value || $persona->isInternalAlias,
+        ));
     }
 
     /**
@@ -416,7 +492,18 @@ final class UserApplicationService
             type: PersonaType::MAIN->value,
             nickname: 'User_' . substr($id, -4),
             avatarKey: null,
-            bio: null
+            bio: null,
+            isInternalAlias: false,
+        );
+
+        $alias = $this->personaRepo->create(
+            id: $this->snowflake->nextId(),
+            userId: $id,
+            type: PersonaType::ALIAS->value,
+            nickname: '匿名用户',
+            avatarKey: 'system:anonymous',
+            bio: null,
+            isInternalAlias: true,
         );
 
         $this->recordEvent(
@@ -432,6 +519,13 @@ final class UserApplicationService
             eventKey: $id,
             eventType: EventTypes::PERSONA_UPDATED,
             payload: $persona->toArray(),
+        );
+        $this->recordEvent(
+            aggregateType: 'persona',
+            aggregateId: $alias->id,
+            eventKey: $id,
+            eventType: EventTypes::PERSONA_UPDATED,
+            payload: $alias->toArray(),
         );
 
         return $user;
@@ -518,5 +612,16 @@ final class UserApplicationService
                 ErrorCode::USER_BANNED->value
             );
         }
+    }
+
+    private function findMainPersona(string $userId): Persona
+    {
+        foreach ($this->personaRepo->findByUserId($userId) as $persona) {
+            if ($persona->type === PersonaType::MAIN->value) {
+                return $persona;
+            }
+        }
+
+        throw new RuntimeException('Persona not found', ErrorCode::PERSONA_NOT_FOUND->value);
     }
 }

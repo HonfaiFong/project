@@ -3,6 +3,7 @@ syntax = "proto3";
 package chat.v1;
 
 import "common/v1/pagination.proto";
+import "common/v1/identity.proto";
 
 option go_package = "social-backend/contracts/gen/go/chat/v1;chatv1";
 option php_namespace = "Contracts\\Gen\\Chat\\V1";
@@ -13,6 +14,13 @@ message ConversationMember {
   uint64 persona_id = 2;
   uint64 last_read_seq = 3;
   string joined_at = 4;
+  common.v1.PublicAuthor author = 5;
+}
+
+message PublicConversationMember {
+  common.v1.PublicAuthor author = 1;
+  uint64 last_read_seq = 2;
+  string joined_at = 3;
 }
 
 message Conversation {
@@ -24,16 +32,42 @@ message Conversation {
   string created_at = 6;
 }
 
+message PublicConversation {
+  uint64 conversation_id = 1;
+  int32 type = 2;
+  uint64 last_message_id = 3;
+  string last_message_at = 4;
+  repeated PublicConversationMember members = 5;
+  string created_at = 6;
+}
+
+message AnonymousChatTarget {
+  string scope_type = 1;
+  string scope_id = 2;
+  string anonymous_ref = 3;
+}
+
+message PublicChatTarget {
+  oneof target {
+    uint64 main_persona_id = 1;
+    AnonymousChatTarget anonymous = 2;
+  }
+}
+
 message GetOrCreatePrivateConversationRequest {
   string request_id = 1;
   uint64 user_id = 2;
   uint64 persona_id = 3;
-  uint64 peer_user_id = 4;
-  uint64 peer_persona_id = 5;
+  // Applied only when creating the conversation/member snapshot. A repeated
+  // get-or-create request cannot switch an existing session identity.
+  common.v1.IdentityMode identity_mode = 6;
+  string alias_display_name = 7;
+  PublicChatTarget target = 8;
+  reserved 4, 5;
 }
 
 message GetOrCreatePrivateConversationResponse {
-  Conversation conversation = 1;
+  PublicConversation conversation = 1;
 }
 
 message GetConversationRequest {
@@ -42,7 +76,7 @@ message GetConversationRequest {
 }
 
 message GetConversationResponse {
-  Conversation conversation = 1;
+  PublicConversation conversation = 1;
 }
 
 message ListConversationsRequest {
@@ -51,7 +85,7 @@ message ListConversationsRequest {
 }
 
 message ListConversationsResponse {
-  repeated Conversation conversations = 1;
+  repeated PublicConversation conversations = 1;
   common.v1.PaginationResponse pagination = 2;
 }
 

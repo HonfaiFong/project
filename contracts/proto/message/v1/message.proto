@@ -3,6 +3,7 @@ syntax = "proto3";
 package message.v1;
 
 import "common/v1/pagination.proto";
+import "common/v1/identity.proto";
 
 option go_package = "social-backend/contracts/gen/go/message/v1;messagev1";
 option php_namespace = "Contracts\\Gen\\Message\\V1";
@@ -18,9 +19,25 @@ message Message {
   int32 type = 7;
   string content = 8; // JSON string
   string created_at = 9;
+  common.v1.PublicAuthor author = 10;
+}
+
+// Public response shape. Internal sender_user_id and sender_persona_id are
+// persistence/authorization fields and never cross this response boundary.
+message PublicMessage {
+  uint64 message_id = 1;
+  uint64 conversation_id = 2;
+  uint64 seq = 3;
+  string client_message_id = 4;
+  int32 type = 5;
+  string content = 6;
+  string created_at = 7;
+  common.v1.PublicAuthor author = 8;
 }
 
 message SendMessageRequest {
+  // Deprecated internal shape retained for source compatibility only. It is
+  // not the public RPC request and must not be populated by clients.
   string request_id = 1;
   string client_message_id = 2;
   uint64 conversation_id = 3;
@@ -28,10 +45,21 @@ message SendMessageRequest {
   uint64 sender_persona_id = 5;
   int32 type = 6;
   string content = 7;
+  reserved 8, 9;
+}
+
+// Public message input. The conversation membership/session chooses the
+// immutable sender snapshot; there is no per-message mode, alias nickname,
+// user id, or persona id selector.
+message PublicSendMessageRequest {
+  string client_message_id = 1;
+  uint64 conversation_id = 2;
+  int32 type = 3;
+  string content = 4;
 }
 
 message SendMessageResponse {
-  Message message = 1;
+  PublicMessage message = 1;
 }
 
 message SyncMessagesRequest {
@@ -42,7 +70,7 @@ message SyncMessagesRequest {
 }
 
 message SyncMessagesResponse {
-  repeated Message messages = 1;
+  repeated PublicMessage messages = 1;
   bool has_more = 2;
   uint64 latest_seq = 3;
 }
@@ -53,12 +81,15 @@ message GetMessagesRequest {
 }
 
 message GetMessagesResponse {
-  repeated Message messages = 1;
+  repeated PublicMessage messages = 1;
   common.v1.PaginationResponse pagination = 2;
 }
 
 service MessageService {
-  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse);
+  // PublicSendMessageRequest is intentionally explicit at this boundary;
+  // keep the RPC name stable for existing MessageService clients.
+  // buf:lint:ignore RPC_REQUEST_STANDARD_NAME
+  rpc SendMessage(PublicSendMessageRequest) returns (SendMessageResponse);
   rpc SyncMessages(SyncMessagesRequest) returns (SyncMessagesResponse);
   rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
 }

@@ -31,7 +31,7 @@ final readonly class UserController
 
         return ApiResponse::success([
             'user'     => $userRes['user'] ?? null,
-            'personas' => PersonaPresenter::many($personasRes['personas'] ?? []),
+            'personas' => PersonaPresenter::privateMany($personasRes['personas'] ?? []),
         ]);
     }
 }

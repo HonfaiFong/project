@@ -16,6 +16,9 @@ final readonly class Persona
         public int $status = 1,
         public ?string $createdAt = null,
         public ?string $updatedAt = null,
+        /** True only for the server-owned canonical anonymous identity. */
+        public bool $isInternalAlias = false,
+        public ?string $deletedAt = null,
     ) {
     }
 
@@ -29,8 +32,10 @@ final readonly class Persona
             'avatar_key' => $this->avatarKey,
             'bio'        => $this->bio,
             'status'     => $this->status,
+            'is_internal_alias' => $this->isInternalAlias,
             'created_at' => $this->createdAt,
             'updated_at' => $this->updatedAt,
+            'deleted_at' => $this->deletedAt,
         ];
     }
 }

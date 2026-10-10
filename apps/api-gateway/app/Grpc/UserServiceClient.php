@@ -30,6 +30,8 @@ use Contracts\Gen\User\V1\UpdateUserResponse;
 use Contracts\Gen\User\V1\UserProfile;
 use Contracts\Gen\User\V1\ValidatePersonaOwnershipRequest;
 use Contracts\Gen\User\V1\ValidatePersonaOwnershipResponse;
+use Contracts\Gen\User\V1\ResolvePersonaModeRequest;
+use Contracts\Gen\User\V1\ResolvePersonaModeResponse;
 use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
@@ -132,15 +134,32 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
     /**
      * @throws Exception
      */
-    public function validatePersonaOwnership(string $userId, string $personaId): array
+    public function validatePersonaOwnership(string $userId, string $personaId, int $operation = 0): array
     {
         $response = $this->call(
             '/user.v1.UserService/ValidatePersonaOwnership',
             new ValidatePersonaOwnershipRequest([
                 'user_id'    => $userId,
                 'persona_id' => $personaId,
+                'operation'  => $operation,
             ]),
             ValidatePersonaOwnershipResponse::class,
+        );
+
+        return ['persona' => $this->persona($response->getPersona())];
+    }
+
+    /** @throws Exception */
+    public function resolvePersonaMode(string $userId, int $mode, int $operation): array
+    {
+        $response = $this->call(
+            '/user.v1.UserService/ResolvePersonaMode',
+            new ResolvePersonaModeRequest([
+                'user_id' => $userId,
+                'mode' => $mode,
+                'operation' => $operation,
+            ]),
+            ResolvePersonaModeResponse::class,
         );
 
         return ['persona' => $this->persona($response->getPersona())];
@@ -293,6 +312,9 @@ final class UserServiceClient implements HealthCheckClient, PersonaLookup
             'avatar_key' => $persona->getAvatarKey(),
             'bio'        => $persona->getBio(),
             'status'     => $persona->getStatus(),
+            'is_internal_alias' => $persona->getIsInternalAlias(),
+            'identity_mode' => $persona->getIdentityMode(),
+            'profile_accessible' => $persona->getProfileAccessible(),
             'created_at' => $persona->getCreatedAt(),
             'updated_at' => $persona->getUpdatedAt(),
         ];

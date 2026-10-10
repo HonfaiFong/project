@@ -28,7 +28,7 @@ final readonly class PersonaController
 
         $res = $this->userClient->listPersonas($userId);
         return ApiResponse::success([
-            'personas' => PersonaPresenter::many($res['personas'] ?? []),
+            'personas' => PersonaPresenter::privateMany($res['personas'] ?? []),
         ]);
     }
 

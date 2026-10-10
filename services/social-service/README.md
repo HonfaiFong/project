@@ -33,3 +33,14 @@
 ## 6. Dependencies
 - MySQL (`social_db`)
 - Redis (Followers cache, block cache)
+
+## 7. Identity and implementation status
+
+Every social operation resolves MAIN. Likes, follows, blocks, reports, and
+their reversals must not accept an ALIAS identity, and an unspecified or
+unknown operation fails closed. Public social responses must not use an alias
+id, nickname, or user id as a stable identifier.
+
+This service is currently a contract and README skeleton. The social tables,
+handlers, authorization flow, and public response projections are not yet
+implemented by the identity foundation.

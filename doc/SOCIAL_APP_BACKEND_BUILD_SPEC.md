@@ -1,5 +1,7 @@
 # 匿名社交 App 后端项目构建总规范
 
+> **身份业务规则更新（2026-10-11）**：真身与匿名分身以 [真身与匿名分身业务规则](USER_PERSONA_BUSINESS_RULES.md) 为准。下文涉及多个固定公开分身、分身关注及其他冲突的身份设计仅作历史背景；当前 ALIAS 是内部匿名能力，不能作为可追踪的公开小号。
+
 > **架构变更（2026-09-29）**：本文是早期构建草案，其中 Kafka、Kafka Topic/Partition/Consumer 和 MinIO 的设计已被当前仓库的 `README.md`、`compose.yaml` 与 `infra/docker/rabbitmq/definitions.json` 取代。现行部署使用 RabbitMQ Streams 承载可重放领域事件、Quorum Queues 承载任务，RustFS 承载 S3 兼容对象存储。下文相关旧段落仅保留作为历史背景，不应作为实施指令。
 
 > 本文件用于直接交给 Coding Agent（Codex / Claude Code / Gemini CLI / Cursor Agent 等）构建项目。

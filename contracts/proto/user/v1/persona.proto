@@ -16,6 +16,33 @@ message PersonaProfile {
   int32 status = 7;
   string created_at = 8;
   string updated_at = 9;
+  bool is_internal_alias = 10;
+  string identity_mode = 11;
+  bool profile_accessible = 12;
+}
+
+// The operation must be explicit. UNSPECIFIED and unknown values fail closed.
+enum PersonaOperation {
+  PERSONA_OPERATION_UNSPECIFIED = 0;
+  PERSONA_OPERATION_CREATE_POST = 1;
+  PERSONA_OPERATION_CREATE_COMMENT = 2;
+  PERSONA_OPERATION_CREATE_CONVERSATION = 3;
+  PERSONA_OPERATION_SEND_MESSAGE = 4;
+  PERSONA_OPERATION_LIKE = 10;
+  PERSONA_OPERATION_UNLIKE = 11;
+  PERSONA_OPERATION_FOLLOW = 12;
+  PERSONA_OPERATION_UNFOLLOW = 13;
+  PERSONA_OPERATION_BLOCK = 14;
+  PERSONA_OPERATION_UNBLOCK = 15;
+  PERSONA_OPERATION_REPORT = 16;
+  PERSONA_OPERATION_CONNECT = 17;
+  PERSONA_OPERATION_UPDATE_PROFILE = 18;
+}
+
+enum PersonaMode {
+  PERSONA_MODE_UNSPECIFIED = 0;
+  PERSONA_MODE_MAIN = 1;
+  PERSONA_MODE_ALIAS = 2;
 }
 
 message CreatePersonaRequest {
@@ -45,9 +72,20 @@ message GetPersonaResponse {
 message ValidatePersonaOwnershipRequest {
   uint64 user_id = 1;
   uint64 persona_id = 2;
+  PersonaOperation operation = 3;
 }
 
 message ValidatePersonaOwnershipResponse {
+  PersonaProfile persona = 1;
+}
+
+message ResolvePersonaModeRequest {
+  uint64 user_id = 1;
+  PersonaMode mode = 2;
+  PersonaOperation operation = 3;
+}
+
+message ResolvePersonaModeResponse {
   PersonaProfile persona = 1;
 }
 

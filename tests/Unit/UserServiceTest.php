@@ -6,6 +6,8 @@ namespace Tests\Unit;
 
 use Contracts\Errors\ErrorCode;
 use Contracts\Events\EventTypes;
+use Packages\Identity\PersonaMode;
+use Packages\Identity\PersonaOperation;
 use Packages\IdGenerator\Snowflake;
 use Packages\Phone\PhoneNormalizer;
 use Services\UserService\Application\Service\UserApplicationService;
@@ -160,11 +162,25 @@ final class InMemoryPersonaRepository implements PersonaRepositoryInterface
     {
         $res = [];
         foreach ($this->personas as $p) {
-            if ($p->userId === $userId) {
+            if ($p->userId === $userId && $p->deletedAt === null) {
                 $res[] = $p;
             }
         }
         return $res;
+    }
+
+    public function findInternalAliasByUserIdForUpdate(string $userId): ?Persona
+    {
+        foreach ($this->personas as $persona) {
+            if ($persona->userId === $userId
+                && $persona->type === PersonaType::ALIAS->value
+                && $persona->isInternalAlias
+            ) {
+                return $persona;
+            }
+        }
+
+        return null;
     }
 
     public function countByUserId(string $userId): int
@@ -178,7 +194,8 @@ final class InMemoryPersonaRepository implements PersonaRepositoryInterface
         int $type,
         string $nickname,
         ?string $avatarKey,
-        ?string $bio
+        ?string $bio,
+        bool $isInternalAlias = false
     ): Persona {
         $p = new Persona(
             id: $id,
@@ -186,7 +203,8 @@ final class InMemoryPersonaRepository implements PersonaRepositoryInterface
             type: $type,
             nickname: $nickname,
             avatarKey: $avatarKey,
-            bio: $bio
+            bio: $bio,
+            isInternalAlias: $isInternalAlias,
         );
         $this->personas[$id] = $p;
         return $p;
@@ -246,9 +264,12 @@ final class UserServiceTest extends TestCase
         $this->assertSame('+8613800000000', $res['user']->phone);
 
         $personas = $this->userService->listPersonas($res['user']->id);
-        $this->assertNotEmpty($personas);
+        $this->assertCount(2, $personas);
         $this->assertSame($res['user']->id, $personas[0]->userId);
         $this->assertSame(PersonaType::MAIN->value, $personas[0]->type);
+        $this->assertSame(PersonaType::ALIAS->value, $personas[1]->type);
+        $this->assertFalse($personas[0]->isInternalAlias);
+        $this->assertTrue($personas[1]->isInternalAlias);
 
         $userRegisteredEvents = $this->outbox->findByEventType(EventTypes::USER_REGISTERED);
         $this->assertCount(1, $userRegisteredEvents);
@@ -261,13 +282,14 @@ final class UserServiceTest extends TestCase
         $this->assertSame('+8613800000000', $userRegisteredEvents[0]['payload']['phone']);
 
         $personaUpdatedEvents = $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED);
-        $this->assertCount(1, $personaUpdatedEvents);
+        $this->assertCount(2, $personaUpdatedEvents);
         $this->assertSame('persona', $personaUpdatedEvents[0]['aggregate_type']);
         $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['aggregate_id']);
         $this->assertSame($res['user']->id, $personaUpdatedEvents[0]['event_key']);
         $this->assertSame($userRegisteredEvents[0]['trace_id'], $personaUpdatedEvents[0]['trace_id']);
         $this->assertSame(EventTypes::PERSONA_UPDATED, $personaUpdatedEvents[0]['event_type']);
         $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['payload']['id']);
+        $this->assertSame($personas[1]->id, $personaUpdatedEvents[1]['payload']['id']);
     }
 
     public function testFindOrCreateUsesRegisterChannelOnlyForNewUsers(): void
@@ -390,7 +412,7 @@ final class UserServiceTest extends TestCase
         $this->assertSame($res['user']->id, $this->userRepo->socialRegistrationKeys['social:1001']);
 
         $personas = $this->userService->listPersonas($res['user']->id);
-        $this->assertCount(1, $personas);
+        $this->assertCount(2, $personas);
         $this->assertSame($res['user']->id, $personas[0]->userId);
 
         $userRegisteredEvents = $this->outbox->findByEventType(EventTypes::USER_REGISTERED);
@@ -402,7 +424,7 @@ final class UserServiceTest extends TestCase
         $this->assertSame($personas[0]->id, $userRegisteredEvents[0]['payload']['persona_id']);
 
         $personaUpdatedEvents = $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED);
-        $this->assertCount(1, $personaUpdatedEvents);
+        $this->assertCount(2, $personaUpdatedEvents);
         $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['aggregate_id']);
     }
 
@@ -552,15 +574,161 @@ final class UserServiceTest extends TestCase
         $this->userService->updateUser('999999', '+8613900000000');
     }
 
-    public function testAliasCreationAlwaysUsesAliasType(): void
+    public function testAliasCreationIsDisabled(): void
     {
         $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
 
-        $alias = $this->userService->createAliasPersona($res['user']->id, '  Night Rain  ');
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->userService->createAliasPersona($res['user']->id, '  Night Rain  ');
+    }
 
-        $this->assertSame(PersonaType::ALIAS->value, $alias->type);
-        $this->assertSame('Night Rain', $alias->nickname);
+    public function testEnsureInternalAliasIsIdempotent(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+
+        $first = $this->userService->ensureInternalAlias($res['user']->id);
+        $second = $this->userService->ensureInternalAlias($res['user']->id);
+
+        $this->assertSame($first->id, $second->id);
+        $this->assertTrue($first->isInternalAlias);
         $this->assertCount(2, $this->userService->listPersonas($res['user']->id));
+    }
+
+    public function testResolvePersonaModeAllowsMainForEveryKnownOperation(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $main = $this->userService->listPersonas($res['user']->id)[0];
+
+        foreach (PersonaOperation::cases() as $operation) {
+            if ($operation === PersonaOperation::UNSPECIFIED) {
+                continue;
+            }
+
+            $resolved = $this->userService->resolvePersonaMode(
+                $res['user']->id,
+                PersonaMode::MAIN->value,
+                $operation->value,
+            );
+
+            $this->assertSame($main->id, $resolved->id, $operation->name);
+            $this->assertFalse($resolved->isInternalAlias, $operation->name);
+        }
+    }
+
+    public function testResolvePersonaModeAllowsCanonicalAliasOnlyForContentAndChat(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $alias = $this->userService->listPersonas($res['user']->id)[1];
+        $allowed = [
+            PersonaOperation::CREATE_POST,
+            PersonaOperation::CREATE_COMMENT,
+            PersonaOperation::CREATE_CONVERSATION,
+            PersonaOperation::SEND_MESSAGE,
+        ];
+
+        foreach (PersonaOperation::cases() as $operation) {
+            if ($operation === PersonaOperation::UNSPECIFIED) {
+                continue;
+            }
+
+            if (in_array($operation, $allowed, true)) {
+                $resolved = $this->userService->resolvePersonaMode(
+                    $res['user']->id,
+                    PersonaMode::ALIAS->value,
+                    $operation->value,
+                );
+                $this->assertSame($alias->id, $resolved->id, $operation->name);
+                continue;
+            }
+
+            try {
+                $this->userService->resolvePersonaMode(
+                    $res['user']->id,
+                    PersonaMode::ALIAS->value,
+                    $operation->value,
+                );
+                $this->fail('ALIAS must be rejected for ' . $operation->name);
+            } catch (\RuntimeException $exception) {
+                $this->assertSame(ErrorCode::PERSONA_FORBIDDEN->value, $exception->getCode(), $operation->name);
+            }
+        }
+    }
+
+    public function testResolvePersonaModeRejectsUnspecifiedAndUnknownOperationsWithoutCreatingAlias(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $alias = $this->userService->listPersonas($res['user']->id)[1];
+        unset($this->personaRepo->personas[$alias->id]);
+        $personaCount = count($this->personaRepo->findByUserId($res['user']->id));
+        $eventCount = count($this->outbox->findByEventType(EventTypes::PERSONA_UPDATED));
+
+        foreach ([PersonaOperation::UNSPECIFIED->value, 999] as $operation) {
+            try {
+                $this->userService->resolvePersonaMode(
+                    $res['user']->id,
+                    PersonaMode::ALIAS->value,
+                    $operation,
+                );
+                $this->fail('Unknown operations must fail closed');
+            } catch (\RuntimeException $exception) {
+                $this->assertSame(ErrorCode::PERSONA_FORBIDDEN->value, $exception->getCode());
+            }
+        }
+
+        $this->assertCount($personaCount, $this->personaRepo->findByUserId($res['user']->id));
+        $this->assertCount($eventCount, $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED));
+    }
+
+    public function testLegacyAliasCannotBeUsedForAnyAliasOperation(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $legacy = $this->personaRepo->create(
+            id: 'legacy-alias',
+            userId: $res['user']->id,
+            type: PersonaType::ALIAS->value,
+            nickname: 'Historical alias',
+            avatarKey: null,
+            bio: null,
+            isInternalAlias: false,
+        );
+
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->userService->assertPersonaUsableByUser(
+            $res['user']->id,
+            $legacy->id,
+            PersonaOperation::CREATE_POST->value,
+        );
+    }
+
+    public function testSoftDeletedCanonicalAliasCannotBeRecreatedOrReactivated(): void
+    {
+        $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
+        $alias = $this->userService->listPersonas($res['user']->id)[1];
+        $deleted = new Persona(
+            id: $alias->id,
+            userId: $alias->userId,
+            type: $alias->type,
+            nickname: $alias->nickname,
+            avatarKey: $alias->avatarKey,
+            bio: $alias->bio,
+            status: $alias->status,
+            isInternalAlias: true,
+            deletedAt: '2026-10-10 00:00:00',
+        );
+        $this->personaRepo->personas[$alias->id] = $deleted;
+        $beforeEvents = count($this->outbox->findByEventType(EventTypes::PERSONA_UPDATED));
+
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        try {
+            $this->userService->resolvePersonaMode(
+                $res['user']->id,
+                PersonaMode::ALIAS->value,
+                PersonaOperation::CREATE_POST->value,
+            );
+        } finally {
+            $this->assertSame($deleted, $this->personaRepo->personas[$alias->id]);
+            $this->assertSame($beforeEvents, count($this->outbox->findByEventType(EventTypes::PERSONA_UPDATED)));
+        }
     }
 
     public function testLegacyPersonaCreationRejectsMainType(): void
@@ -575,41 +743,29 @@ final class UserServiceTest extends TestCase
         );
     }
 
-    public function testLegacyZeroTypeCreatesAliasForProtoCompatibility(): void
+    public function testLegacyZeroTypeIsDisabledWithoutSideEffects(): void
     {
         $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
 
-        $alias = $this->userService->createPersona($res['user']->id, 0, 'Legacy Alias');
-
-        $this->assertSame(PersonaType::ALIAS->value, $alias->type);
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->userService->createPersona($res['user']->id, 0, 'Legacy Alias');
     }
 
     public function testLegacyPersonaCreationRejectsUnknownType(): void
     {
         $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
 
-        $this->expectExceptionCode(ErrorCode::INVALID_ARGUMENT->value);
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
         $this->userService->createPersona($res['user']->id, 99, 'Unknown Type');
     }
 
-    public function testPersonaFieldsRespectStorageLengths(): void
+    public function testDisabledPersonaCreationRejectsBeforeInputNormalization(): void
     {
         $res = $this->userService->findOrCreateUserByPhone('+8613800000000');
         $userId = $res['user']->id;
 
-        try {
-            $this->userService->createAliasPersona($userId, str_repeat('n', 65));
-            $this->fail('Expected an overlong nickname to be rejected');
-        } catch (\RuntimeException $exception) {
-            $this->assertSame(ErrorCode::INVALID_ARGUMENT->value, $exception->getCode());
-        }
-
-        try {
-            $this->userService->createAliasPersona($userId, 'Valid', null, str_repeat('b', 501));
-            $this->fail('Expected an overlong bio to be rejected');
-        } catch (\RuntimeException $exception) {
-            $this->assertSame(ErrorCode::INVALID_ARGUMENT->value, $exception->getCode());
-        }
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->userService->createAliasPersona($userId, str_repeat('n', 65));
     }
 
     public function testPersonaValidationRejectsInactiveAccount(): void
@@ -628,7 +784,11 @@ final class UserServiceTest extends TestCase
         );
 
         $this->expectExceptionCode(ErrorCode::USER_BANNED->value);
-        $this->userService->assertPersonaUsableByUser($userId, $personaId);
+        $this->userService->assertPersonaUsableByUser(
+            $userId,
+            $personaId,
+            PersonaOperation::UPDATE_PROFILE->value,
+        );
     }
 
     public function testPersonaValidationRejectsInactivePersona(): void
@@ -644,6 +804,7 @@ final class UserServiceTest extends TestCase
             avatarKey: $persona->avatarKey,
             bio: $persona->bio,
             status: 0,
+            isInternalAlias: $persona->isInternalAlias,
         );
 
         $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
@@ -657,14 +818,22 @@ final class UserServiceTest extends TestCase
         $personaId = $this->userService->listPersonas($first['user']->id)[0]->id;
 
         try {
-            $this->userService->assertPersonaUsableByUser($second['user']->id, $personaId);
+            $this->userService->assertPersonaUsableByUser(
+                $second['user']->id,
+                $personaId,
+                PersonaOperation::UPDATE_PROFILE->value,
+            );
             $this->fail('A persona must not be usable by another account');
         } catch (\RuntimeException $exception) {
             $this->assertSame(ErrorCode::PERSONA_FORBIDDEN->value, $exception->getCode());
         }
 
         try {
-            $this->userService->assertPersonaUsableByUser('missing-user', $personaId);
+            $this->userService->assertPersonaUsableByUser(
+                'missing-user',
+                $personaId,
+                PersonaOperation::UPDATE_PROFILE->value,
+            );
             $this->fail('An unknown account must not authorize a persona');
         } catch (\RuntimeException $exception) {
             $this->assertSame(ErrorCode::PERSONA_FORBIDDEN->value, $exception->getCode());
@@ -672,7 +841,11 @@ final class UserServiceTest extends TestCase
 
         unset($this->personaRepo->personas[$personaId]);
         $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
-        $this->userService->assertPersonaUsableByUser($first['user']->id, $personaId);
+        $this->userService->assertPersonaUsableByUser(
+            $first['user']->id,
+            $personaId,
+            PersonaOperation::UPDATE_PROFILE->value,
+        );
     }
 
     public function testUpdateRejectsInactivePersona(): void
@@ -688,6 +861,7 @@ final class UserServiceTest extends TestCase
             avatarKey: $persona->avatarKey,
             bio: $persona->bio,
             status: 0,
+            isInternalAlias: $persona->isInternalAlias,
         );
 
         $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
@@ -712,7 +886,7 @@ final class UserServiceTest extends TestCase
             $this->userService->createAliasPersona($userId, 'Blocked alias');
             $this->fail('A blocked account must not create an alias');
         } catch (\RuntimeException $exception) {
-            $this->assertSame(ErrorCode::USER_BANNED->value, $exception->getCode());
+            $this->assertSame(ErrorCode::PERSONA_FORBIDDEN->value, $exception->getCode());
         }
 
         $this->expectExceptionCode(ErrorCode::USER_BANNED->value);
@@ -744,8 +918,8 @@ final class UserServiceTest extends TestCase
         $this->assertSame('New Nickname', $updatedPersona->nickname);
 
         $personaEvents = $this->outbox->findByEventType(EventTypes::PERSONA_UPDATED);
-        // 1 from auto-created default persona + 1 from updatePersona
-        $this->assertCount(2, $personaEvents);
+        // 注册创建 MAIN + canonical ALIAS，各自产生一次；更新 MAIN 再产生一次。
+        $this->assertCount(3, $personaEvents);
         $lastEvent = end($personaEvents);
         $this->assertSame($personaId, $lastEvent['aggregate_id']);
         $this->assertSame($userId, $lastEvent['event_key']);

@@ -10,9 +10,9 @@ option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Discovery\\V1";
 
 message CapsuleItem {
   uint64 post_id = 1;
-  uint64 persona_id = 2;
   string emotion = 3;
-  content.v1.Post post = 4;
+  content.v1.PublicPost post = 4;
+  reserved 2;
 }
 
 message GetRandomCapsuleRequest {

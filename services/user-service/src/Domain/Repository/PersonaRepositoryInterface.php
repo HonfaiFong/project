@@ -21,6 +21,9 @@ interface PersonaRepositoryInterface
      */
     public function findByUserId(string $userId): array;
 
+    /** Return the one server-owned anonymous identity, if it exists. */
+    public function findInternalAliasByUserIdForUpdate(string $userId): ?Persona;
+
     public function countByUserId(string $userId): int;
 
     public function create(
@@ -29,7 +32,8 @@ interface PersonaRepositoryInterface
         int $type,
         string $nickname,
         ?string $avatarKey,
-        ?string $bio
+        ?string $bio,
+        bool $isInternalAlias = false,
     ): Persona;
 
     public function update(

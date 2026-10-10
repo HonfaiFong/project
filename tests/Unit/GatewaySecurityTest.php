@@ -16,11 +16,12 @@ use Tests\TestCase;
 
 final class GatewaySecurityTest extends TestCase
 {
-    public function testPublicPersonaPresenterRemovesOnlyUserId(): void
+    public function testPublicPersonaPresenterExposesOnlyMainProfileFields(): void
     {
         $persona = PersonaPresenter::one([
             'id'      => '30001',
             'user_id' => '20001',
+            'type'    => 1,
             'status'  => 1,
             'nickname'=> 'Public name',
         ]);
@@ -31,7 +32,38 @@ final class GatewaySecurityTest extends TestCase
         $this->assertSame('Public name', $persona['nickname']);
     }
 
-    /** @throws Exception If the secure random source is unavailable. */
+    public function testPrivateMainKeepsProfileFieldsAndAliasIsOnlyModeDescriptor(): void
+    {
+        $main = PersonaPresenter::privateOne([
+            'id' => '30001',
+            'user_id' => '20001',
+            'type' => 1,
+            'status' => 1,
+            'nickname' => 'Current name',
+            'avatar_key' => 'avatar-main',
+            'bio' => 'About me',
+        ]);
+        $this->assertSame('Current name', $main['nickname']);
+        $this->assertSame('avatar-main', $main['avatar_key']);
+        $this->assertSame('About me', $main['bio']);
+        $this->assertSame('main', $main['identity_mode']);
+        $this->assertTrue($main['profile_accessible']);
+
+        $alias = PersonaPresenter::privateOne([
+            'id' => '30002',
+            'type' => 2,
+            'status' => 1,
+            'nickname' => 'Should not leak',
+            'avatar_key' => 'system:anonymous',
+        ]);
+        $this->assertSame('alias', $alias['identity_mode']);
+        $this->assertFalse($alias['profile_accessible']);
+        $this->assertArrayNotHasKey('id', $alias);
+        $this->assertArrayNotHasKey('nickname', $alias);
+        $this->assertArrayNotHasKey('avatar_key', $alias);
+    }
+
+    /** @throws Exception 安全随机源不可用时抛出。 */
     public function testLoginRejectsMissingCredentialsBeforeCreatingUser(): void
     {
         $authClient = new AuthServiceClient('127.0.0.1:1');

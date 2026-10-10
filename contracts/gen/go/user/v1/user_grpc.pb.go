@@ -27,6 +27,7 @@ const (
 	UserService_CreatePersona_FullMethodName                = "/user.v1.UserService/CreatePersona"
 	UserService_GetPersona_FullMethodName                   = "/user.v1.UserService/GetPersona"
 	UserService_ValidatePersonaOwnership_FullMethodName     = "/user.v1.UserService/ValidatePersonaOwnership"
+	UserService_ResolvePersonaMode_FullMethodName           = "/user.v1.UserService/ResolvePersonaMode"
 	UserService_BatchGetPersonas_FullMethodName             = "/user.v1.UserService/BatchGetPersonas"
 	UserService_UpdatePersona_FullMethodName                = "/user.v1.UserService/UpdatePersona"
 	UserService_ListPersonas_FullMethodName                 = "/user.v1.UserService/ListPersonas"
@@ -44,6 +45,7 @@ type UserServiceClient interface {
 	CreatePersona(ctx context.Context, in *CreatePersonaRequest, opts ...grpc.CallOption) (*CreatePersonaResponse, error)
 	GetPersona(ctx context.Context, in *GetPersonaRequest, opts ...grpc.CallOption) (*GetPersonaResponse, error)
 	ValidatePersonaOwnership(ctx context.Context, in *ValidatePersonaOwnershipRequest, opts ...grpc.CallOption) (*ValidatePersonaOwnershipResponse, error)
+	ResolvePersonaMode(ctx context.Context, in *ResolvePersonaModeRequest, opts ...grpc.CallOption) (*ResolvePersonaModeResponse, error)
 	BatchGetPersonas(ctx context.Context, in *BatchGetPersonasRequest, opts ...grpc.CallOption) (*BatchGetPersonasResponse, error)
 	UpdatePersona(ctx context.Context, in *UpdatePersonaRequest, opts ...grpc.CallOption) (*UpdatePersonaResponse, error)
 	ListPersonas(ctx context.Context, in *ListPersonasRequest, opts ...grpc.CallOption) (*ListPersonasResponse, error)
@@ -137,6 +139,16 @@ func (c *userServiceClient) ValidatePersonaOwnership(ctx context.Context, in *Va
 	return out, nil
 }
 
+func (c *userServiceClient) ResolvePersonaMode(ctx context.Context, in *ResolvePersonaModeRequest, opts ...grpc.CallOption) (*ResolvePersonaModeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolvePersonaModeResponse)
+	err := c.cc.Invoke(ctx, UserService_ResolvePersonaMode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *userServiceClient) BatchGetPersonas(ctx context.Context, in *BatchGetPersonasRequest, opts ...grpc.CallOption) (*BatchGetPersonasResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BatchGetPersonasResponse)
@@ -179,6 +191,7 @@ type UserServiceServer interface {
 	CreatePersona(context.Context, *CreatePersonaRequest) (*CreatePersonaResponse, error)
 	GetPersona(context.Context, *GetPersonaRequest) (*GetPersonaResponse, error)
 	ValidatePersonaOwnership(context.Context, *ValidatePersonaOwnershipRequest) (*ValidatePersonaOwnershipResponse, error)
+	ResolvePersonaMode(context.Context, *ResolvePersonaModeRequest) (*ResolvePersonaModeResponse, error)
 	BatchGetPersonas(context.Context, *BatchGetPersonasRequest) (*BatchGetPersonasResponse, error)
 	UpdatePersona(context.Context, *UpdatePersonaRequest) (*UpdatePersonaResponse, error)
 	ListPersonas(context.Context, *ListPersonasRequest) (*ListPersonasResponse, error)
@@ -215,6 +228,9 @@ func (UnimplementedUserServiceServer) GetPersona(context.Context, *GetPersonaReq
 }
 func (UnimplementedUserServiceServer) ValidatePersonaOwnership(context.Context, *ValidatePersonaOwnershipRequest) (*ValidatePersonaOwnershipResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidatePersonaOwnership not implemented")
+}
+func (UnimplementedUserServiceServer) ResolvePersonaMode(context.Context, *ResolvePersonaModeRequest) (*ResolvePersonaModeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolvePersonaMode not implemented")
 }
 func (UnimplementedUserServiceServer) BatchGetPersonas(context.Context, *BatchGetPersonasRequest) (*BatchGetPersonasResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BatchGetPersonas not implemented")
@@ -390,6 +406,24 @@ func _UserService_ValidatePersonaOwnership_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_ResolvePersonaMode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolvePersonaModeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).ResolvePersonaMode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_ResolvePersonaMode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).ResolvePersonaMode(ctx, req.(*ResolvePersonaModeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _UserService_BatchGetPersonas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(BatchGetPersonasRequest)
 	if err := dec(in); err != nil {
@@ -482,6 +516,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidatePersonaOwnership",
 			Handler:    _UserService_ValidatePersonaOwnership_Handler,
+		},
+		{
+			MethodName: "ResolvePersonaMode",
+			Handler:    _UserService_ResolvePersonaMode_Handler,
 		},
 		{
 			MethodName: "BatchGetPersonas",

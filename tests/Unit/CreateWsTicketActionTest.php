@@ -8,6 +8,7 @@ use Apps\ApiGateway\Action\CreateWsTicketAction;
 use Apps\ApiGateway\Action\PersonaLookup;
 use Apps\ApiGateway\Action\WsTicketClient;
 use Contracts\Errors\ErrorCode;
+use Packages\Identity\PersonaOperation;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
 use Tests\TestCase;
@@ -79,11 +80,15 @@ final class CreateWsTicketActionTest extends TestCase
     public function testRejectsInactivePersona(): void
     {
         $userClient = $this->createMock(PersonaLookup::class);
-        $userClient->method('validatePersonaOwnership')->willReturn([
+        $userClient->expects($this->once())
+            ->method('validatePersonaOwnership')
+            ->with('20001', '30001', PersonaOperation::CONNECT->value)
+            ->willReturn([
             'persona' => [
                 'id'      => '30001',
                 'user_id' => '20001',
-                'status'  => 0, // Inactive
+                'status'  => 0, // 非活跃状态
+                'type'    => 1,
             ],
         ]);
 
@@ -105,11 +110,16 @@ final class CreateWsTicketActionTest extends TestCase
     public function testElevatesTraceContextAndIssuesTicket(): void
     {
         $userClient = $this->createMock(PersonaLookup::class);
-        $userClient->method('validatePersonaOwnership')->willReturn([
+        $userClient->expects($this->once())
+            ->method('validatePersonaOwnership')
+            ->with('20001', '30001', PersonaOperation::CONNECT->value)
+            ->willReturn([
             'persona' => [
                 'id'      => '30001',
                 'user_id' => '20001',
                 'status'  => 1,
+                'type'    => 1,
+                'is_internal_alias' => false,
             ],
         ]);
 
@@ -149,8 +159,16 @@ final class CreateWsTicketActionTest extends TestCase
         TraceContext::setCurrent($original);
 
         $userClient = $this->createMock(PersonaLookup::class);
-        $userClient->method('validatePersonaOwnership')->willReturn([
-            'persona' => ['id' => '30001', 'status' => 1],
+        $userClient->expects($this->once())
+            ->method('validatePersonaOwnership')
+            ->with('20001', '30001', PersonaOperation::CONNECT->value)
+            ->willReturn([
+            'persona' => [
+                'id' => '30001',
+                'status' => 1,
+                'type' => 1,
+                'is_internal_alias' => false,
+            ],
         ]);
         $authClient = $this->createMock(WsTicketClient::class);
         $authClient->method('createWsTicket')->willThrowException(new RuntimeException('issuer unavailable'));
@@ -166,5 +184,33 @@ final class CreateWsTicketActionTest extends TestCase
         }
 
         $this->assertSame($original, TraceContext::current());
+    }
+
+    public function testRejectsInternalAliasPersona(): void
+    {
+        $userClient = $this->createMock(PersonaLookup::class);
+        $userClient->expects($this->once())
+            ->method('validatePersonaOwnership')
+            ->with('20001', '30001', PersonaOperation::CONNECT->value)
+            ->willReturn([
+                'persona' => [
+                    'id' => '30001',
+                    'status' => 1,
+                    'type' => 2,
+                    'is_internal_alias' => true,
+                ],
+            ]);
+
+        $action = new CreateWsTicketAction(
+            $this->createMock(WsTicketClient::class),
+            $userClient,
+        );
+
+        $this->expectExceptionCode(ErrorCode::PERSONA_FORBIDDEN->value);
+        $this->expectExceptionMessage('anonymous personas cannot open');
+        $action->execute(
+            ['persona_id' => '30001'],
+            ['user_id' => '20001'],
+        );
     }
 }

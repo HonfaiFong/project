@@ -85,6 +85,15 @@ interface UserServiceInterface extends GRPC\ServiceInterface
 
     /**
     * @param GRPC\ContextInterface $ctx
+    * @param ResolvePersonaModeRequest $in
+    * @return ResolvePersonaModeResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function ResolvePersonaMode(GRPC\ContextInterface $ctx, ResolvePersonaModeRequest $in): ResolvePersonaModeResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
     * @param BatchGetPersonasRequest $in
     * @return BatchGetPersonasResponse
     *

@@ -6,6 +6,7 @@ namespace Apps\ApiGateway\Action;
 
 use Exception;
 use Contracts\Errors\ErrorCode;
+use Packages\Identity\PersonaOperation;
 use Packages\Tracing\TraceContext;
 use RuntimeException;
 use Throwable;
@@ -45,7 +46,14 @@ final readonly class CreateWsTicketAction
         // UserService performs the authoritative account, ownership and
         // current-status check. The client-provided persona id is not trusted
         // until this RPC succeeds.
-        $personaRes = $this->userClient->validatePersonaOwnership($userId, $personaId);
+        // CONNECT is a MAIN-only operation. The UserService call is the
+        // authoritative check; the local type check protects this gateway
+        // from an accidentally permissive downstream implementation.
+        $personaRes = $this->userClient->validatePersonaOwnership(
+            $userId,
+            $personaId,
+            PersonaOperation::CONNECT->value,
+        );
         $persona = $personaRes['persona'] ?? null;
         if (!is_array($persona) || (string)($persona['id'] ?? '') !== $personaId) {
             throw new RuntimeException('forbidden persona access', ErrorCode::PERSONA_FORBIDDEN->value);
@@ -53,6 +61,9 @@ final readonly class CreateWsTicketAction
 
         if ((int)($persona['status'] ?? 0) !== 1) {
             throw new RuntimeException('persona is inactive', ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+        if ((int)($persona['type'] ?? 0) !== 1 || (bool)($persona['is_internal_alias'] ?? false)) {
+            throw new RuntimeException('anonymous personas cannot open a general websocket connection', ErrorCode::PERSONA_FORBIDDEN->value);
         }
 
         // The validated persona must be present while AuthService issues the

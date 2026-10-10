@@ -36,6 +36,8 @@ final class PersonaModel extends Model
             status: (int)$row['status'],
             createdAt: (string)$row['created_at'],
             updatedAt: (string)$row['updated_at'],
+            isInternalAlias: (bool)($row['is_internal_alias'] ?? false),
+            deletedAt: isset($row['deleted_at']) ? (string)$row['deleted_at'] : null,
         );
     }
 }

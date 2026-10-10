@@ -52,6 +52,17 @@ final readonly class EloquentPersonaRepository implements PersonaRepositoryInter
         return $query->get()->map(static fn (PersonaModel $model): Persona => $model->toDomain())->all();
     }
 
+    public function findInternalAliasByUserIdForUpdate(string $userId): ?Persona
+    {
+        $query = $this->model->newQuery()
+            ->where('user_id', $userId)
+            ->where('type', 2)
+            ->where('is_internal_alias', 1);
+        $query->getQuery()->lockForUpdate();
+
+        return $query->first()?->toDomain();
+    }
+
     public function countByUserId(string $userId): int
     {
         return $this->model->newQuery()
@@ -66,7 +77,8 @@ final readonly class EloquentPersonaRepository implements PersonaRepositoryInter
         int $type,
         string $nickname,
         ?string $avatarKey,
-        ?string $bio
+        ?string $bio,
+        bool $isInternalAlias = false,
     ): Persona {
         $now = gmdate('Y-m-d H:i:s.v');
 
@@ -77,6 +89,7 @@ final readonly class EloquentPersonaRepository implements PersonaRepositoryInter
             'nickname'   => $nickname,
             'avatar_key' => $avatarKey,
             'bio'        => $bio,
+            'is_internal_alias' => $isInternalAlias ? 1 : 0,
             'status'     => 1,
             'created_at' => $now,
             'updated_at' => $now,

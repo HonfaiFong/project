@@ -453,6 +453,11 @@ class EmptyPersonaRepository implements PersonaRepositoryInterface
         return [];
     }
 
+    public function findInternalAliasByUserIdForUpdate(string $userId): ?Persona
+    {
+        return null;
+    }
+
     public function countByUserId(string $userId): int
     {
         return 0;
@@ -464,9 +469,18 @@ class EmptyPersonaRepository implements PersonaRepositoryInterface
         int $type,
         string $nickname,
         ?string $avatarKey,
-        ?string $bio
+        ?string $bio,
+        bool $isInternalAlias = false
     ): Persona {
-        return new Persona(id: $id, userId: $userId, type: $type, nickname: $nickname, avatarKey: $avatarKey, bio: $bio);
+        return new Persona(
+            id: $id,
+            userId: $userId,
+            type: $type,
+            nickname: $nickname,
+            avatarKey: $avatarKey,
+            bio: $bio,
+            isInternalAlias: $isInternalAlias,
+        );
     }
 
     public function update(

@@ -13,12 +13,12 @@ interface MessageServiceInterface extends GRPC\ServiceInterface
 
     /**
     * @param GRPC\ContextInterface $ctx
-    * @param SendMessageRequest $in
+    * @param PublicSendMessageRequest $in
     * @return SendMessageResponse
     *
     * @throws GRPC\Exception\InvokeException
     */
-    public function SendMessage(GRPC\ContextInterface $ctx, SendMessageRequest $in): SendMessageResponse;
+    public function SendMessage(GRPC\ContextInterface $ctx, PublicSendMessageRequest $in): SendMessageResponse;
 
     /**
     * @param GRPC\ContextInterface $ctx

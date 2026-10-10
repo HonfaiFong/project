@@ -25,6 +25,10 @@ class ValidatePersonaOwnershipRequest extends \Google\Protobuf\Internal\Message
      * Generated from protobuf field <code>uint64 persona_id = 2;</code>
      */
     protected $persona_id = 0;
+    /**
+     * Generated from protobuf field <code>.user.v1.PersonaOperation operation = 3;</code>
+     */
+    protected $operation = 0;
 
     /**
      * Constructor.
@@ -34,6 +38,7 @@ class ValidatePersonaOwnershipRequest extends \Google\Protobuf\Internal\Message
      *
      *     @type int|string $user_id
      *     @type int|string $persona_id
+     *     @type int $operation
      * }
      */
     public function __construct($data = NULL) {
@@ -81,6 +86,28 @@ class ValidatePersonaOwnershipRequest extends \Google\Protobuf\Internal\Message
     {
         GPBUtil::checkUint64($var);
         $this->persona_id = $var;
+
+        return $this;
+    }
+
+    /**
+     * Generated from protobuf field <code>.user.v1.PersonaOperation operation = 3;</code>
+     * @return int
+     */
+    public function getOperation()
+    {
+        return $this->operation;
+    }
+
+    /**
+     * Generated from protobuf field <code>.user.v1.PersonaOperation operation = 3;</code>
+     * @param int $var
+     * @return $this
+     */
+    public function setOperation($var)
+    {
+        GPBUtil::checkEnum($var, \Contracts\Gen\User\V1\PersonaOperation::class);
+        $this->operation = $var;
 
         return $this;
     }

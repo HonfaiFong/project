@@ -12,7 +12,7 @@ option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Feed\\V1";
 message FeedItem {
   uint64 post_id = 1;
   double score = 2;
-  content.v1.Post post = 3;
+  content.v1.PublicPost post = 3;
 }
 
 message GetFeedRequest {

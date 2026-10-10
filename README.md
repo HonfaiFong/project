@@ -50,7 +50,7 @@
 | `services/auth-service` | AuthService | RoadRunner / PHP 8.4 | 账号认证、Token 签发 / 轮转、设备管理、WS Ticket (**Phase 1 已实现**) |
 | `services/user-service` | UserService | RoadRunner / PHP 8.4 | 用户主体、Persona 分身管理 (**User != Persona**) (**Phase 1 已实现**) |
 | `services/content-service` | ContentService | RoadRunner / PHP 8.4 | 帖子、图文媒体元数据、一级与回复评论 (**骨架，未实现**) |
-| `services/social-service` | SocialService | RoadRunner / PHP 8.4 | 点赞、分身关注、用户级双向拉黑 (**骨架，未实现**) |
+| services/social-service | SocialService | RoadRunner / PHP 8.4 | MAIN 点赞/关注、账号级双向拉黑 (**骨架，未实现**) |
 | `services/discovery-service` | DiscoveryService | RoadRunner / PHP 8.4 | 漂流罐头、情绪池、随机发现、曝光过滤 (**骨架，未实现**) |
 | `services/feed-service` | FeedService | RoadRunner / PHP 8.4 | 首页 Feed 规则召回、ZSET Timeline 聚合 (**骨架，未实现**) |
 | `services/recommend-service` | RecommendService | RoadRunner / PHP 8.4 | 用户兴趣画像、候选打分排序 (**骨架，未实现**) |
@@ -346,3 +346,16 @@ Outbox 的 `aggregate_id` 标识事件所属实体；`event_key` 单独保存流
    确认已先调用 `POST /api/v1/ws/ticket` 获取合法 Ticket；Ticket 有效期 60 秒且**单次使用**（同一 Ticket 二次握手会被网关拒绝），需在 60 秒内通过 `/ws?ticket=<ticket>` 建立连接。
 3. **日志排查**:
    所有微服务输出严格的 JSON 日志，包含 `trace_id` 与 `request_id`，可通过 `docker compose logs -f <service_name>` 检索单个链路。
+
+## 14. Anonymous identity contract
+
+完整中文业务规则见 [真身与匿名分身业务规则](doc/USER_PERSONA_BUSINESS_RULES.md)，涵盖身份生命周期、操作权限、匿名展示、私聊、拉黑及验收场景。迁移与部署见 [Persona 迁移说明](doc/PERSONA_IDENTITY_MIGRATION.md)。
+
+The identity model uses one long-lived public MAIN persona and one server-owned internal ALIAS persona per new user. Registration creates exactly one of each. This replaces the old fixed-pseudonym model, including the former maximum of five client-created personas. CreatePersona and legacy alias creation remain compatibility RPCs but reject every request.
+
+MAIN is used for profile access, likes, follows, blocks, reports, CONNECT, and profile changes. ALIAS is permitted only for creating posts, comments, conversations, and sending messages. Mode and operation values are validated before alias lookup or creation; unspecified and unknown values fail closed. WebSocket tickets are always issued for MAIN with the CONNECT operation.
+
+Public responses use safe projections. A MAIN author may expose its public persona id and write-time profile values. An ALIAS author exposes only a scope-bound opaque HMAC reference, a system anonymous avatar, and a frozen display name. ALIAS ids, nicknames, and user ids never appear in public responses. Conversation identity is fixed when the session/member snapshot is created; SendMessage has no per-message identity selector.
+The message RPC accepts PublicSendMessageRequest with only client message id, conversation id, type, and content; the session snapshot supplies its sender identity. Public* protobuf responses are a breaking contract update, so regenerate all clients and do not mix old and new consumers during rollout.
+
+The current content, social, chat, and message services are README/protocol skeletons. The independent PublicPost, PublicComment, PublicConversation, and PublicMessage service implementations are not claimed complete by this foundation. See doc/PERSONA_IDENTITY_MIGRATION.md for schema, deployment, key rotation, and legacy protocol details.

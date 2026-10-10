@@ -98,3 +98,37 @@ remaining non-E.164 values. It never applies data changes automatically. The
 explicit apply command rechecks and locks rows inside a transaction, updates
 with the original phone as a condition, and rolls back on conflicts. Direct
 service startup must also be preceded by `make preflight-phone`.
+
+## 10. Persona identity contract
+
+The account has one public **MAIN** persona and one server-owned canonical
+internal **ALIAS** persona. Registration creates exactly those two rows in the
+same transaction. `CreatePersona` and the legacy alias creation entry point are
+kept only for rolling wire/source compatibility and always return
+`PERSONA_FORBIDDEN`; clients cannot create fixed pseudonyms. Historical alias
+rows remain available for audit/history and are never promoted into a new
+behavioral identity.
+
+`ResolvePersonaMode` validates both a known mode and a known operation before
+it looks up or ensures an alias. `IDENTITY_MODE_UNSPECIFIED`, unknown values,
+and operation `0` fail closed without creating a row. MAIN is valid for every
+known operation. The canonical ALIAS is valid only for `CREATE_POST`,
+`CREATE_COMMENT`, `CREATE_CONVERSATION`, and `SEND_MESSAGE`. Likes, follows,
+blocks, reports, CONNECT, and profile updates must resolve MAIN.
+
+The user service may return internal persona data to an authenticated service,
+but public presenters must never expose an ALIAS id, nickname, or user id.
+WebSocket tickets use MAIN with `PERSONA_OPERATION_CONNECT`. A deleted or
+inactive canonical alias remains reserved by its soft-deleted row and cannot
+be silently recreated or reactivated.
+
+The identity migrations run after the legacy schema import and persona
+constraints: `20261010000100_add_internal_alias_identity` first establishes the
+canonical marker and uniqueness, then `20261010000200_add_anonymous_author_snapshots`
+adds write-time snapshot columns to content, chat, and message tables. Both
+migrations validate existing definitions before changing them; the snapshot
+migration refuses missing tables and rollback refuses to drop columns while
+rows exist. Deployments must regenerate PHP and Go protobuf output and restart
+workers after the protocol change. The content, social, chat, and message
+services currently provide contract/README skeletons; their business handlers
+are not implemented by this foundation.

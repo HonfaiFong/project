@@ -30,6 +30,8 @@ use Contracts\Gen\User\V1\UserProfile;
 use Contracts\Gen\User\V1\UserServiceInterface;
 use Contracts\Gen\User\V1\ValidatePersonaOwnershipRequest;
 use Contracts\Gen\User\V1\ValidatePersonaOwnershipResponse;
+use Contracts\Gen\User\V1\ResolvePersonaModeRequest;
+use Contracts\Gen\User\V1\ResolvePersonaModeResponse;
 use Packages\GrpcCommon\ErrorStatusMapper;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Psr\Log\LoggerInterface;
@@ -155,16 +157,14 @@ final readonly class UserGrpcService implements UserServiceInterface
      */
     public function CreatePersona(ContextInterface $ctx, CreatePersonaRequest $in): CreatePersonaResponse
     {
-        return $this->call($ctx, 'CreatePersona', function () use ($in): CreatePersonaResponse {
-            $persona = $this->userService->createPersona(
-                userId: $this->requireId($in->getUserId(), 'user_id'),
-                type: $in->getType(),
-                nickname: $in->getNickname(),
-                avatarKey: $in->getAvatarKey() !== '' ? $in->getAvatarKey() : null,
-                bio: $in->getBio() !== '' ? $in->getBio() : null,
+        return $this->call($ctx, 'CreatePersona', function (): CreatePersonaResponse {
+            // ALIAS is a server-owned anonymous mode. Keep the legacy RPC in
+            // the protocol for rolling upgrades, but never create a public
+            // fixed alias from client-controlled profile fields.
+            throw new \RuntimeException(
+                'creating personas is disabled; select MAIN or server-owned ALIAS mode',
+                ErrorCode::PERSONA_FORBIDDEN->value,
             );
-
-            return (new CreatePersonaResponse())->setPersona($this->toPersonaProfile($persona));
         });
     }
 
@@ -196,9 +196,33 @@ final readonly class UserGrpcService implements UserServiceInterface
             $persona = $this->userService->assertPersonaUsableByUser(
                 userId: $this->requireId($in->getUserId(), 'user_id'),
                 personaId: $this->requireId($in->getPersonaId(), 'persona_id'),
+                operation: $in->getOperation(),
             );
 
             return (new ValidatePersonaOwnershipResponse())->setPersona($this->toPersonaProfile($persona));
+        });
+    }
+
+    /**
+     * Resolve MAIN or the canonical internal ALIAS for an authenticated
+     * account. This RPC returns an internal profile and is never a public
+     * directory lookup.
+     *
+     * @throws RandomException
+     * @throws GRPCException
+     */
+    public function ResolvePersonaMode(
+        ContextInterface $ctx,
+        ResolvePersonaModeRequest $in
+    ): ResolvePersonaModeResponse {
+        return $this->call($ctx, 'ResolvePersonaMode', function () use ($in): ResolvePersonaModeResponse {
+            $persona = $this->userService->resolvePersonaMode(
+                userId: $this->requireId($in->getUserId(), 'user_id'),
+                mode: $in->getMode(),
+                operation: $in->getOperation(),
+            );
+
+            return (new ResolvePersonaModeResponse())->setPersona($this->toPersonaProfile($persona));
         });
     }
 
@@ -393,7 +417,10 @@ final readonly class UserGrpcService implements UserServiceInterface
             ->setBio($persona->bio ?? '')
             ->setStatus($persona->status)
             ->setCreatedAt($persona->createdAt ?? '')
-            ->setUpdatedAt($persona->updatedAt ?? '');
+            ->setUpdatedAt($persona->updatedAt ?? '')
+            ->setIsInternalAlias($persona->isInternalAlias)
+            ->setIdentityMode($persona->type === 1 ? 'main' : 'alias')
+            ->setProfileAccessible($persona->type === 1);
     }
 
     private function publicErrorMessage(Throwable $exception): string
