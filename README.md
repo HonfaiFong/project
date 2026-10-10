@@ -100,6 +100,34 @@ MySQL、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 
 
 生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`ENABLE_DEV_SMS=false` 且固定验证码为空。当前没有生产短信适配器，QQ/微信开关必须保持关闭；强行开启时 AuthService 拒绝启动。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
 
+### 受信代理链与客户端 IP 限流
+
+`SOCIAL_TRUSTED_PROXY_CIDRS` 接受逗号分隔的多个 CIDR（IPv4/IPv6 均可），用于描述 Gateway 前面的全部受控代理跳数，例如双 CDN + LB 拓扑：
+
+```text
+SOCIAL_TRUSTED_PROXY_CIDRS=100.64.0.0/10,10.0.0.0/8
+# 客户端 -> CDN 边缘 (100.64.0.0/10) -> LB (10.0.0.0/8) -> Gateway
+# Gateway 收到: X-Forwarded-For: <client>, <cdn-edge>，socket peer = <lb>
+```
+
+客户端 IP 的解析规则是「从最右侧可信代理向左走，第一个不受信地址即客户端」，因此客户端伪造的左侧 XFF 条目（包括伪造一个位于受信网段内的地址）无法改变解析结果；只有当 socket peer 本身落在受信网段内时才读取 `X-Forwarded-For`，不受信 peer 的任何转发头一律忽略。IPv4-mapped IPv6 地址（如 `::ffff:10.1.0.1`）先归一化为内嵌 IPv4 再做网段匹配，避免双栈 LB 因表示形式不同被误判为不受信、导致所有客户端共享一个限流桶。非法 CIDR（含 `0.0.0.0/0`、`::/0`）在 worker 启动时抛错拒绝服务，属于 fail-fast 而不是降级。
+
+社交登录/绑定限流按解析后的客户端 IP 分桶：IPv4 按完整地址，IPv6 归一到 /64 前缀分桶（终端用户可自由轮换低 64 位接口标识，按全址分桶等于无限桶；/64 是单个订阅者的常规粒度）。限流计数依赖 Redis，生产环境 Redis 不可用时拒绝请求（HTTP 503 fail-closed），开发环境放行。
+
+### gRPC 超时约束
+
+各超时旋钮不是独立自由值，启动与测试门禁会强制以下关系，违反即拒绝启动：
+
+| 变量 | 默认 | 约束 |
+| :--- | :--- | :--- |
+| `GRPC_AUTH_TIMEOUT_MS` | 300 | Gateway→Auth 普通调用外层截止时间；必须为正整数 |
+| `GRPC_USER_DIRECTORY_TIMEOUT_MS` | 250 | Auth→User 目录跳预算；必须 **小于** `GRPC_AUTH_TIMEOUT_MS`（保证外层截止先生效），且为正 |
+| `GRPC_SOCIAL_LOGIN_TIMEOUT_MS` | 7000 | 社交登录 RPC 截止；必须 **大于** `2 × SOCIAL_HTTP_TIMEOUT_MS`（QQ 最坏两跳 OAuth HTTP） |
+| `GRPC_SOCIAL_BIND_TIMEOUT_MS` | 7000 | 社交绑定 RPC 截止；同上 |
+| `SOCIAL_HTTP_TIMEOUT_MS` | 3000 | OAuth 上游单次 HTTP 超时 |
+
+`GRPC_AUTH_TIMEOUT_MS − GRPC_USER_DIRECTORY_TIMEOUT_MS` 是 Auth 侧自身每调用 ~50ms 的工作预算；worker 启动预热（Eloquent、protobuf 描述符池、JWT 编解码）正是为了把暖路径成本压在该预算内，`tests/Unit/GrpcDeadlineBudgetBenchmarkTest.php` 以基准测试守住这一点，`tests/Unit/GrpcDeadlineConfigContractTest.php` 校验 compose.yaml 与 .env.example 的默认值满足上述跨服务关系。
+
 内部 gRPC 当前明确使用明文传输：`UnaryGrpcClient` 使用 `ChannelCredentials::createInsecure()`，RoadRunner 未配置 TLS。请求、手机号、会话数据和 `x-service-token` 都可能被能够监听内部网络的主体读取。当前部署仅适用于单机、受控且隔离的 Compose 网络；不得发布 Auth/User RPC 端口，不得把不可信容器接入该网络。应用层 token 和方法白名单提供调用授权，不提供传输机密性。
 
 跨主机、共享集群或不可信网络部署前，必须同时配置服务端 TLS 与客户端 CA/服务名验证；采用 mTLS 时还应校验客户端证书身份，并保留现有调用方及方法授权。证书和三个独立 RPC 凭证应由密钥管理系统注入，禁止写入镜像、Git 或日志。建立定期轮换、到期告警和泄露后的紧急撤销流程。当前每个调用方只接受一个 token，尚不支持双凭证无缝轮换：应在维护窗口停止相关调用方流量，替换服务端与客户端凭证并重启 worker，运行 `scripts/test_internal_rpc.php` 验证新凭证成功、旧凭证失败后恢复流量。未来无停机轮换需要有时限的双凭证接受窗口，待调用方全部切换后撤销旧凭证；TLS/mTLS 与双凭证窗口均为后续能力，当前未实现。
@@ -200,6 +228,8 @@ make up
 docker compose --profile e2e up -d fake-oauth
 make e2e
 ```
+
+**fake-oauth 授权码语义（与真实上游一致的单次兑换）**：测试码格式为 `<provider>-<scenario>-<identity>~<nonce>`，`~nonce` 之前的部分决定外部身份（openid/unionid），完整码串是一次性授权码。fake 上游对每个码只接受一次兑换——包括 503 瞬时失败的尝试也会烧毁该码，重放已消费码返回上游的 invalid code 错误（业务码 `1001009` / HTTP 401）。因此 E2E 中每一次失败恢复（上游瞬时故障、跨服务超时后的重试）都必须携带同身份的**全新**授权码（新 nonce），并断言恢复的是同一本地 User、不产生重复账号；这一契约由 `tests/Unit/SocialAuthServiceTest.php` 与 `scripts/social_e2e_test.sh` 共同守护。
 
 测试会创建用户/会话并修改测试用户状态，应只使用专用测试环境。endpoint 覆盖和 HTTP 开关在生产环境会被启动检查拒绝。仅运行社交部分：
 
