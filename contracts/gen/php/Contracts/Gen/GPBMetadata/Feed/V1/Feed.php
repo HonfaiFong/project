@@ -24,3 +24,4 @@ class Feed
         static::$is_initialized = true;
     }
 }
+

@@ -33,7 +33,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
         $this->alias = EloquentConnection::model(SocialIdentityAliasModel::class, $pdo);
     }
 
-    /** @throws Throwable If identity reconciliation cannot complete atomically. */
+    /** @throws Throwable 身份合并无法原子完成时抛出。 */
     public function findByExternalIdentity(ExternalIdentity $identity): ?SocialIdentity
     {
         if ($identity->unionId === null || $identity->unionId === '') {
@@ -45,12 +45,9 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
             return $row ? $this->hydrate($row) : null;
         }
 
-        // Union IDs can arrive after an openid-only row was created. Both rows
-        // must be read and reconciled while locked; otherwise two app requests
-        // can promote or bind different rows for the same provider identity.
-        // The transaction stays on the injected PDO: an outer caller may have
-        // started it outside the Eloquent Connection, whose own level counter
-        // would then be out of sync.
+        // 仅含 openid 的行创建后可能才获得 Union ID；须在持锁期间读取并合并两行，避免两个应用请求将同一提供方身份提升或
+        // 绑定到不同记录。事务继续使用注入的 PDO，因为外层调用方可能在 Eloquent Connection 外部开启事务，其内部事务层级
+        // 计数会与实际状态不同步。
         $ownsTransaction = !$this->pdo->inTransaction();
         $transactionStarted = false;
         if ($ownsTransaction) {
@@ -62,8 +59,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
             $unionRow = $this->findRowBySubject($identity, lock: true);
             $openIdRow = $this->findRowByProviderOpenId($identity, lock: true);
             $row = $this->reconcileUnionIdentity($identity, $unionRow, $openIdRow);
-            // A new app may resolve an existing unionid without an openid row.
-            // Keep that verified mapping even when authentication is disabled.
+            // 新应用可能在没有 openid 行时解析到现有 unionid；即使认证被禁用，也保留该已验证映射。
             if ($row !== null && ((string)$row['provider_app_id'] !== $identity->providerAppId
                 || (string)$row['openid'] !== $identity->openId)) {
                 $this->rememberOpenIdAlias(array_replace($row, [
@@ -86,7 +82,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
         }
     }
 
-    /** @throws Throwable If identity reservation or reconciliation fails. */
+    /** @throws Throwable 身份预留或合并失败时抛出。 */
     public function reserve(ExternalIdentity $identity): SocialIdentity
     {
         $existing = $this->findByExternalIdentity($identity);
@@ -263,8 +259,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
             return $unionRow;
         }
 
-        // A single openid must not be allowed to move between union IDs, even
-        // when the rows currently happen to point at the same local user.
+        // 禁止单个 openid 在不同 Union ID 间迁移，即使相关行当前指向同一本地用户。
         if ((string)$openIdRow['subject_type'] === 'unionid'
             && (string)$openIdRow['subject_id'] !== $identity->unionId
         ) {
@@ -279,8 +274,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
             if ($pending['user_id'] !== null || (int)$pending['status'] !== SocialIdentity::STATUS_PENDING) {
                 throw $this->bindConflict();
             }
-            // The registering row owns the stable RPC key, even when the other
-            // row acquired a unionid first. Preserve it across OAuth upgrades.
+            // 正在注册的行持有稳定 RPC 键，即使另一行先获得 unionid，也须在 OAuth 升级过程中保留该键。
             $this->rememberOpenIdAlias($intent, (string)$intent['id']);
             $this->rememberOpenIdAlias($pending, (string)$intent['id']);
             $this->redirectAliases((string)$pending['id'], (string)$intent['id']);
@@ -302,9 +296,8 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
             $canonicalBoundAt = $openIdRow['bound_at'] ?? gmdate('Y-m-d H:i:s.v');
         }
 
-        // Delete first when the openid row already owns the same user. The
-        // production unique(user_id, provider) key then permits the canonical
-        // unionid row to inherit that user atomically.
+        // 若 openid 行已属于同一用户，先将其删除；生产环境 unique(user_id, provider) 唯一键随后允许规范 unionid 行原子继
+        // 承该用户。
         $this->rememberOpenIdAlias($unionRow, (string)$unionRow['id']);
         $this->rememberOpenIdAlias($openIdRow, (string)$unionRow['id']);
         $this->redirectAliases((string)$openIdRow['id'], (string)$unionRow['id']);
@@ -472,9 +465,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
     /** @param array<string, mixed> $row */
     private function rememberOpenIdAlias(array $row, string $canonicalId): void
     {
-        // Atomic insert that never overwrites an alias already owned by a
-        // different identity: the existing row wins and the update below is a
-        // no-op assigned to the unique key itself.
+        // 原子插入，不覆盖已属于其他身份的别名；保留现有行，下方更新仅将唯一键赋为自身，不产生实际变更。
         $this->alias->newQuery()->upsert(
             [
                 [
@@ -547,8 +538,8 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
     }
 
     /**
-     * Matches the previous PDO handling: SQLSTATE 23000 or MySQL error 1062.
-     * Laravel wraps driver errors in QueryException, so unwrap the PDO cause.
+     * 沿用原 PDO 处理规则：SQLSTATE 23000 或 MySQL 错误 1062。Laravel 将驱动错误包装为 QueryException，因此须取出底
+     * 层 PDO 异常。
      */
     private function isUniqueConstraintViolation(QueryException $exception): bool
     {

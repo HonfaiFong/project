@@ -14,7 +14,7 @@ final class ShardRouter
     private array $clusters;
 
     /**
-     * @param array<string, array{min: int, max: int}>|null $clusters Custom cluster mappings
+     * @param array<string, array{min: int, max: int}>|null $clusters 自定义集群映射
      */
     public function __construct(?array $clusters = null)
     {

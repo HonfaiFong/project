@@ -44,9 +44,8 @@ final class ImportLegacySchema extends AbstractMigration
         $schemas = $this->schemas($this->schemaPrefix());
         $meta = $schemas['meta'];
 
-        // The baseline and legacy files retain historical multi-statement USE
-        // and prepared SQL while the repair steps span six logical databases,
-        // so the migration adapter executes native SQL with validated identifiers.
+        // 基线和历史文件保留了包含多条 USE 语句及预处理 SQL 的原始逻辑，而修复步骤跨越六个逻辑数据库，因此迁移适配器使用
+        // 经过校验的标识符执行原生 SQL。
         $this->executeBaseline($schemas, $meta);
         $this->useSchema($meta);
         $this->createLegacyMigrationTable($meta);
@@ -144,9 +143,8 @@ final class ImportLegacySchema extends AbstractMigration
                 );
             }
 
-            // Keep the historical 0003 backfill, but only fill rows that still
-            // have the new column's default. This makes a retry safe if a
-            // worker wrote an event between the partial DDL and this UPDATE.
+            // 保留历史 0003 回填逻辑，但仅填充仍使用新列默认值的行；若工作进程在部分 DDL 和本次 UPDATE 之间写入事件，重试仍
+            // 然安全。
             $assignment = $database === 'user_db'
                 ? '`event_key` = CASE '
                     . 'WHEN `event_type` = \'persona.updated.v1\' '
@@ -174,8 +172,7 @@ final class ImportLegacySchema extends AbstractMigration
         try {
             $this->execute($sql);
         } finally {
-            // 0005/0006 contain USE auth_db. Restore meta before the legacy
-            // record is queried or written, including on an execution error.
+            // 0005/0006 包含 USE auth_db；查询或写入历史记录前须恢复 meta 数据库，执行出错时也须恢复。
             $this->useSchema($meta);
         }
     }
@@ -187,8 +184,7 @@ final class ImportLegacySchema extends AbstractMigration
             throw new RuntimeException('Unable to read the database baseline SQL.');
         }
 
-        // Database privileges are deployment policy, not application schema.
-        // Do not let a migration grant privileges or alter the root account.
+        // 数据库权限属于部署策略，不能由应用表结构迁移授予权限或修改 root 账户。
         $sqlWithoutGrant = preg_replace('/^GRANT ALL PRIVILEGES.*\R/m', '', $sql);
         if ($sqlWithoutGrant === null) {
             throw new RuntimeException('Unable to remove baseline privilege statements.');

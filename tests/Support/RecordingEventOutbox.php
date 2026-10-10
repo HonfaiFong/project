@@ -50,7 +50,7 @@ final class RecordingEventOutbox implements EventOutboxInterface
     }
 
     /**
-     * Helper to find recorded events by event_type.
+     * 按 event_type 查找已记录事件的辅助方法。
      *
      * @return array<int, array{
      *     event_id: string,

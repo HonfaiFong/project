@@ -316,3 +316,4 @@ class Message extends \Google\Protobuf\Internal\Message
     }
 
 }
+

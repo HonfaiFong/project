@@ -29,7 +29,7 @@ final class UserApplicationService
     private const MAX_PERSONA_AVATAR_KEY_LENGTH = 255;
     private const MAX_PERSONA_BIO_LENGTH = 500;
 
-    /** Kept in sync with the users.social_registration_key column width. */
+    /** 与 users.social_registration_key 列宽保持一致。 */
     private const MAX_REGISTRATION_KEY_LENGTH = 128;
 
     public function __construct(
@@ -54,8 +54,7 @@ final class UserApplicationService
             try {
                 /** @var array{0: User, 1: bool} $registration */
                 $registration = $this->transaction(function () use ($phone, $registerChannel): array {
-                    // Re-check inside the transaction so concurrent requests share the
-                    // user created by the request that won the unique phone constraint.
+                    // 在事务内重新检查，让并发请求复用成功通过手机号唯一约束的请求所创建的用户。
                     $existing = $this->userRepo->findByPhone($phone);
                     if ($existing) {
                         return [$existing, false];
@@ -65,8 +64,7 @@ final class UserApplicationService
                 });
                 [$user, $isNew] = $registration;
             } catch (DuplicateUserException $e) {
-                // A unique phone constraint is the serialization point when two
-                // registrations race before either transaction can read the row.
+                // 两个注册请求在任一事务读到行之前发生竞争时，手机号唯一约束充当串行化点。
                 $user = $this->userRepo->findByPhone($phone);
                 if ($user === null) {
                     throw new RuntimeException(
@@ -88,11 +86,10 @@ final class UserApplicationService
     }
 
     /**
-     * Registers a social login identity supplied by AuthService.
+     * 注册由 AuthService 提供的社交登录身份。
      *
-     * The registration key stays opaque to this service: it is a caller-owned
-     * idempotency key ('social:' + social_identities.id), never the OAuth
-     * subject id, and it is only stored on the created user row.
+     * 此服务不解释注册键，它是调用方持有的幂等键（'social:' + social_identities.id），不是 OAuth 主体 ID，仅保存在创
+     * 建的用户行中。
      *
      * @return array{user: User, is_new_user: bool}
      * @throws Throwable
@@ -110,8 +107,7 @@ final class UserApplicationService
             try {
                 /** @var array{0: User, 1: bool} $registration */
                 $registration = $this->transaction(function () use ($registrationKey, $registerChannel): array {
-                    // Re-check inside the transaction so a repeat or retried registration
-                    // shares the user created by the request that won the unique key.
+                    // 在事务内重新检查，让重复或重试注册复用成功通过唯一约束的请求所创建的用户。
                     $existing = $this->userRepo->findBySocialRegistrationKey($registrationKey);
                     if ($existing) {
                         return [$existing, false];
@@ -129,13 +125,11 @@ final class UserApplicationService
                 });
                 [$user, $isNew] = $registration;
             } catch (DuplicateUserException $e) {
-                // The unique registration key is the serialization point when two
-                // registrations race before either transaction can read the row.
+                // 两个注册请求在任一事务读到行之前发生竞争时，注册键唯一约束充当串行化点。
                 $user = $this->userRepo->findBySocialRegistrationKey($registrationKey);
                 if ($user === null) {
                     if ($this->userRepo->socialRegistrationKeyExists($registrationKey)) {
-                        // A soft-deleted account still owns the key: registration fails
-                        // closed instead of resurrecting a removed user.
+                        // 软删除账户仍占用注册键；须拒绝注册，不能恢复已删除用户。
                         throw new RuntimeException(
                             ErrorCode::USER_NOT_FOUND->message(),
                             ErrorCode::USER_NOT_FOUND->value,
@@ -466,9 +460,7 @@ final class UserApplicationService
     }
 
     /**
-     * Creates the user row together with its default persona and the
-     * registration events inside the caller's transaction, so every new
-     * account (phone or social registration) gets the same defaults.
+     * 在调用方事务内一起创建用户行、默认人格及注册事件，确保手机和社交注册创建的新账户具有相同默认配置。
      * @throws RandomException
      */
     private function registerUser(

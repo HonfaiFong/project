@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
-// Polyfill Grpc status constants when ext-grpc is not loaded in local environment
+// 本地环境未加载 ext-grpc 时，补充 gRPC 状态常量
 if (!defined('Grpc\STATUS_OK')) {
     define('Grpc\STATUS_OK', 0);
     define('Grpc\STATUS_CANCELLED', 1);

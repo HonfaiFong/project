@@ -20,9 +20,8 @@ type TicketPayload struct {
 }
 
 func VerifyTicket(ticketStr, secret string) (*TicketPayload, error) {
-	// Tickets are base64url without padding (RFC 4648 §5), matching the PHP
-	// auth service: they travel in the /ws?ticket= query string where standard
-	// base64's `+/=` would be mangled by URL query decoding.
+	// 票据使用无填充的 base64url（RFC 4648 §5），与 PHP 认证服务一致；票据在 /ws?ticket= 查询字符串中传递，标准
+	// base64 的 `+/=` 字符会被 URL 查询解码破坏。
 	decodedBytes, err := base64.RawURLEncoding.DecodeString(ticketStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base64url ticket: %w", err)

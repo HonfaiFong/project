@@ -72,8 +72,7 @@ if (!$apply) {
         || ($requireClean && $plan['change_count'] > 0) ? 2 : 0);
 }
 
-// The set_exception_handler above reports uncaught failures to STDERR and
-// exits non-zero, so the migration is allowed to propagate here.
+// 上方 set_exception_handler 将未捕获失败写入 STDERR 并以非零状态退出，因此此处允许迁移异常继续向上传播。
 /** @noinspection PhpUnhandledExceptionInspection */
 $result = $migration->apply($pdo);
 printf("Applied phone normalization to %d user(s).\n", $result['updated']);

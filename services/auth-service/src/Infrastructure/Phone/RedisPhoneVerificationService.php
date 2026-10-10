@@ -27,7 +27,7 @@ final readonly class RedisPhoneVerificationService implements PhoneVerificationS
     }
 
     /**
-     * @throws Throwable the reservation is refunded and the send failure is rethrown unchanged
+     * @throws Throwable 退还预留配额后，将发送失败原样重新抛出
      */
     public function send(
         string $phone,
@@ -61,7 +61,7 @@ final readonly class RedisPhoneVerificationService implements PhoneVerificationS
         $reservation = $this->redis->eval(<<<'LUA'
 if redis.call('EXISTS', KEYS[1]) == 1 then return {} end
 for i = 2, #KEYS do
-    -- Upgrade existing numeric rate keys without resetting their quota/window.
+    -- 升级已有数值型限流键，保留原配额和窗口。
     if redis.call('TYPE', KEYS[i]).ok == 'string' then
         local count = tonumber(redis.call('GET', KEYS[i]) or '0')
         local ttl = redis.call('TTL', KEYS[i])
@@ -109,7 +109,7 @@ LUA, [$cooldownKey, $verificationKey, $owner, $this->hashCode($code), time(), $t
 
             $this->smsSender->sendVerificationCode($phone, $code, $scene);
         } catch (Throwable $e) {
-            // Refund only this reservation; a later cooldown owner/window is untouched.
+            // 仅退还本次预留配额，不影响后续冷却期持有者或窗口。
             $this->redis->eval(<<<'LUA'
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     redis.call('DEL', KEYS[1], KEYS[2])
@@ -147,7 +147,7 @@ LUA, array_merge([$cooldownKey, $verificationKey], $rateKeys, [$owner], $reserva
 if #KEYS == 3 then
     if redis.call('GET', KEYS[3]) ~= ARGV[3] or redis.call('EXISTS', KEYS[2]) == 0 then return 4 end
     if redis.call('HGET', KEYS[2], 'phone_hash') ~= ARGV[4] then return 5 end
-    -- A retry after a lost reply must not consume another SMS code.
+    -- 回复丢失后的重试不能再次消费短信验证码。
     if redis.call('HGET', KEYS[2], 'phone_verified') == '1' then return 0 end
 end
 if redis.call('EXISTS', KEYS[1]) == 0 then return 1 end

@@ -20,7 +20,7 @@ Route::disableDefaultRoute();
 
 Route::get('/health', [HealthController::class, 'check']);
 Route::get('/api/v1/health', [HealthController::class, 'check']);
-// Phone (SMS) login stays available in local, development, and testing only.
+// 手机短信登录仅在 local、development 和 testing 环境可用。
 Route::post('/api/v1/auth/login', [AuthController::class, 'login'])
     ->middleware([AppEnvironmentMiddleware::class]);
 Route::post('/api/v1/auth/social/login', [AuthController::class, 'socialLogin'])
@@ -37,8 +37,7 @@ Route::group('/api/v1', static function (): void {
     Route::patch('/personas/{personaId:[0-9]+}', [PersonaController::class, 'update']);
 })->middleware([AuthMiddleware::class]);
 
-// Reject abusive IP/device traffic before VerifyToken; count the verified
-// user separately afterwards, without incrementing the IP buckets twice.
+// 在 VerifyToken 前拒绝滥用的 IP 或设备流量；认证后再单独统计用户，避免重复递增 IP 限流桶。
 Route::post('/api/v1/auth/social/bind', [AuthController::class, 'socialBindIdentity'])
     ->middleware([SocialBindRateLimitMiddleware::class, AuthMiddleware::class, SocialBindUserRateLimitMiddleware::class]);
 

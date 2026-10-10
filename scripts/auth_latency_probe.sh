@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
-# Real-chain latency probe for the social login path.
+# 社交登录路径的真实调用链延迟探测。
 #
-# Drives N social logins through the gateway HTTP API against a running stack
-# (gateway -> auth-service gRPC -> fake OAuth HTTP + MySQL/Redis -> user-service
-# gRPC) and reports P50/P95/P99 of the full request latency, including the
-# auth->user gRPC hop that tests/Unit/GrpcDeadlineBudgetBenchmarkTest cannot
-# measure. Complements tests/Integration/AuthWarmPathLatencyTest.php, which
-# measures the MySQL/Redis share against real services.
+# 针对运行中的服务栈，通过网关 HTTP API 发起 N 次社交登录（网关 -> auth-service gRPC -> 模拟 OAuth HTTP +
+# MySQL/Redis -> user-service gRPC），报告完整请求延迟的 P50/P95/P99，包含
+# tests/Unit/GrpcDeadlineBudgetBenchmarkTest 无法测量的 auth->user gRPC 调用。本探测补充了仅针对真实 MySQL/Redis
+# 服务测量耗时的 tests/Integration/AuthWarmPathLatencyTest.php。
 #
-# Every attempt uses a fresh single-use authorization code (new nonce, same
-# identity), mirroring the E2E contract. Keep REQUESTS below the deployed
-# SOCIAL_LOGIN_RATE_SCENARIO_LIMIT / DEVICE limits (defaults 30 / 20 per 60 s
-# from one IP), and remember scripts/social_e2e_test.sh already spends 15 of
-# that budget when run in the same minute.
+# 每次尝试都使用新的一次性授权码（随机数不同，身份相同），与端到端测试约定一致。REQUESTS 须低于部署的
+# SOCIAL_LOGIN_RATE_SCENARIO_LIMIT / DEVICE 限额（同一 IP 默认每 60 秒 30 / 20 次）；同一分钟内运行
+# scripts/social_e2e_test.sh 已消耗其中 15 次。
 set -euo pipefail
 
 BASE_URL="${API_BASE_URL:-http://127.0.0.1:8787}"
@@ -25,7 +21,7 @@ trap 'rm -f "$BODY_FILE" "$TIMINGS_FILE"' EXIT
 identity="probe-latency-$(date +%s)-$RANDOM"
 
 for i in $(seq 1 "$REQUESTS"); do
-  # Distinct nonce => distinct single-use code for the same external identity.
+  # 不同随机数对应同一外部身份的不同一次性授权码。
   code="wechat-primary-${identity}~run${i}"
   status="$(curl --silent --show-error --max-time 10 -o "$BODY_FILE" -w '%{http_code} %{time_total}' \
     -X POST "${BASE_URL}/api/v1/auth/social/login" \
@@ -33,15 +29,12 @@ for i in $(seq 1 "$REQUESTS"); do
     --data "{\"provider\":\"wechat\",\"code\":\"${code}\",\"device\":{\"device_uuid\":\"latency-probe-${identity}\",\"platform\":\"ios\"}}")"
   http_code="${status%% *}"
   time_total="${status##* }"
-  # First login for a probe identity registers the user (201); every further
-  # login with the same identity resumes the session (200). Business code 0 is
-  # the authoritative success check.
+  # 探测身份首次登录会注册用户（201），后续使用同一身份登录则恢复会话（200）；业务代码 0 是判定成功的权威依据。
   if [[ "$http_code" != "201" && "$http_code" != "200" ]]; then
     echo "FAILED: probe login $i returned HTTP ${http_code}" >&2
     exit 1
   fi
-  # Never echo the raw body: report only a numeric business code (int or digit
-  # string); any other payload collapses to the fixed word "invalid".
+  # 不输出原始响应体：仅报告数值型业务代码（整数或数字字符串），其他载荷统一显示固定文本“invalid”。
   business_code="$(php -r '$b=json_decode(file_get_contents($argv[1]), true); $c=is_array($b) ? ($b["code"] ?? null) : null; echo (is_int($c) || (is_string($c) && preg_match("/^-?\\d+$/", $c) === 1)) ? (string) $c : "invalid";' "$BODY_FILE")"
   if [[ "$business_code" != "0" ]]; then
     echo "FAILED: probe login $i returned business code ${business_code}" >&2
@@ -50,8 +43,7 @@ for i in $(seq 1 "$REQUESTS"); do
   printf '%s\n' "$time_total" >> "$TIMINGS_FILE"
 done
 
-# One sorted pass feeds both the printed report and the budget gate: the
-# reported p95 and the enforced p95 can never diverge.
+# 同一次排序同时用于输出报告和预算检查，确保报告的 p95 与执行限制使用的 p95 一致。
 percentiles="$(sort -g "$TIMINGS_FILE" | awk -v n="$REQUESTS" '
   NR == int((n * 50 + 99) / 100) { p50 = $1 }
   NR == int((n * 95 + 99) / 100) { p95 = $1 }

@@ -91,7 +91,7 @@ final class PhinxMigrationTest extends TestCase
             try {
                 $this->schema()->dropDatabaseIfExists($this->prefix . $database);
             } catch (Throwable) {
-                // Keep the original assertion failure when cleanup itself is unavailable.
+                // 清理本身不可用时，保留原始断言失败。
             }
         }
         EloquentConnection::forget($this->pdo);
@@ -280,7 +280,7 @@ final class PhinxMigrationTest extends TestCase
     public function testMigrationProcessHonoursPrefixAdvisoryLock(): void
     {
         $lockName = 'social_migrations_' . substr(hash('sha256', $this->prefix), 0, 40);
-        // MySQL session advisory locks have no Eloquent or Schema Builder API.
+        // MySQL 会话咨询锁没有 Eloquent 或 Schema Builder API。
         $lock = $this->pdo->prepare('SELECT GET_LOCK(:name, :timeout)');
         $lock->execute(['name' => $lockName, 'timeout' => 0]);
         $this->assertSame(1, (int)$lock->fetchColumn());
@@ -312,7 +312,7 @@ final class PhinxMigrationTest extends TestCase
             ->where('COLUMN_NAME', 'social_registration_key')->value('COLLATION_NAME'));
         $this->assertSame('varchar(128)', $column['type']);
 
-        // Pre-existing phone accounts keep NULL keys and must coexist.
+        // 现有手机账户保留 NULL 注册键，且须正常共存。
         $this->insertUser($users, 5001, '+8613800000001', null);
         $this->insertUser($users, 5002, '+8613800000002', null);
         $this->insertUser($users, 5003, '+8613800000003', 'social:1001');
@@ -330,7 +330,7 @@ final class PhinxMigrationTest extends TestCase
 
         $this->assertSame($accountsAfterMigration, $this->userRowCount($users));
 
-        // Retrying the migration must stay a no-op and keep every row intact.
+        // 重复执行迁移不应产生变更，所有行须保持完整。
         $this->assertMigrationSucceeds();
         $this->assertSame($accountsAfterMigration, $this->userRowCount($users));
         $this->assertSame(
@@ -581,7 +581,7 @@ final class PhinxMigrationTest extends TestCase
         if ($sql === null) {
             throw new RuntimeException('Unable to prepare baseline SQL');
         }
-        // Execute the actual versioned SQL fixture: rewriting it would stop testing legacy adoption.
+        // 执行实际版本化 SQL 测试文件；重新编写会使测试不再覆盖历史迁移纳入流程。
         $this->pdo->exec($this->prefixDatabaseNames($sql));
     }
 
@@ -593,7 +593,7 @@ final class PhinxMigrationTest extends TestCase
             throw new RuntimeException('Unable to read legacy migration: ' . $migration);
         }
 
-        // Execute the actual versioned SQL fixture: rewriting it would stop testing legacy adoption.
+        // 执行实际版本化 SQL 测试文件；重新编写会使测试不再覆盖历史迁移纳入流程。
         $this->pdo->exec($this->prefixDatabaseNames($sql));
     }
 
@@ -672,9 +672,7 @@ final class PhinxMigrationTest extends TestCase
     }
 
     /**
-     * The applied history must match every migration file exactly once. Reading
-     * the directory keeps this assertion correct when parallel work adds
-     * migrations instead of pinning a hand-maintained version list.
+     * 已执行历史须与每个迁移文件一一对应；读取目录可在并行开发新增迁移时保持断言正确，无须固定手工维护的版本列表。
      *
      * @return list<string>
      */

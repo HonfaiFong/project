@@ -22,18 +22,13 @@ use Tests\TestCase;
 use Throwable;
 
 /**
- * Real-infrastructure P50/P95/P99 for the warm per-call work of the
- * VerifyToken path, complementing GrpcDeadlineBudgetBenchmarkTest (which only
- * measures codec-shaped work). The gateway grants the whole auth call
- * GRPC_AUTH_TIMEOUT_MS = 300 ms and the auth->user directory hop consumes up
- * to 250 ms, so these two queries plus the codec work must keep their P95 far
- * inside the remaining ~50 ms; a regression here is what turns "every
- * protected request" into HTTP 503 after the deadline propagation clamps the
- * directory hop.
+ * 测量 VerifyToken 预热后单次调用工作在真实基础设施上的 P50/P95/P99，补充仅测量类似编解码工作负载的
+ * GrpcDeadlineBudgetBenchmarkTest。网关为完整认证调用提供 GRPC_AUTH_TIMEOUT_MS = 300 毫秒，auth->user 用户目录调
+ * 用最多消耗 250 毫秒，因此这两次查询及编解码工作须将 P95 控制在剩余约 50 毫秒内；此处性能退化会使截止时间传播压
+ * 缩目录调用预算，导致所有受保护请求返回 HTTP 503。
  *
- * The suite prints a percentile report for every measurement; the assertions
- * are deliberately generous (CI runners share CPUs) and are meant to catch
- * order-of-magnitude regressions such as a lost index or a per-call reconnect.
+ * 每次测量均输出百分位报告；断言有意留出余量，因为 CI 运行器共享 CPU，主要捕获索引丢失或每次调用重新连接等数量级
+ * 性能退化。
  */
 final class AuthWarmPathLatencyTest extends TestCase
 {
@@ -105,8 +100,7 @@ final class AuthWarmPathLatencyTest extends TestCase
             $table->index('user_id', 'idx_user_id');
         });
 
-        // The Device model boots lazily; pay it before measuring so the numbers
-        // describe the warm path a warmed RoadRunner worker actually serves.
+        // Device 模型延迟初始化；测量前先预热，使结果反映已预热 RoadRunner 工作进程实际提供的路径。
         EloquentConnection::warmup($this->pdo, DeviceModel::class);
     }
 
@@ -185,11 +179,9 @@ final class AuthWarmPathLatencyTest extends TestCase
     }
 
     /**
-     * Measures the cumulative auth-side work of one real AuthApplicationService::verifyToken()
-     * call: JWT decode + Redis revocation lookup + MySQL device-ownership query + the
-     * user-directory status check. The UserDirectory is stubbed as ACTIVE because the real
-     * auth->user hop is a network RPC; the 50 ms budget therefore applies to this cumulative
-     * auth-side number, not to each part in isolation.
+     * 测量一次真实 AuthApplicationService::verifyToken() 的认证侧累计工作：JWT 解码、Redis 撤销查询、MySQL 设备归属
+     * 查询及用户目录状态检查。真实 auth->user 调用是网络 RPC，因此将 UserDirectory 桩设为 ACTIVE；50 毫秒预算适用于
+     * 认证侧累计耗时，而非各部分单独耗时。
      */
     public function testCumulativeVerifyTokenAuthSideWorkKeepsP95InsideTheAuthSideBudget(): void
     {
@@ -224,8 +216,7 @@ final class AuthWarmPathLatencyTest extends TestCase
 
                 public function findById(string $userId): array
                 {
-                    // Fixture contract: the JWT subject, the device row user_id and
-                    // this stub must all describe user 8484848484 / device 5252525252.
+                    // 测试数据约定：JWT 主体、设备行 user_id 及此桩均对应用户 8484848484 / 设备 5252525252。
                     return ['user_id' => $userId, 'status' => UserDirectoryInterface::STATUS_ACTIVE];
                 }
             },
@@ -243,8 +234,7 @@ final class AuthWarmPathLatencyTest extends TestCase
 
         $verify = static fn (): array => $service->verifyToken($token);
 
-        // setUp() already warmed the model and the token is encoded above, so this
-        // first sample is not a worker cold start; it is reported for reference only.
+        // setUp() 已预热模型，上方也已编码令牌，因此首个样本不是工作进程冷启动；仅作为参考报告。
         $firstMs = $this->measureOnce($verify);
 
         $timings = $this->measure($verify);
@@ -278,7 +268,7 @@ final class AuthWarmPathLatencyTest extends TestCase
     /** @return list<float> */
     private function measure(callable $operation): array
     {
-        // A few unmeasured iterations absorb the tail of connection setup.
+        // 执行几次不计入统计的迭代，吸收连接建立的尾部开销。
         for ($i = 0; $i < 10; $i++) {
             $operation();
         }

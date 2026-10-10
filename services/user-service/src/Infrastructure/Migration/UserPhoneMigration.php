@@ -11,11 +11,9 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Plans and, when explicitly requested, applies the user phone normalization.
+ * 规划用户手机号规范化，并在明确请求时执行。
  *
- * The plan is kept in a connection-scoped temporary table. This bounds PHP
- * memory while still allowing the whole data set to be checked before any
- * user row is changed.
+ * 方案保存在连接作用域的临时表中，限制 PHP 内存使用，同时允许在修改任何用户行之前检查完整数据集。
  */
 final class UserPhoneMigration
 {
@@ -58,7 +56,7 @@ final class UserPhoneMigration
 
     /**
      * @return array{updated: int}
-     * @throws Throwable when scanning or updating fails; owned transactions attempt rollback, caller-owned transactions remain the caller's responsibility
+     * @throws Throwable 扫描或更新失败时抛出；自行开启的事务尝试回滚，调用方开启的事务仍由调用方负责
      */
     public function apply(PDO $pdo): array
     {
@@ -95,7 +93,7 @@ final class UserPhoneMigration
                 try {
                     $pdo->rollBack();
                 } catch (Throwable) {
-                    // The transaction may already have been closed by a failed commit.
+                    // 提交失败可能已关闭事务。
                 }
             }
             throw $e;

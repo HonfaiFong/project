@@ -8,31 +8,24 @@ use Contracts\Errors\ErrorCode;
 use Spiral\RoadRunner\GRPC\StatusCode;
 
 /**
- * Error-path mapper from a contract ErrorCode to the gRPC transport status.
+ * 将协议 ErrorCode 映射为 gRPC 传输状态，供错误路径使用。
  *
- * This is deliberately a FAILURE mapper, not a general ErrorCode -> StatusCode mapper:
- * `ErrorCode::OK` means success, so it is reported as INTERNAL. Only ask this class about a
- * failure you are about to raise.
+ * 此类专用于失败映射，不能作为通用的 ErrorCode -> StatusCode 映射；`ErrorCode::OK` 表示成功，因此会映射为
+ * INTERNAL。仅用于即将抛出的失败。
  *
- * Every service previously kept a private copy of this table (auth's `statusFor()` and the user
- * service's `grpcStatus()`), and the copies had drifted: both services are supposed to fall back
- * to INTERNAL for an unmapped code, but the auth table grew an extra
- * `$code === 0 ? INTERNAL : UNKNOWN` branch that reported INTERNAL_SERVER_ERROR(9001001) as
- * UNKNOWN, and the user table omitted every other domain's codes. Keeping one table prevents
- * that class of drift.
+ * 此前各服务维护独立映射表（认证服务的 `statusFor()` 和用户服务的 `grpcStatus()`），已经产生偏差：未映射代码本应
+ * 回退为 INTERNAL，但认证表新增的 `$code === 0 ? INTERNAL : UNKNOWN` 分支将 INTERNAL_SERVER_ERROR(9001001) 报告
+ * 为 UNKNOWN，用户表则遗漏了其他领域的代码。统一映射表可防止此类偏差。
  *
- * Business codes decide the transport status; a code that is not a contract ErrorCode (a PDO
- * 23000, an arbitrary library code) or that is absent is a fault this service cannot classify
- * and is therefore reported as INTERNAL.
+ * 业务代码决定传输状态；缺失代码或非协议 ErrorCode（如 PDO 23000、任意库代码）属于本服务无法分类的故障，统一报告
+ * 为 INTERNAL。
  *
- * This status only tells the gateway how to classify the failure when the `x-app-error-code`
- * trailer is absent; it is never itself a business code.
+ * 此状态仅在缺少 `x-app-error-code` 尾部元数据时指导网关分类失败，本身不是业务代码。
  */
 final class ErrorStatusMapper
 {
     /**
-     * The literal union is declared so callers can hand the result straight to
-     * GRPCException::create(), whose $code parameter is typed as that union.
+     * 声明字面量联合类型，使调用方可直接将结果传给 GRPCException::create() 的同类型 $code 参数。
      *
      * @param ErrorCode|null $error
      * @return int
@@ -94,9 +87,8 @@ final class ErrorStatusMapper
     }
 
     /**
-     * Maps a raw exception code. Note that ErrorCode::tryFrom(0) yields ErrorCode::OK, not null,
-     * so the success code is excluded explicitly rather than relying on tryFrom() alone; that is
-     * why this delegates to forFailure() instead of duplicating the null check.
+     * 映射原始异常代码。ErrorCode::tryFrom(0) 返回 ErrorCode::OK 而非 null，因此须显式排除成功代码；委托
+     * forFailure() 处理，避免重复空值检查。
      *
      * @param int $code
      * @return int

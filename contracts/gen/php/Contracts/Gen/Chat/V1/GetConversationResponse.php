@@ -66,3 +66,4 @@ class GetConversationResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

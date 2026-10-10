@@ -24,3 +24,4 @@ class Content
         static::$is_initialized = true;
     }
 }
+

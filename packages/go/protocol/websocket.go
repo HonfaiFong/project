@@ -1,6 +1,6 @@
 package protocol
 
-// Envelope matches the WebSocket protocol envelope
+// Envelope 对应 WebSocket 协议的消息封装
 type Envelope struct {
 	Version     uint32 `json:"version"`
 	RequestID   string `json:"request_id"`
@@ -10,7 +10,7 @@ type Envelope struct {
 	Payload     []byte `json:"payload"`
 }
 
-// WebSocket Event Types per Section 17
+// 第 17 节定义的 WebSocket 事件类型
 const (
 	EventAuth   = "AUTH"
 	EventAuthOK = "AUTH_OK"
@@ -29,7 +29,7 @@ const (
 	EventError  = "ERROR"
 )
 
-// WSTicket represents the validated ticket payload
+// WSTicket 表示已验证的票据载荷
 type WSTicket struct {
 	UserID    string `json:"user_id"`
 	PersonaID string `json:"persona_id"`

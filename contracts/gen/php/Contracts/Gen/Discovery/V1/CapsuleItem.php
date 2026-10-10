@@ -120,3 +120,4 @@ class CapsuleItem extends \Google\Protobuf\Internal\Message
     }
 
 }
+

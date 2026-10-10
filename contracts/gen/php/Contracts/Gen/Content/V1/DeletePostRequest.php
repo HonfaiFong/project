@@ -121,3 +121,4 @@ class DeletePostRequest extends \Google\Protobuf\Internal\Message
     }
 
 }
+

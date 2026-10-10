@@ -5,12 +5,9 @@ declare(strict_types=1);
 namespace Packages\GrpcCommon;
 
 /**
- * Per-call remaining-deadline holder, mirroring TraceContext's worker-local
- * pattern. RoadRunner's gRPC transport does not surface the incoming call's
- * deadline to PHP workers, so the gateway propagates its absolute deadline as
- * the x-deadline-unix-ms metadata key; the receiving service pins it here
- * after caller authorization and downstream hops clamp their own budgets to
- * whatever is left, so the outer deadline always rules.
+ * 保存每次调用的剩余截止时间，沿用 TraceContext 的工作进程局部模式。RoadRunner 的 gRPC 传输层不向 PHP 工作进程暴
+ * 露入站截止时间，因此网关通过 x-deadline-unix-ms 元数据传递绝对截止时间；接收服务在调用方授权后将其保存于此，下
+ * 游各跳预算限制在剩余时间内，确保外层截止时间始终起决定作用。
  */
 final class DeadlineContext
 {
@@ -27,8 +24,7 @@ final class DeadlineContext
     }
 
     /**
-     * Milliseconds left before the current call's deadline; null when the
-     * caller propagated none and configured budgets apply unchanged.
+     * 当前调用截止前的剩余毫秒数；调用方未传递截止时间时返回 null，沿用配置预算。
      */
     public static function remainingMs(): ?int
     {
@@ -40,9 +36,7 @@ final class DeadlineContext
     }
 
     /**
-     * Clamp a configured hop budget to the remaining deadline. Null means the
-     * outer deadline has already expired and the hop must fail fast instead of
-     * spending a fresh full budget the caller never granted.
+     * 将单跳配置预算限制在剩余截止时间内；null 表示外层截止时间已过，必须立即失败，不能消耗调用方未授予的完整新预算。
      */
     public static function clampHopBudgetMs(int $configuredMs): ?int
     {

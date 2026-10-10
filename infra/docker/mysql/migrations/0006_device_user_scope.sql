@@ -1,8 +1,5 @@
--- Scope device identity to the owning user. Before this migration the
--- repository could move one device row between users when they supplied the
--- same device UUID. Refresh tokens left behind with the old owner cannot be
--- safely attributed to a device row, so revoke those inconsistent sessions
--- before changing the unique key.
+-- 将设备身份限定在所属用户内。此前，多个用户提供相同设备 UUID 时，仓储可能把同一设备行转移给其他用户。遗留在旧用
+-- 户下的刷新令牌无法可靠关联设备行，因此须在修改唯一键之前撤销这些不一致的会话。
 USE `auth_db`;
 
 UPDATE `refresh_tokens` AS rt

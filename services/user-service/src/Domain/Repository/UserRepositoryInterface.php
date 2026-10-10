@@ -15,16 +15,13 @@ interface UserRepositoryInterface
     public function findByPhone(string $phone): ?User;
 
     /**
-     * Finds the user bound to a caller-owned registration key (social logins
-     * pass 'social:' + social_identities.id). Banned users stay visible so a
-     * repeated registration cannot bypass the ban by creating a new account.
+     * 查找与调用方注册键绑定的用户，社交登录传入 'social:' + social_identities.id。被封禁用户仍须可查，避免重复注册
+     * 通过创建新账户绕过封禁。
      */
     public function findBySocialRegistrationKey(string $registrationKey): ?User;
 
     /**
-     * Reports whether a registration key is already taken, including by a
-     * soft-deleted account. Such a key stays reserved by the unique index, so
-     * registration can fail with an explicit error instead of an internal one.
+     * 检查注册键是否已占用，包括软删除账户。唯一索引继续保留这些键，以便注册返回明确错误，而非内部错误。
      */
     public function socialRegistrationKeyExists(string $registrationKey): bool;
 

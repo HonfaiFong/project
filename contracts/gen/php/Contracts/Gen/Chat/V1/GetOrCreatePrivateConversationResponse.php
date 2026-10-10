@@ -66,3 +66,4 @@ class GetOrCreatePrivateConversationResponse extends \Google\Protobuf\Internal\M
     }
 
 }
+

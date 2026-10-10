@@ -23,3 +23,4 @@ class Social
         static::$is_initialized = true;
     }
 }
+

@@ -10,7 +10,7 @@ option php_metadata_namespace = "Contracts\\Gen\\GPBMetadata\\Social\\V1";
 
 message LikeRequest {
   uint64 persona_id = 1;
-  int32 target_type = 2; // 1 = post, 2 = comment
+  int32 target_type = 2; // 1 = 帖子，2 = 评论
   uint64 target_id = 3;
   // Social operations are MAIN-only; this field is informational and must be
   // derived from authenticated context rather than trusted from the body.

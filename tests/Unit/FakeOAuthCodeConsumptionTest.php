@@ -8,14 +8,11 @@ use RuntimeException;
 use Tests\TestCase;
 
 /**
- * Guards the fake OAuth server's single-use authorization-code contract.
+ * 验证模拟 OAuth 服务器的一次性授权码约定。
  *
- * scripts/fake_oauth_server.php returns before request dispatch under plain
- * CLI, so the child workers below exercise the real consumeCode() against a
- * real on-disk state file. The race is the point: with the flock covering the
- * whole read-check-write cycle, exactly one of N concurrent workers may win a
- * code — the same invariant the WeChat/QQ upstreams enforce and
- * scripts/social_e2e_test.sh asserts end to end.
+ * 普通 CLI 下 scripts/fake_oauth_server.php 会在请求分发前返回，因此下方子进程针对真实磁盘状态文件调用真实
+ * consumeCode()。重点验证竞争：flock 覆盖完整读取、检查和写入流程后，N 个并发进程中只能有一个成功消费授权码；这
+ * 与微信/QQ 上游的约束及 scripts/social_e2e_test.sh 的端到端断言一致。
  */
 final class FakeOAuthCodeConsumptionTest extends TestCase
 {

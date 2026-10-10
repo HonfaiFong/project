@@ -374,9 +374,7 @@ final class FakeSocialAuthProvider implements SocialAuthProviderInterface
     }
 
     /**
-     * Mirrors the real upstream contract: an authorization code is redeemed at
-     * most once. Replaying a burned code is the providers' invalid-code error,
-     * so recovery must always arrive with a fresh code.
+     * 沿用真实上游约定：授权码最多兑换一次。重放已失效授权码返回提供方的无效授权码错误，因此恢复流程必须使用新授权码。
      */
     public function authenticate(string $code): ExternalIdentity
     {
@@ -477,8 +475,7 @@ final class SocialAuthServiceTest extends TestCase
             $this->assertSame(ErrorCode::RPC_TIMEOUT->value, $e->getCode());
         }
 
-        // The burned authorization code is single-use: replaying it fails with
-        // the invalid-code error and changes no registration state.
+        // 已消耗授权码仅能使用一次：重放返回无效授权码错误，不改变注册状态。
         try {
             $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code1', $this->device());
             $this->fail('Expected the replayed code to be rejected');
@@ -490,8 +487,7 @@ final class SocialAuthServiceTest extends TestCase
             $fixture['identityRepo']->findById('identity-1')->status
         );
 
-        // A brand-new code for the same external identity resumes the same
-        // registration exactly once: no duplicate user, no duplicate identity.
+        // 同一外部身份的新授权码仅恢复同一注册一次，不产生重复用户或身份。
         $result = $fixture['service']->socialLogin(SocialProvider::WECHAT, 'code2', $this->device());
         $this->assertSame('authenticated', $result['state']);
         $this->assertSame('10001', $result['login']['user_id']);

@@ -7,7 +7,7 @@ namespace Services\UserService\Infrastructure\Model;
 use Illuminate\Database\Eloquent\Model;
 use Services\UserService\Domain\Entity\Persona;
 
-/** Eloquent model for the personas table. */
+/** personas 表的 Eloquent 模型。 */
 final class PersonaModel extends Model
 {
     protected $table = 'personas';

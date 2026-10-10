@@ -11,10 +11,9 @@ use Spiral\RoadRunner\GRPC\StatusCode;
 use Tests\TestCase;
 
 /**
- * Pins the ErrorCode -> gRPC transport status contract.
+ * 固定 ErrorCode -> gRPC 传输状态的协议约定。
  *
- * This one table is shared by the auth and user services, so a silent edit to its match arms
- * would change the transport contract for both services while every other test stayed green.
+ * 认证和用户服务共用此映射表；若静默修改 match 分支，会改变两个服务的传输协议，而其他测试可能仍然通过。
  */
 final class ErrorStatusMapperTest extends TestCase
 {
@@ -25,7 +24,7 @@ final class ErrorStatusMapperTest extends TestCase
     }
 
     /**
-     * An absent code is a failure this service cannot classify.
+     * 缺失代码表示本服务无法分类的失败。
      */
     public function testNullFailureIsInternal(): void
     {
@@ -33,7 +32,7 @@ final class ErrorStatusMapperTest extends TestCase
     }
 
     /**
-     * The mapper is an error-path mapper, so OK must never be reported as a transport status.
+     * 映射器用于错误路径，因此 OK 绝不能作为传输状态报告。
      */
     public function testOkIsTreatedAsAFailureNotAsSuccess(): void
     {
@@ -42,8 +41,7 @@ final class ErrorStatusMapperTest extends TestCase
     }
 
     /**
-     * Every ErrorCode case must map to a concrete status. Adding an enum case without deciding
-     * its transport status therefore fails this test instead of silently becoming INTERNAL.
+     * 每个 ErrorCode 枚举项须映射为明确状态；新增枚举项却未确定传输状态时，测试应失败，不能静默回退为 INTERNAL。
      */
     public function testEveryErrorCodeHasADeliberateStatus(): void
     {
@@ -87,7 +85,7 @@ final class ErrorStatusMapperTest extends TestCase
     }
 
     /**
-     * The transport contract, grouped by the status each code must produce.
+     * 传输协议，按各代码须产生的状态分组。
      *
      * @return array<string, int>
      */
@@ -148,10 +146,10 @@ final class ErrorStatusMapperTest extends TestCase
                 ErrorCode::SERVICE_UNAVAILABLE,
             ],
             StatusCode::INTERNAL => [
-                // OK only ever reaches the mapper through the error path.
+                // OK 只会通过错误路径到达映射器。
                 ErrorCode::OK,
                 ErrorCode::INTERNAL_SERVER_ERROR,
-                // Deliberately unmapped business codes.
+                // 有意未映射的业务代码。
                 ErrorCode::CONTENT_POST_DELETED,
                 ErrorCode::CONTENT_UNDER_REVIEW,
                 ErrorCode::SOCIAL_CANNOT_FOLLOW_SELF,

@@ -25,7 +25,7 @@ message PublicConversationMember {
 
 message Conversation {
   uint64 id = 1;
-  int32 type = 2; // 1 = private, 2 = group
+  int32 type = 2; // 1 = 私聊，2 = 群聊
   uint64 last_message_id = 3;
   string last_message_at = 4;
   repeated ConversationMember members = 5;

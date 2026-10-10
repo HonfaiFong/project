@@ -54,8 +54,7 @@ final class ModifySocialIdentityCollation extends AbstractMigration
             return;
         }
 
-        // This is a cross-schema conditional ALTER. The native SQL is kept
-        // behind Phinx's execute() so dry-run and adapter behavior remain intact.
+        // 这是跨数据库的条件 ALTER；通过 Phinx 的 execute() 执行原生 SQL，以保留演练模式和适配器的行为。
         $this->execute(
             'ALTER TABLE ' . $this->identifier($schema) . '.`social_identities` '
             . implode(', ', $modifications),

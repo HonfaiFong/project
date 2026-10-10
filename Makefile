@@ -135,8 +135,7 @@ e2e:
 e2e-social:
 	bash scripts/social_e2e_test.sh
 
-# P50/P95/P99 report for the real social-login chain (gateway -> gRPC ->
-# OAuth/MySQL/Redis -> user-service) against a running stack.
+# 针对运行中的服务栈，报告真实社交登录调用链（网关 -> gRPC -> OAuth/MySQL/Redis -> user-service）的 P50/P95/P99。
 latency-probe:
 	bash scripts/auth_latency_probe.sh
 

@@ -7,7 +7,7 @@ type ErrorCode int
 const (
 	OK ErrorCode = 0
 
-	// 100xxxx: Auth Domain
+	// 100xxxx：认证领域
 	AuthInvalidCredentials         ErrorCode = 1001001
 	AuthTokenExpired               ErrorCode = 1001002
 	AuthTokenInvalid               ErrorCode = 1001003
@@ -25,7 +25,7 @@ const (
 	AuthSocialBindConflict         ErrorCode = 1001015
 	AuthSocialBindPhoneChanged     ErrorCode = 1001016
 
-	// 200xxxx: User Domain
+	// 200xxxx：用户领域
 	UserNotFound         ErrorCode = 2001001
 	UserAlreadyExists    ErrorCode = 2001002
 	UserBanned           ErrorCode = 2001003
@@ -33,36 +33,36 @@ const (
 	PersonaForbidden     ErrorCode = 2002002
 	PersonaLimitExceeded ErrorCode = 2002003
 
-	// 300xxxx: Content Domain
+	// 300xxxx：内容领域
 	ContentPostNotFound    ErrorCode = 3001001
 	ContentPostDeleted     ErrorCode = 3001002
 	ContentCommentNotFound ErrorCode = 3002001
 	ContentUnderReview     ErrorCode = 3003001
 
-	// 400xxxx: Social Domain
+	// 400xxxx：社交领域
 	SocialCannotFollowSelf ErrorCode = 4001001
 	SocialAlreadyFollowed  ErrorCode = 4001002
 	SocialUserBlocked      ErrorCode = 4002001
 	SocialCannotBlockSelf  ErrorCode = 4002002
 
-	// 500xxxx: Chat Domain
+	// 500xxxx：聊天领域
 	ChatConversationNotFound ErrorCode = 5001001
 	ChatNotAMember           ErrorCode = 5001002
 	ChatForbiddenByPrivacy   ErrorCode = 5001003
 
-	// 600xxxx: Message Domain
+	// 600xxxx：消息领域
 	MessageNotFound          ErrorCode = 6001001
 	MessageDuplicateClientID ErrorCode = 6001002
 	MessageSendFailed        ErrorCode = 6001003
 
-	// 700xxxx: Risk Domain
+	// 700xxxx：风控领域
 	RiskActionDenied      ErrorCode = 7001001
 	RiskChallengeRequired ErrorCode = 7001002
 
-	// 800xxxx: Moderation Domain
+	// 800xxxx：审核领域
 	ModerationRejected ErrorCode = 8001001
 
-	// 900xxxx: Infrastructure & Common
+	// 900xxxx：基础设施和公共领域
 	InternalServerError ErrorCode = 9001001
 	InvalidArgument     ErrorCode = 9001002
 	RPCTimeout          ErrorCode = 9001003

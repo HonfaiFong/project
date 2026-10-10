@@ -19,7 +19,7 @@ use Tests\TestCase;
 
 final class GatewayAuthControllerTest extends TestCase
 {
-    /** @throws Exception If the secure random source is unavailable. */
+    /** @throws Exception 安全随机源不可用时抛出。 */
     #[DataProvider('loginStatuses')]
     public function testLoginRetainsPayloadNormalizationAndResponseContract(bool $isNewUser, int $status): void
     {
@@ -68,7 +68,7 @@ final class GatewayAuthControllerTest extends TestCase
         return [[false, 200], [true, 201]];
     }
 
-    /** @throws Exception If the secure random source is unavailable. */
+    /** @throws Exception 安全随机源不可用时抛出。 */
     public function testQueryStringDoesNotSupplyLoginCredentials(): void
     {
         $grpc = $this->createMock(UnaryGrpcClient::class);
@@ -80,7 +80,7 @@ final class GatewayAuthControllerTest extends TestCase
         $this->assertSame(ErrorCode::INVALID_ARGUMENT->value, json_decode($response->rawBody(), true)['code']);
     }
 
-    /** @throws Exception If the secure random source is unavailable. */
+    /** @throws Exception 安全随机源不可用时抛出。 */
     #[DataProvider('invalidSocialCredentials')]
     public function testBothSocialEndpointsRetainValidationErrorsAndPrecedence(array $body, ErrorCode $error): void
     {

@@ -66,3 +66,4 @@ class CreatePostResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

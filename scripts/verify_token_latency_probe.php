@@ -4,39 +4,31 @@
 declare(strict_types=1);
 
 /**
- * Opt-in full-chain latency probe for the authenticated VerifyToken path.
+ * 按需启用的 VerifyToken 认证路径全链路延迟探测。
  *
- * Each measured sample is one complete HTTP round trip to an existing gateway
- * endpoint (default GET /api/v1/personas): gateway AuthMiddleware ->
- * auth-service VerifyToken gRPC (JWT decode + Redis revocation lookup + MySQL
- * device-ownership query + user-service user lookup) -> the endpoint's own
- * user-service work. The numbers are complete authenticated HTTP request
- * latency, including downstream UserService; they are NOT an isolated
- * VerifyToken RPC measurement.
+ * 每个测量样本都是现有网关端点（默认 GET /api/v1/personas）的一次完整 HTTP 往返：网关 AuthMiddleware ->
+ * auth-service VerifyToken gRPC（JWT 解码 + Redis 撤销查询 + MySQL 设备归属查询 + user-service 用户查询）-> 端点
+ * 自身的 user-service 工作。结果表示完整的已认证 HTTP 请求延迟，包含下游 UserService，不能视为单独 VerifyToken
+ * RPC 的测量值。
  *
- * The probe never logs in, never writes accounts, and never prints the access
- * token, request headers, or exception URLs. The token is read only from
- * VERIFY_TOKEN_PROBE_TOKEN.
- * Before warmup or sampling, an invalid JWT must receive an authentication
- * rejection and the valid JWT must receive the endpoint's expected data shape.
- * These two preflight requests are never included in latency statistics.
+ * 探测不会登录、写入账户或输出访问令牌、请求头及异常 URL；令牌仅从 VERIFY_TOKEN_PROBE_TOKEN 读取。
+ * 预热或采样前，无效 JWT 必须被拒绝认证，有效 JWT 必须获得符合预期结构的数据。这两次预检请求不计入延迟统计。
  *
- * Usage:
+ * 用法：
  *   VERIFY_TOKEN_PROBE_TOKEN=<access token> php scripts/verify_token_latency_probe.php
  *
- * Env:
- *   API_BASE_URL                          gateway base URL (default http://127.0.0.1:8787)
- *   VERIFY_TOKEN_PROBE_TOKEN              required access token of an existing test identity
- *   VERIFY_TOKEN_PROBE_PATH               request path (default /api/v1/personas; /api/v1/me works too)
- *   VERIFY_TOKEN_PROBE_REQUESTS           measured requests (default 30)
- *   VERIFY_TOKEN_PROBE_WARMUP             unmeasured warmup requests (default 3)
- *   VERIFY_TOKEN_PROBE_CONCURRENCY        max in-flight measured requests (default 4)
- *   VERIFY_TOKEN_PROBE_TIMEOUT_MS         per-request timeout (default 5000)
- *   VERIFY_TOKEN_PROBE_CONNECT_TIMEOUT_MS connect timeout (default 2000)
- *   VERIFY_TOKEN_PROBE_BUDGET_MS          P95 gate (default 1000)
+ * 环境变量：
+ *   API_BASE_URL                          网关基础 URL（默认 http://127.0.0.1:8787）
+ *   VERIFY_TOKEN_PROBE_TOKEN              必填；现有测试身份的访问令牌
+ *   VERIFY_TOKEN_PROBE_PATH               请求路径（默认 /api/v1/personas；也可用 /api/v1/me）
+ *   VERIFY_TOKEN_PROBE_REQUESTS           测量请求数（默认 30）
+ *   VERIFY_TOKEN_PROBE_WARMUP             不计入统计的预热请求数（默认 3）
+ *   VERIFY_TOKEN_PROBE_CONCURRENCY        测量请求的最大并发数（默认 4）
+ *   VERIFY_TOKEN_PROBE_TIMEOUT_MS         单请求超时毫秒数（默认 5000）
+ *   VERIFY_TOKEN_PROBE_CONNECT_TIMEOUT_MS 连接超时毫秒数（默认 2000）
+ *   VERIFY_TOKEN_PROBE_BUDGET_MS          P95 预算门槛（默认 1000）
  *
- * Exit codes: 0 pass; 1 gate failed (any HTTP/business/timeout/transport failure
- * or P95 >= budget); 2 configuration error.
+ * 退出码：0 表示通过；1 表示未通过门槛（HTTP、业务、超时或传输失败，或 P95 >= 预算）；2 表示配置错误。
  */
 
 require_once __DIR__ . '/../vendor/autoload.php';
@@ -142,7 +134,7 @@ final class VerifyTokenLatencyProbe
     }
 
     /**
-     * @param callable|null $handler Guzzle handler override (tests inject MockHandler); null uses cURL.
+     * @param callable|null $handler 覆盖 Guzzle 处理器（测试注入 MockHandler）；null 时使用 cURL。
      * @return array{timings_ms: list<float>, outcomes: list<array{phase: string, category: string, http_status: ?int, business_code: ?int, message: ?string}>}
      */
     public function run(?callable $handler = null): array
@@ -165,8 +157,7 @@ final class VerifyTokenLatencyProbe
         foreach ([true, false] as $negative) {
             $preflightOptions = $options;
             if ($negative) {
-                // Deliberately malformed JWT; keep Bearer authentication present
-                // so this checks token verification rather than a missing header.
+                // 故意构造无效 JWT，同时保留 Bearer 认证头，确保检查的是令牌校验而非缺少请求头。
                 $preflightOptions['headers']['Authorization'] = 'Bearer invalid.jwt.probe';
             }
             $preflight = $this->preflight($client, $url, $preflightOptions, $negative);
@@ -254,7 +245,7 @@ final class VerifyTokenLatencyProbe
 
         $outcome = self::classify($response, null);
         if ($outcome['category'] !== 'ok') {
-            // Never report a target-controlled message during preflight.
+            // 预检期间不报告由目标服务控制的消息。
             $outcome['message'] = 'valid JWT preflight request failed';
             return $outcome;
         }
@@ -289,8 +280,7 @@ final class VerifyTokenLatencyProbe
     public static function classify(?ResponseInterface $response, ?Throwable $error): array
     {
         if ($error !== null) {
-            // Only the exception class is reported: messages may embed request
-            // URLs and handler context, which must stay out of the report.
+            // 仅报告异常类名；消息可能包含请求 URL 和处理器上下文，不能写入报告。
             return [
                 'category' => self::isTimeout($error) ? 'timeout' : 'transport',
                 'http_status' => null,
@@ -304,8 +294,7 @@ final class VerifyTokenLatencyProbe
             $decoded = $response === null ? null : json_decode((string)$response->getBody(), true);
             $code = is_array($decoded) && is_int($decoded['code'] ?? null) ? $decoded['code'] : null;
             if ($code === ErrorCode::RPC_TIMEOUT->value) {
-                // The gateway answers an exceeded gRPC deadline with HTTP 503 and
-                // this business code while the HTTP transport itself succeeded.
+                // gRPC 截止时间已过时，网关返回 HTTP 503 和此业务代码，但 HTTP 传输本身成功。
                 return [
                     'category' => 'timeout',
                     'http_status' => $status,
@@ -365,7 +354,7 @@ final class VerifyTokenLatencyProbe
     }
 
     /**
-     * @param list<float> $timingsMs unsorted timings in milliseconds
+     * @param list<float> $timingsMs 未排序的毫秒耗时
      * @return array{count: int, min: float, p50: float, p95: float, p99: float, max: float}
      */
     public static function summary(array $timingsMs): array
@@ -386,8 +375,8 @@ final class VerifyTokenLatencyProbe
     }
 
     /**
-     * Nearest-rank percentile over sorted timings, matching the ranking used by
-     * scripts/auth_latency_probe.sh and AuthWarmPathLatencyTest.
+     * 在排序后的耗时上使用最近秩百分位算法，与 scripts/auth_latency_probe.sh 和 AuthWarmPathLatencyTest 的排序规则一
+     * 致。
      *
      * @param list<float> $sortedTimingsMs
      */
@@ -487,7 +476,7 @@ final class VerifyTokenLatencyProbe
         ]);
     }
 
-    /** Runs the probe, prints the report and failure reasons, returns the process exit code. */
+    /** 执行探测，输出报告及失败原因，并返回进程退出码。 */
     public function execute(?callable $handler = null): int
     {
         $run = $this->run($handler);

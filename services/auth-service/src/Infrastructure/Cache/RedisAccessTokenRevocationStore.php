@@ -34,7 +34,7 @@ final class RedisAccessTokenRevocationStore implements AccessTokenRevocationStor
 
     public function isRevoked(string $tokenHash, string $deviceId, int $issuedAt): bool
     {
-        // A missing key is false inside the result array; a failed command is not an array.
+        // 缺失键在结果数组中表示为 false；命令执行失败则不会返回数组。
         $values = $this->redis->mGet([
             self::TOKEN_KEY_PREFIX . $tokenHash,
             self::DEVICE_KEY_PREFIX . $deviceId,

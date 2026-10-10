@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Social registration and identity-binding E2E for the SMS-free auth contract.
+# 面向无短信认证协议的社交注册和身份绑定端到端测试。
 #
-# The suite drives the public HTTP API only: every request crosses the real
-# Gateway gRPC client and the AuthService/UserService RoadRunner workers before
-# it reaches MySQL and Redis. It runs with the compose `e2e` profile and the
-# local fake OAuth upstream; production OAuth providers are never contacted and
-# no SMS provider or phone number is involved.
+# 测试仅调用公共 HTTP API：每个请求通过真实网关 gRPC 客户端及 AuthService/UserService RoadRunner 工作进程，再访
+# 问 MySQL 和 Redis。使用 compose 的 `e2e` 配置和本地模拟 OAuth 上游，不连接生产 OAuth 提供方，也不涉及短信提供
+# 方或手机号。
 #
-# Contract under test:
+# 被测协议：
 #   POST /api/v1/auth/social/login  {provider, code, device}
-#     -> data.state=authenticated, HTTP 201 on the account-creating call and
-#        HTTP 200 afterwards. The account is created without a phone number.
+#     -> data.state=authenticated，创建账户的调用返回 HTTP 201，后续调用返回 HTTP 200；创建账户时无须手机号。
 #   POST /api/v1/auth/social/bind   Bearer JWT + {provider, code}
-#     -> data.user_id / data.provider for the JWT holder only.
-#   POST /api/v1/auth/social/phone/code and /phone/bind are removed.
+#     -> data.user_id / data.provider 仅对应 JWT 持有者。
+#   POST /api/v1/auth/social/phone/code 和 /phone/bind 已移除。
 
 BASE_URL="${API_BASE_URL:-http://127.0.0.1:8787}"
 BODY_FILE="$(mktemp)"
@@ -58,7 +55,7 @@ request() {
   fi
 }
 
-# A removed route is answered by the framework 404 without the API envelope.
+# 已移除的路由由框架返回 404，不包含 API 响应封装。
 request_without_body() {
   local expected="$1" method="$2" path="$3" payload="${4:-}" token="${5:-}"
   local status
@@ -144,8 +141,7 @@ assert_redis() {
   fi
 }
 
-# Every newly registered account gets exactly one default persona plus the two
-# registration outbox events, regardless of whether the relay has published them.
+# 每个新账户均有且仅有一个默认人格及两条注册 Outbox 事件，无论中继是否已发布事件。
 assert_new_account_baseline() {
   local user_id="$1"
   assert_mysql user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND deleted_at IS NULL" '1'
@@ -156,12 +152,9 @@ run_id="$(date +%s)$$"
 device_uuid="social-e2e-device-${run_id}"
 device="{\"device_uuid\":\"${device_uuid}\",\"platform\":\"ios\",\"app_version\":\"e2e\"}"
 
-# The fake upstream fails the first call of a "transient" code once, so the
-# first WeChat login of this run also proves that a failed upstream attempt
-# leaves no account behind. Authorization codes are single-use at the fake
-# upstream (a failed redemption burns the code), so every redemption below
-# carries a distinct "~nonce" while the identity part stays scoped by the run
-# id: distinct codes, one external identity.
+# 模拟上游会让“transient”授权码的首次调用失败，因此本轮首次微信登录也验证上游失败不会残留账户。模拟上游的授权码
+# 只能使用一次，兑换失败也会使其失效；下方每次兑换携带不同“~nonce”，身份部分仍由本轮运行 ID 隔离，实现不同授权码
+# 对应同一外部身份。
 wechat_identity="transient-${run_id}"
 wechat_openid="wechat-openid-${wechat_identity}"
 wechat_code_fail="wechat-${wechat_identity}~1"
@@ -185,13 +178,12 @@ qq_first_code_repeat="qq-${qq_first_identity}~2"
 
 echo "Running social HTTP -> gRPC -> MySQL/Redis E2E for run ${run_id}"
 
-# The retired phone-binding endpoints must not exist at all.
+# 已废弃的手机号绑定端点必须完全不存在。
 request_without_body 404 POST /api/v1/auth/social/phone/code '{"bind_token":"social-e2e"}'
 request_without_body 404 POST /api/v1/auth/social/phone/bind '{"bind_token":"social-e2e","phone":"+8613800000000","code":"123456"}'
 
-# A transient upstream failure is reported as such and creates no account. The
-# burned code stays burned: replaying it is rejected like a real single-use
-# authorization code, and the client must obtain a fresh code to recover.
+# 临时上游失败须按实际故障报告，且不创建账户。已失效授权码保持失效；像真实一次性授权码一样，重放必须被拒绝，客户
+# 端须获取新授权码才能恢复。
 users_before_social="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
 request 503 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_fail}\",\"device\":${device}}"
 expect_code 1001010
@@ -202,9 +194,8 @@ assert_mysql auth_db \
 request 401 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_fail}\",\"device\":${device}}"
 expect_code 1001009
 
-# Recovering with a brand-new authorization code for the SAME external identity
-# registers the WeChat account without a phone number and without a duplicate
-# user. This is the first account of the run, so the API answers 201 Created.
+# 使用同一外部身份的新授权码恢复时，注册无手机号的微信账户，不创建重复用户。这是本轮首个账户，因此 API 返回 201
+# Created。
 request 201 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_register}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
@@ -221,8 +212,7 @@ assert_mysql auth_db \
   "1:${user_a}"
 assert_new_account_baseline "$user_a"
 
-# A repeat visit with yet another fresh code for the same identity reuses the
-# account and its identity, and answers 200 instead of 201.
+# 再次使用同一身份的新授权码访问时，复用账户及身份，返回 200 而非 201。
 users_after_registration="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
 request 200 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_repeat}\",\"device\":${device}}"
 expect_code 0
@@ -234,16 +224,15 @@ assert_mysql auth_db \
   "SELECT COUNT(*) FROM social_identities WHERE provider = 'wechat' AND openid = '${wechat_openid}'" \
   '1'
 
-# Binding is an authenticated action: without the JWT the request is rejected
-# and a body-supplied user_id is never trusted. The code is not consumed by
-# these rejections because they never reach the OAuth upstream.
+# 绑定须先认证：无 JWT 时请求被拒绝，且不信任请求体提供的 user_id。这些拒绝不消耗授权码，因为请求尚未到达 OAuth
+# 上游。
 request 401 POST /api/v1/auth/social/bind \
   "{\"provider\":\"qq\",\"code\":\"${qq_code_bind}\",\"user_id\":\"${user_a}\"}"
 expect_code 1001005
 request 422 POST /api/v1/auth/social/bind '{"provider":"weibo","code":"social-e2e"}' "$access_a"
 expect_code 1001008
 
-# A logged-in WeChat user actively binds a QQ identity that has never logged in.
+# 已登录微信用户主动绑定从未登录过的 QQ 身份。
 request 200 POST /api/v1/auth/social/bind "{\"provider\":\"qq\",\"code\":\"${qq_code_bind}\"}" "$access_a"
 expect_code 0
 expect_field data.user_id "$user_a"
@@ -254,8 +243,7 @@ assert_mysql auth_db \
 assert_mysql user_db "SELECT COUNT(*) FROM users WHERE id = '${user_a}' AND phone IS NULL" '1'
 assert_mysql auth_db "SELECT COUNT(*) FROM social_identities WHERE user_id = '${user_a}' AND status = 1" '2'
 
-# Logging in with a fresh QQ code for the bound identity authenticates the same
-# local user.
+# 使用已绑定身份的新 QQ 授权码登录时，认证为同一本地用户。
 request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_login}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
@@ -265,7 +253,7 @@ qq_access_a="$(field data.access_token)"
 request 200 GET /api/v1/me '' "$qq_access_a"
 expect_field data.user.id "$user_a"
 
-# A QQ identity that was never bound registers its own phone-less account.
+# 从未绑定的 QQ 身份会注册独立的无手机号账户。
 request 201 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_first_code}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
@@ -283,8 +271,7 @@ expect_code 0
 expect_field data.is_new_user false
 expect_field data.user_id "$user_c"
 
-# Two authorization codes for one QQ identity that arrive together must still
-# create exactly one account: the fake upstream maps both nonces to one openid.
+# 同一 QQ 身份的两个授权码同时到达时，仍只能创建一个账户；模拟上游将两个随机数映射为同一 openid。
 parallel_openid="qq-openid-primary-${run_id}p"
 parallel_body_one="$(mktemp)"
 parallel_body_two="$(mktemp)"
@@ -310,7 +297,7 @@ parallel_status_code_two="$(cat "$parallel_status_two")"
 if [[ "$parallel_status_code_one" != "200" && "$parallel_status_code_one" != "201" ]] \
   || [[ "$parallel_status_code_two" != "200" && "$parallel_status_code_two" != "201" ]]; then
   echo "FAILED: parallel social login returned HTTP ${parallel_status_code_one}/${parallel_status_code_two}" >&2
-  # Only code/message are printed: the response bodies carry session tokens.
+  # 仅输出 code/message；响应体含有会话令牌。
   ( BODY_FILE="$parallel_body_one"; failure_summary >&2 ); echo >&2
   ( BODY_FILE="$parallel_body_two"; failure_summary >&2 ); echo >&2
   exit 1
@@ -319,15 +306,14 @@ fi
 parallel_user_one="$(field_of "$parallel_body_one" data.user_id)"
 parallel_user_two="$(field_of "$parallel_body_two" data.user_id)"
 [[ -n "$parallel_user_one" && "$parallel_user_one" == "$parallel_user_two" ]]
-# Exactly one of the two concurrent requests may report the account creation.
+# 两个并发请求中恰有一个可以报告账户已创建。
 [[ "$(field_of "$parallel_body_one" data.is_new_user)" != "$(field_of "$parallel_body_two" data.is_new_user)" ]]
 assert_mysql auth_db "SELECT COUNT(*) FROM social_identities WHERE provider = 'qq' AND openid = '${parallel_openid}'" '1'
 parallel_identity_id="$(mysql_query auth_db "SELECT id FROM social_identities WHERE provider = 'qq' AND openid = '${parallel_openid}'" | tr -d '\r\n')"
 assert_mysql user_db "SELECT COUNT(*) FROM users WHERE social_registration_key = 'social:${parallel_identity_id}'" '1'
 assert_new_account_baseline "$parallel_user_one"
 
-# A second user (same installation) cannot steal the bound QQ identity, and the
-# identity keeps authenticating its owner.
+# 第二个用户使用相同安装实例，也不能抢占已绑定 QQ 身份；该身份继续认证为其所属用户。
 request 201 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${second_wechat_code}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
@@ -352,7 +338,7 @@ request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq
 expect_code 0
 expect_field data.user_id "$user_a"
 
-# Refresh, then logout: revocation is scoped to the logged-out user's device.
+# 先刷新再退出：撤销仅作用于退出用户的设备。
 request 200 POST /api/v1/auth/refresh "{\"refresh_token\":\"${refresh_a}\"}"
 expect_code 0
 refreshed_access_a="$(field data.access_token)"
@@ -360,7 +346,7 @@ refreshed_refresh_a="$(field data.refresh_token)"
 request 200 GET /api/v1/me '' "$refreshed_access_a"
 expect_field data.user.id "$user_a"
 
-# Both users share one installation, yet keep independent device rows.
+# 两个用户共享一个安装实例，但保持独立设备行。
 assert_mysql auth_db \
   "SELECT COUNT(DISTINCT id) FROM devices WHERE device_uuid = '${device_uuid}' AND user_id IN ('${user_a}', '${user_b}')" \
   '2'
@@ -385,8 +371,7 @@ assert_redis 1 EXISTS "auth:access-device-revoked:${device_a}"
 assert_redis 0 EXISTS "auth:access-device-revoked:${device_b}"
 assert_redis 1 EXISTS "auth:access-token-revoked:$(php -r 'echo hash("sha256", $argv[1]);' "$refreshed_access_a")"
 
-# A newly issued session for the same provider identity authenticates again,
-# and an authoritative ban or delete rejects that still-valid JWT.
+# 同一提供方身份的新会话可重新认证；账户被权威数据源封禁或删除后，即使 JWT 仍有效，也须拒绝认证。
 request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_pre_ban}\",\"device\":${device}}"
 expect_code 0
 expect_field data.user_id "$user_a"
@@ -394,7 +379,7 @@ banned_access_a="$(field data.access_token)"
 
 mysql_query user_db "UPDATE users SET status = 0 WHERE id = '${user_a}'" >/dev/null
 request 401 GET /api/v1/me '' "$banned_access_a"
-# A banned account cannot open a new session or register a replacement account.
+# 被封禁账户不能创建新会话，也不能注册替代账户。
 users_during_ban="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
 request 403 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_banned}\",\"device\":${device}}"
 expect_code 2001003

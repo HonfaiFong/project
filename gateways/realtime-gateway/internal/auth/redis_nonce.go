@@ -7,7 +7,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RedisNonceStore uses one atomic SET NX with a TTL shared by all replicas.
+// RedisNonceStore 使用带 TTL 的原子 SET NX，在所有副本之间共享消费状态。
 type RedisNonceStore struct {
 	client *redis.Client
 }

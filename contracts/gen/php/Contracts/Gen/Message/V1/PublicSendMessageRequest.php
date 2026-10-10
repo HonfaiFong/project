@@ -141,3 +141,4 @@ class PublicSendMessageRequest extends \Google\Protobuf\Internal\Message
     }
 
 }
+

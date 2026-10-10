@@ -69,7 +69,7 @@ func (c *Client) WritePump() {
 	ticker := time.NewTicker(45 * time.Second)
 	defer func() { ticker.Stop(); _ = c.Conn.Close() }()
 	for {
-		// Give shutdown priority over buffered application messages.
+		// 关闭信号优先于缓冲的应用消息。
 		select {
 		case <-c.shutdown:
 			_ = c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))

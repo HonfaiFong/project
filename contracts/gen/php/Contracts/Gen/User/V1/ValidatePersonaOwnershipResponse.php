@@ -66,3 +66,4 @@ class ValidatePersonaOwnershipResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

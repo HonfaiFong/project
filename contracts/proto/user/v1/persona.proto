@@ -99,7 +99,7 @@ message BatchGetPersonasResponse {
 
 message UpdatePersonaRequest {
   uint64 persona_id = 1;
-  uint64 user_id = 2; // for ownership check
+  uint64 user_id = 2; // 用于归属校验
   optional string nickname = 3;
   optional string avatar_key = 4;
   optional string bio = 5;

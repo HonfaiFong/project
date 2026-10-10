@@ -3,34 +3,28 @@
 declare(strict_types=1);
 
 /**
- * Local-only OAuth upstream used by the social HTTP E2E suite.
+ * 仅用于本地社交 HTTP 端到端测试的模拟 OAuth 上游服务。
  *
- * The application points at this server only when the E2E environment opts in
- * to the explicit HTTP test endpoint. Codes are scoped by the runner suffix so
- * repeated local runs do not reuse database identities.
+ * 只有端到端测试环境显式选择 HTTP 测试端点时，应用才连接此服务器。授权码按测试运行后缀隔离，避免重复本地运行复用
+ * 数据库身份。
  *
- * Authorization codes are strictly single-use, mirroring the real WeChat/QQ
- * contract: every redemption attempt consumes the exact code (a transient 503
- * burns it too), and any replay is answered with the providers' invalid-code
- * error. Distinct codes with an identical identity part (before the optional
- * "~nonce") still resolve to the same openid/unionid, so the suite can issue a
- * fresh authorization code for the same external identity after a failure.
+ * 授权码严格遵循微信和 QQ 的一次性约定：每次兑换尝试均消耗完整授权码，临时 503 也会使其失效，重放返回提供方的无
+ * 效授权码错误。身份部分相同（可选“~nonce”之前）的不同授权码仍对应同一 openid/unionid，测试因此能在失败后为同一
+ * 外部身份获取新授权码。
  */
 
 function consumedCodeStateFile(): string
 {
-    // Overridable so tests can point concurrent workers at an isolated file.
+    // 允许覆盖，以便测试让并发工作进程使用独立文件。
     $directory = getenv('FAKE_OAUTH_STATE_DIR');
     return ($directory !== false && $directory !== '' ? $directory : sys_get_temp_dir())
         . '/social-e2e-oauth-consumed-codes.json';
 }
 
 /**
- * Runs a read-check-write cycle on a JSON state file under an exclusive flock.
- * file_put_contents(..., LOCK_EX) only guards the write: two workers could
- * both read "not consumed" and both win the check. The lock must cover the
- * whole cycle, or single-use semantics break the moment the fake server runs
- * with more than one worker.
+ * 在排他 flock 锁保护下，对 JSON 状态文件执行读取、检查和写入的完整流程。file_put_contents(..., LOCK_EX) 仅保护
+ * 写入，两个进程可能都读到“未消费”并同时通过检查；锁必须覆盖完整流程，否则模拟服务使用多个工作进程时会破坏一次性
+ * 语义。
  *
  * @template T
  * @param callable(array<string, mixed>&): T $operation
@@ -73,8 +67,7 @@ function withLockedState(string $stateFile, callable $operation): mixed
 }
 
 /**
- * Records one redemption attempt for the exact code. Returns true when this is
- * the first attempt, false when the code was already burned.
+ * 记录完整授权码的一次兑换尝试；首次尝试返回 true，已失效授权码返回 false。
  */
 function consumeCode(string $provider, string $code): bool
 {
@@ -128,15 +121,13 @@ function parseScenario(string $code, string $provider): array
         jsonResponse(200, ['errcode' => 40029, 'errmsg' => 'invalid code']);
     }
 
-    // Distinct single-use authorization codes can represent the same identity.
-    // The optional nonce is test-only and never contributes to the subject id.
+    // 不同的一次性授权码可表示同一身份；可选随机数仅用于测试，不参与主体 ID。
     $identitySuffix = explode('~', $parts[2], 2)[0];
 
     return [$parts[1], preg_replace('/[^A-Za-z0-9]/', '', $identitySuffix) ?: 'unknown'];
 }
 
-// The router script only dispatches when serving requests (php -S); under
-// plain CLI it is included by tests exercising the locking helpers above.
+// 路由脚本仅在处理请求（php -S）时分发；普通 CLI 下由测试引入，用于验证上方锁相关辅助函数。
 if (PHP_SAPI !== 'cli-server') {
     return;
 }
@@ -146,8 +137,7 @@ $path = parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/'
 if ($path === '/sns/oauth2/access_token') {
     $code = queryCode();
     [$scenario, $suffix] = parseScenario($code, 'wechat');
-    // 40163 is WeChat's "code been used" error; WeChatOAuthProvider maps it to
-    // the invalid-code business error, so replays fail closed end to end.
+    // 40163 是微信的“授权码已使用”错误；WeChatOAuthProvider 将其映射为无效授权码业务错误，确保端到端拒绝重放。
     if (!consumeCode('wechat', $code)) {
         jsonResponse(200, ['errcode' => 40163, 'errmsg' => 'code been used']);
     }
@@ -166,8 +156,7 @@ if ($path === '/sns/oauth2/access_token') {
 if ($path === '/oauth2.0/token') {
     $code = queryCode();
     [$scenario, $suffix] = parseScenario($code, 'qq');
-    // A burned code replays with an error body; QqOAuthProvider maps any token
-    // error to the invalid-code business error.
+    // 已消耗授权码的重放返回错误响应体；QqOAuthProvider 将所有令牌错误映射为无效授权码业务错误。
     if (!consumeCode('qq', $code)) {
         header('Content-Type: text/plain');
         echo 'error=100030&error_description=' . urlencode('authorization code already redeemed');

@@ -64,9 +64,8 @@ final class WorkerIdTest extends TestCase
 
         $first = WorkerId::resolve();
 
-        // A sibling worker process has a different pid; simulate it by
-        // checking two resolutions never collapse into the same process slot
-        // for long-lived pools (pid % 32 differs for at least one offset).
+        // 同级工作进程具有不同 PID；通过检查两次解析在长期运行的进程池中不会落入同一进程槽位来模拟，至少一个偏移量的 pid
+        // % 32 不同。
         $offsets = array_map(
             static fn (int $delta): int => (getmypid() + $delta) % WorkerId::PROCESS_SLOTS,
             range(1, WorkerId::PROCESS_SLOTS)

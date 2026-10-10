@@ -11,7 +11,6 @@ final class DevSmsSender implements SmsSenderInterface
 {
     public function sendVerificationCode(string $phone, string $code, VerificationScene $scene): void
     {
-        // The local verification code is supplied to RedisPhoneVerificationService so that
-        // development clients can use a deterministic code without logging it.
+        // 向 RedisPhoneVerificationService 提供本地验证码，使开发客户端使用固定验证码，无须记录到日志。
     }
 }

@@ -10,12 +10,12 @@ use Random\RandomException;
 final class GrpcClientContext
 {
     /**
-     * Build gRPC call options with trace headers and timeout deadline.
+     * 构建包含追踪头和超时截止时间的 gRPC 调用选项。
      *
-     * @param int $timeoutMs Default deadline timeout in milliseconds (e.g. 150ms)
-     * @param array<string, string|array<string>> $customMetadata Extra metadata
-     * @param string|null $serviceToken Token configured for this target service
-     * @return array{timeout: int, metadata: array<string, array<string>>, call_credentials?: mixed} Call options array compatible with gRPC PHP clients
+     * @param int $timeoutMs 默认截止时间超时，单位为毫秒（如 150ms）
+     * @param array<string, string|array<string>> $customMetadata 额外元数据
+     * @param string|null $serviceToken 为此目标服务配置的令牌
+     * @return array{timeout: int, metadata: array<string, array<string>>, call_credentials?: mixed} 兼容 gRPC PHP 客户端的调用选项数组
      * @throws RandomException
      */
     public static function createCallOptions(
@@ -51,9 +51,7 @@ final class GrpcClientContext
             $metadata[$k] = is_array($v) ? $v : [$v];
         }
 
-        // Service identity is process configuration, never caller-provided
-        // metadata. Keep these fields authoritative even when a client adds
-        // custom metadata for an individual RPC.
+        // 服务身份属于进程配置，不来自调用方元数据；即使客户端为单次 RPC 添加自定义元数据，这些字段也须保持权威性。
         foreach (array_keys($metadata) as $key) {
             if (in_array(strtolower((string)$key), ['x-service-name', 'x-service-token'], true)) {
                 unset($metadata[$key]);
@@ -68,14 +66,12 @@ final class GrpcClientContext
             $metadata['x-service-token'] = [$serviceToken];
         }
 
-        // Absolute deadline in epoch milliseconds. RoadRunner does not expose
-        // the incoming call's remaining time to PHP workers, so receiving
-        // services read this metadata (after caller authorization) to clamp
-        // their own downstream hops to the caller's deadline.
+        // 以 Unix 纪元毫秒表示的绝对截止时间。RoadRunner 不向 PHP 工作进程暴露入站调用的剩余时间，因此接收服务在调用方授
+        // 权后读取此元数据，限制下游各跳预算。
         $metadata['x-deadline-unix-ms'] = [(string)(DeadlineContext::nowEpochMs() + $timeoutMs)];
 
         return [
-            'timeout'  => $timeoutMs * 1000, // microseconds for grpc extension / client
+            'timeout'  => $timeoutMs * 1000, // gRPC 扩展和客户端使用微秒
             'metadata' => $metadata,
         ];
     }

@@ -2,8 +2,7 @@
 
 declare(strict_types=1);
 
-// The advisory lock and Phinx share one PDO session. MySQL DDL commits
-// implicitly, so a transaction cannot serialize a whole migration batch.
+// 咨询锁与 Phinx 共用同一 PDO 会话；MySQL DDL 会隐式提交，因此事务无法串行化整个迁移批次。
 $prefixValue = getenv('MYSQL_SCHEMA_PREFIX');
 $prefix = $prefixValue === false ? '' : $prefixValue;
 if (!preg_match('/\A[a-zA-Z0-9_]*\z/', $prefix) || strlen($prefix) > 54) {
@@ -41,12 +40,11 @@ register_shutdown_function(static function () use ($pdo, $lockName): void {
         $release = $pdo->prepare('SELECT RELEASE_LOCK(:name)');
         $release->execute(['name' => $lockName]);
     } catch (Throwable) {
-        // Closing the non-persistent PDO connection also releases this lock.
+        // 关闭非持久 PDO 连接也会释放此锁。
     }
 });
 
-// Only the tracking database is bootstrapped here. The identifier is validated
-// above; all business schema changes belong to versioned migrations.
+// 此处仅初始化迁移记录数据库，标识符已在上方校验；所有业务表结构变更均应通过版本化迁移完成。
 $metaDatabase = $prefix . 'meta';
 $pdo->exec("CREATE DATABASE IF NOT EXISTS `$metaDatabase` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
 $pdo->exec("USE `$metaDatabase`");

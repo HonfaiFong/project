@@ -202,8 +202,7 @@ final class UserOutboxTransactionTest extends TestCase
             ]);
             $this->fail('Expected the duplicate social registration key to be rejected');
         } catch (QueryException $exception) {
-            // SQLite reports the violation as SQLSTATE 23000 with driver code 19
-            // and names the unique key that rejected the second account.
+            // SQLite 将约束违反报告为 SQLSTATE 23000、驱动代码 19，并指出拒绝第二个账户的唯一键。
             $this->assertSame('23000', (string)$exception->getCode());
             $this->assertSame(19, (int)($exception->errorInfo[1] ?? 0));
             $this->assertStringContainsString(
@@ -212,7 +211,7 @@ final class UserOutboxTransactionTest extends TestCase
             );
         }
 
-        // The rejected insert left the account created above untouched.
+        // 被拒绝的插入未修改上方创建的账户。
         $this->assertSame(1, $this->users->newQueryWithoutScopes()->count());
     }
 
@@ -236,7 +235,7 @@ final class UserOutboxTransactionTest extends TestCase
             $this->service->findOrCreateUserBySocialIdentity('social:1001');
             $this->fail('Expected the soft-deleted account to block re-registration');
         } catch (RuntimeException $e) {
-            // The unique key still holds the deleted row, so the retry fails closed.
+            // 唯一键仍占用已删除行的注册键，因此重试须拒绝。
             $this->assertSame(ErrorCode::USER_NOT_FOUND->value, $e->getCode());
         }
 
@@ -290,9 +289,8 @@ final class UserOutboxTransactionTest extends TestCase
     }
 
     /**
-     * Replaces the removed SQLite "reject_outbox_insert" trigger: the failure is
-     * raised on the Eloquent connection right before the outbox insert runs,
-     * inside the real transaction.
+     * 替代已移除的 SQLite“reject_outbox_insert”触发器：在真实事务内，紧接 Outbox 插入之前，通过 Eloquent 连接抛出失
+     * 败。
      */
     private function failOutboxInserts(): void
     {

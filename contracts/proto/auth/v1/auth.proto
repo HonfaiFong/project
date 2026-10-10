@@ -15,7 +15,7 @@ message DeviceInfo {
 
 message LoginRequest {
   string phone = 1;
-  string code = 2; // dev verification code or sms
+  string code = 2; // 开发环境验证码或短信验证码
   string password = 3;
   DeviceInfo device = 4;
 
@@ -41,7 +41,7 @@ enum SocialProvider {
 enum SocialLoginState {
   SOCIAL_LOGIN_STATE_UNSPECIFIED = 0;
   SOCIAL_LOGIN_STATE_AUTHENTICATED = 1;
-  // Deprecated: registration no longer asks clients for a phone binding step.
+  // 已弃用：注册流程不再要求客户端绑定手机号。
   SOCIAL_LOGIN_STATE_PHONE_BINDING_REQUIRED = 2;
 }
 
@@ -79,9 +79,8 @@ message BindSocialPhoneResponse {
   LoginResponse login = 1;
 }
 
-// Binds the provider identity behind `code` to the user authenticated by
-// `access_token`. The Gateway never trusts a body user_id: the user identity
-// comes from the verified access token only.
+// 将 `code` 对应的第三方身份绑定到通过 `access_token` 认证的用户。网关不信任请求体中的 user_id；用户身份仅来自已
+// 验证的访问令牌。
 message BindSocialIdentityRequest {
   SocialProvider provider = 1;
   string code = 2;
@@ -138,8 +137,7 @@ message CreateWsTicketResponse {
 service AuthService {
   rpc Login(LoginRequest) returns (LoginResponse);
   rpc SocialLogin(SocialLoginRequest) returns (SocialLoginResponse);
-  // Deprecated phone-binding flow: retained for wire compatibility. The
-  // transport rejects both RPCs with AUTH_UNAUTHORIZED.
+  // 已弃用的手机号绑定流程：为保持协议兼容而保留；传输层以 AUTH_UNAUTHORIZED 拒绝这两个 RPC。
   rpc SendSocialPhoneCode(SendSocialPhoneCodeRequest) returns (SendSocialPhoneCodeResponse) {
     option deprecated = true;
   }

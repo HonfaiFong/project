@@ -73,7 +73,7 @@ final class EloquentPersistenceTest extends TestCase
         EloquentConnection::warmup($this->pdo, OutboxEvent::class);
         $this->assertSame(0, EloquentConnection::fromPdo($this->pdo)->table('outbox_events')->count());
 
-        // Repeated warmup on an already-booted model stays cheap and safe.
+        // 对已初始化模型重复预热，应保持低开销且安全。
         EloquentConnection::warmup($this->pdo, OutboxEvent::class);
         $this->assertSame(0, EloquentConnection::fromPdo($this->pdo)->table('outbox_events')->count());
     }

@@ -110,3 +110,4 @@ class BlockRequest extends \Google\Protobuf\Internal\Message
     }
 
 }
+

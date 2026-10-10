@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Production AuthService startup checks.
+# 生产环境 AuthService 启动检查。
 #
-#   1. A production worker with social login enabled and NO SMS configuration
-#      must start and report readiness. Readiness is the worker's own startup
-#      log line, so an early exit or a timeout is a failure and never a success.
-#   2. Test-only OAuth endpoint overrides and insecure OAuth HTTP must fail
-#      closed before the RoadRunner worker starts.
+#   1. 生产工作进程在启用社交登录且无短信配置时，须正常启动并报告就绪。以工作进程自身的启动日志行为就绪依据；提前
+#   退出或超时均判为失败。
+#   2. 仅用于测试的 OAuth 端点覆盖和不安全 OAuth HTTP 配置，须在 RoadRunner 工作进程启动前被拒绝。
 
 READY_MARKER='AuthService started with RoadRunner gRPC worker'
 READY_TIMEOUT_SECONDS="${AUTH_READY_TIMEOUT_SECONDS:-120}"
 PROBE_WINDOW_SECONDS="${AUTH_PROBE_WINDOW_SECONDS:-60}"
 PROBE_RPC_DEADLINE_MS="${AUTH_PROBE_RPC_DEADLINE_MS:-30000}"
-# Scoped to this run so concurrent runs never remove each other's container.
+# 按本轮运行隔离，避免并发运行删除彼此的容器。
 READY_CONTAINER="social-auth-config-readiness-${RANDOM}-$$"
 READY_LOG=''
 
@@ -58,8 +56,7 @@ run_ready_case() {
   log_file="$(mktemp)"
   READY_LOG="$log_file"
 
-  # The container runs the real production command (RoadRunner supervising the
-  # AuthService worker), so the probe below talks to a truly served gRPC port.
+  # 容器运行真实生产命令，由 RoadRunner 监管 AuthService 工作进程；下方探测因此访问实际提供服务的 gRPC 端口。
   docker compose run --rm --no-deps --name "$READY_CONTAINER" "$@" auth-service >"$log_file" 2>&1 &
   pid=$!
 
@@ -107,9 +104,8 @@ run_ready_case() {
   echo "PASS case=${name}"
 }
 
-# Probes the running AuthService container over gRPC. Only this probe process
-# overrides SERVICE_NAME: the gateway caller identity is what the AuthService
-# authorizer expects, and it never prints the service token.
+# 通过 gRPC 探测运行中的 AuthService 容器。仅此探测进程覆盖 SERVICE_NAME：AuthService 授权器要求网关调用方身份，
+# 且不会输出服务令牌。
 probe_auth_service() {
   local container="$1"
   docker exec \
@@ -139,7 +135,7 @@ if ($health->getStatus() !== \Contracts\Gen\Common\V1\HealthStatus::HEALTH_STATU
     exit(3);
 }
 
-// Phone login is a development-only entry point; production must reject it.
+// 手机登录仅用于开发环境，生产环境必须拒绝。
 try {
     $client->call(
         '/auth.v1.AuthService/Login',
@@ -156,7 +152,7 @@ try {
     }
 }
 
-// The retired SMS phone-binding RPCs must never serve a caller.
+// 已废弃的短信手机号绑定 RPC 不得处理任何调用方请求。
 $retired = [
     [
         '/auth.v1.AuthService/SendSocialPhoneCode',
@@ -190,8 +186,7 @@ PHP
 )"
 }
 
-# Social login is the production authentication path and needs no SMS provider,
-# SMS pepper, or development SMS sender.
+# 社交登录是生产认证路径，无须短信提供方、短信 pepper 或开发短信发送器。
 run_ready_case \
   production-starts-ready-without-sms \
   -e APP_ENV=production \
@@ -208,8 +203,7 @@ run_ready_case \
   -e QQ_TOKEN_ENDPOINT=https://graph.qq.com/oauth2.0/token \
   -e QQ_OPEN_ID_ENDPOINT=https://graph.qq.com/oauth2.0/me
 
-# Test-only OAuth endpoint overrides must never be accepted by a production
-# AuthService, even when the provider settings otherwise look valid.
+# 生产 AuthService 不能接受仅用于测试的 OAuth 端点覆盖，即使其他提供方配置看似有效。
 run_rejection_case \
   oauth-endpoint-override-rejected-in-production \
   'OAuth endpoint overrides are only allowed in local, development, or testing environments' \

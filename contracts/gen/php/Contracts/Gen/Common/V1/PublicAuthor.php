@@ -205,3 +205,4 @@ class PublicAuthor extends \Google\Protobuf\Internal\Message
     }
 
 }
+

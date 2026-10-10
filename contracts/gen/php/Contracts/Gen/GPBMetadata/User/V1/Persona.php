@@ -22,3 +22,4 @@ class Persona
         static::$is_initialized = true;
     }
 }
+

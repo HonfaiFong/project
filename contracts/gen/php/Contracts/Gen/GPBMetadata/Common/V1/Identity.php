@@ -22,3 +22,4 @@ class Identity
         static::$is_initialized = true;
     }
 }
+

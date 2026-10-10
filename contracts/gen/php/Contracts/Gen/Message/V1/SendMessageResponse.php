@@ -66,3 +66,4 @@ class SendMessageResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

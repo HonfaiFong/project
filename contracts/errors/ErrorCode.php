@@ -6,10 +6,10 @@ namespace Contracts\Errors;
 
 enum ErrorCode: int
 {
-    // Success
+    // 成功
     case OK = 0;
 
-    // 100xxxx: Auth Domain
+    // 100xxxx：认证领域
     case AUTH_INVALID_CREDENTIALS = 1001001;
     case AUTH_TOKEN_EXPIRED       = 1001002;
     case AUTH_TOKEN_INVALID       = 1001003;
@@ -27,7 +27,7 @@ enum ErrorCode: int
     case AUTH_SOCIAL_BIND_CONFLICT       = 1001015;
     case AUTH_SOCIAL_BIND_PHONE_CHANGED  = 1001016;
 
-    // 200xxxx: User Domain
+    // 200xxxx：用户领域
     case USER_NOT_FOUND           = 2001001;
     case USER_ALREADY_EXISTS      = 2001002;
     case USER_BANNED              = 2001003;
@@ -35,36 +35,36 @@ enum ErrorCode: int
     case PERSONA_FORBIDDEN        = 2002002;
     case PERSONA_LIMIT_EXCEEDED   = 2002003;
 
-    // 300xxxx: Content Domain
+    // 300xxxx：内容领域
     case CONTENT_POST_NOT_FOUND   = 3001001;
     case CONTENT_POST_DELETED     = 3001002;
     case CONTENT_COMMENT_NOT_FOUND= 3002001;
     case CONTENT_UNDER_REVIEW     = 3003001;
 
-    // 400xxxx: Social Domain
+    // 400xxxx：社交领域
     case SOCIAL_CANNOT_FOLLOW_SELF= 4001001;
     case SOCIAL_ALREADY_FOLLOWED  = 4001002;
     case SOCIAL_USER_BLOCKED      = 4002001;
     case SOCIAL_CANNOT_BLOCK_SELF = 4002002;
 
-    // 500xxxx: Chat Domain
+    // 500xxxx：聊天领域
     case CHAT_CONVERSATION_NOT_FOUND = 5001001;
     case CHAT_NOT_A_MEMBER          = 5001002;
     case CHAT_FORBIDDEN_BY_PRIVACY  = 5001003;
 
-    // 600xxxx: Message Domain
+    // 600xxxx：消息领域
     case MESSAGE_NOT_FOUND        = 6001001;
     case MESSAGE_DUPLICATE_CLIENT_ID = 6001002;
     case MESSAGE_SEND_FAILED      = 6001003;
 
-    // 700xxxx: Risk Domain
+    // 700xxxx：风控领域
     case RISK_ACTION_DENIED       = 7001001;
     case RISK_CHALLENGE_REQUIRED  = 7001002;
 
-    // 800xxxx: Moderation Domain
+    // 800xxxx：审核领域
     case MODERATION_REJECTED      = 8001001;
 
-    // 900xxxx: Infrastructure & Common
+    // 900xxxx：基础设施和公共领域
     case INTERNAL_SERVER_ERROR    = 9001001;
     case INVALID_ARGUMENT         = 9001002;
     case RPC_TIMEOUT              = 9001003;

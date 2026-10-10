@@ -10,13 +10,11 @@ use RuntimeException;
 use Tests\TestCase;
 
 /**
- * Deployment-level contract for the gRPC deadline knobs.
+ * gRPC 截止时间配置的部署级协议约定。
  *
- * The runtime guards live in AuthServiceClient (gateway) and
- * GrpcUserDirectoryClient (auth-service), but the cross-service relationship —
- * the auth->user hop must stay below the gateway's outer auth deadline so the
- * outer deadline is what clients observe — spans two deployments and can only
- * be checked where both files meet: this repository.
+ * 运行时检查位于网关的 AuthServiceClient 和认证服务的 GrpcUserDirectoryClient，但跨服务预算关系涉及两个部署：
+ * auth->user 调用预算须小于网关外层认证截止时间，确保客户端观察到外层截止时间。此关系只能在两处配置汇合的本仓库
+ * 中检查。
  */
 final class GrpcDeadlineConfigContractTest extends TestCase
 {
@@ -106,10 +104,8 @@ final class GrpcDeadlineConfigContractTest extends TestCase
     }
 
     /**
-     * The auth-service bootstrap must reject the same garbage the gateway
-     * rejects: (int) casting in bin/server.php used to clamp 'abc' to 1 ms
-     * and '-100' to a valid-looking positive deadline before the constructor
-     * ever saw it.
+     * 认证服务启动流程须拒绝与网关相同的无效值；此前 bin/server.php 的“(int)”转换在构造器检查前，已将 'abc' 截断为 1
+     * 毫秒，将 '-100' 转换为看似有效的正截止时间。
      */
     #[DataProvider('invalidDeadlineValues')]
     public function testAuthServiceRejectsInvalidUserDirectoryDeadlineValues(string $value): void
@@ -158,9 +154,8 @@ final class GrpcDeadlineConfigContractTest extends TestCase
     }
 
     /**
-     * compose.yaml must keep injecting the gateway deadline into the
-     * auth-service container, or the startup cross-check silently stops
-     * seeing the deployed pair.
+     * compose.yaml 须持续向 auth-service 容器注入网关截止时间，否则启动时的交叉检查会静默失去对已部署配置组合的可见
+     * 性。
      */
     public function testComposePassesTheGatewayAuthDeadlineToAuthService(): void
     {

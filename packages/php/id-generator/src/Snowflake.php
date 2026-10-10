@@ -18,7 +18,7 @@ final class Snowflake
     private const WORKER_ID_SHIFT = self::SEQUENCE_BITS;
     private const TIMESTAMP_SHIFT = self::WORKER_ID_BITS + self::SEQUENCE_BITS;
 
-    // Default Epoch: 2024-01-01 00:00:00 UTC (1704067200000 ms)
+    // 默认起始时间：2024-01-01 00:00:00 UTC（1704067200000 毫秒）
     private int $epoch;
     private int $workerId;
     private int $sequence = 0;
@@ -41,7 +41,7 @@ final class Snowflake
         if ($timestamp < $this->lastTimestamp) {
             $offset = $this->lastTimestamp - $timestamp;
             if ($offset <= 5) {
-                // Wait for clock to catch up
+                // 等待系统时钟追上
                 usleep((int)($offset * 1000));
                 $timestamp = $this->timeGen();
             }

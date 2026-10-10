@@ -309,3 +309,4 @@ class Comment extends \Google\Protobuf\Internal\Message
     }
 
 }
+

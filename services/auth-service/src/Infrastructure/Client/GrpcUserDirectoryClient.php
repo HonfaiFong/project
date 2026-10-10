@@ -30,9 +30,8 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
         private readonly int $timeoutMs = 150,
         private readonly ?string $serviceToken = null,
     ) {
-        // GRPC_USER_DIRECTORY_TIMEOUT_MS becomes the per-call deadline in
-        // microseconds; zero or negative values would expire the call
-        // immediately, so misconfiguration must fail loudly at construction.
+        // GRPC_USER_DIRECTORY_TIMEOUT_MS 会转换为微秒级单次调用截止时间；零或负值会使调用立即过期，因此错误配置须在构造
+        // 时明确报错。
         if ($this->timeoutMs < 1) {
             throw new InvalidArgumentException(
                 'GRPC_USER_DIRECTORY_TIMEOUT_MS must resolve to a positive deadline in milliseconds'
@@ -41,7 +40,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
     }
 
     /**
-     * @throws Exception when the gRPC transport fails outside the mapped status path
+     * @throws Exception gRPC 传输失败且未进入已映射状态路径时抛出
      */
     public function findOrCreateByPhone(string $phone, string $registerChannel = 'default'): array
     {
@@ -80,7 +79,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
     }
 
     /**
-     * @throws Exception when the gRPC transport fails outside the mapped status path
+     * @throws Exception gRPC 传输失败且未进入已映射状态路径时抛出
      */
     public function findOrCreateBySocialIdentity(string $registrationKey, string $registerChannel): array
     {
@@ -120,7 +119,7 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
 
     /**
      * @return array{user_id: string, status: int}
-     * @throws Exception when the gRPC transport fails outside the mapped status path
+     * @throws Exception gRPC 传输失败且未进入已映射状态路径时抛出
      */
     public function findById(string $userId): array
     {
@@ -161,10 +160,8 @@ final class GrpcUserDirectoryClient implements UserDirectoryInterface
     }
 
     /**
-     * The configured budget is a ceiling, not an entitlement: when the gateway
-     * propagated its deadline, only the remaining slice may be spent on this
-     * hop so the outer deadline rules. An already-expired deadline fails fast
-     * instead of firing a fresh full-budget network call.
+     * 配置预算仅是上限；网关传递截止时间后，此跳只能消耗剩余时间，确保外层截止时间起决定作用。已过截止时间须立即失败，
+     * 不能再发起使用完整新预算的网络调用。
      */
     private function hopTimeoutMs(): int
     {

@@ -24,3 +24,4 @@ class Chat
         static::$is_initialized = true;
     }
 }
+

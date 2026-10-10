@@ -6,20 +6,16 @@ use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Packages\GrpcCommon\DeadlineEnv;
 
 /*
- * API gateway runtime settings.
+ * API 网关运行时配置。
  *
- * Webman includes every file under config/ once per process at worker startup
- * (support/App::run() -> loadAllConfig()), so environment variables are read
- * only while this file is loaded. Request handling consumes the resolved values
- * through the container instead of re-reading env vars or config files.
+ * Webman 在工作进程启动时，通过 support/App::run() -> loadAllConfig() 为每个进程加载 config/ 下的每个文件一次。
+ * 因此环境变量仅在本文件加载时读取；请求处理通过容器使用已解析的值，无须重新读取环境变量或配置文件。
  */
 
 $environment = strtolower(trim((string)(getenv('APP_ENV') ?: 'production')));
 
-// Shared with the auth-service bootstrap (Packages\GrpcCommon\DeadlineEnv):
-// deadlines become gRPC timeouts in microseconds, so a zero, negative, or
-// non-numeric value must fail loudly instead of clamping or falling back
-// through the falsy "?:" idiom.
+// 与 auth-service 启动流程共用 Packages\GrpcCommon\DeadlineEnv：截止时间会转换为微秒级 gRPC 超时，因此零、负数或
+// 非数值配置须明确报错，不能截断修正，也不能通过把值视为假的“?:”写法回退。
 $deadlineSetting = DeadlineEnv::positiveMilliseconds(...);
 
 $grpcDeadlineSettings = [
@@ -29,7 +25,7 @@ $grpcDeadlineSettings = [
     'SOCIAL_HTTP_TIMEOUT_MS'        => $deadlineSetting('SOCIAL_HTTP_TIMEOUT_MS', 3000),
 ];
 
-// Validate relationships while loading config, before lazy client resolution.
+// 加载配置时校验预算之间的关系，先于客户端的延迟解析。
 AuthServiceClient::validateTimeouts(
     $grpcDeadlineSettings['GRPC_AUTH_TIMEOUT_MS'],
     $grpcDeadlineSettings['GRPC_SOCIAL_LOGIN_TIMEOUT_MS'],
@@ -37,8 +33,7 @@ AuthServiceClient::validateTimeouts(
     $grpcDeadlineSettings['SOCIAL_HTTP_TIMEOUT_MS'],
 );
 
-// Rate limit windows are counters, not deadlines, but the same rule applies:
-// garbage from the environment must fail loudly at worker start.
+// 限流窗口用于计数而非截止时间，但规则相同：无效环境配置须在工作进程启动时明确报错。
 $rateLimitSetting = static function (string $name, int $default): int {
     $raw = getenv($name);
     $raw = $raw === false ? '' : trim($raw);
@@ -53,8 +48,7 @@ $rateLimitSetting = static function (string $name, int $default): int {
 };
 
 return [
-    // Only two behaviours exist: development (local, development, dev, testing)
-    // and production (everything else, including a missing APP_ENV).
+    // 仅区分两种行为：开发环境（local、development、dev、testing）和生产环境（其他所有情况，包括缺少 APP_ENV）。
     'environment' => in_array($environment, ['local', 'development', 'dev', 'testing'], true)
         ? 'development'
         : 'production',
@@ -84,9 +78,8 @@ return [
         ],
     ],
     'social_login_rate_limit' => [
-        // Layered buckets: one generous per-IP ceiling across login + bind
-        // (carrier CGNAT shares one IPv4 across real users), then tighter
-        // per-IP-per-scenario, per-(IP, device), and per-user (bind) limits.
+        // 分层限流桶：先对登录和绑定设置宽松的每 IP 总上限（运营商 CGNAT 会让真实用户共享 IPv4），再对 IP 与场景、IP 与
+        // 设备、以及绑定用户分别施加更严格的限制。
         'limit' => $rateLimitSetting('SOCIAL_LOGIN_RATE_LIMIT', 60),
         'window_seconds' => $rateLimitSetting('SOCIAL_LOGIN_RATE_WINDOW_SECONDS', 60),
         'scenario_limit' => $rateLimitSetting('SOCIAL_LOGIN_RATE_SCENARIO_LIMIT', 30),

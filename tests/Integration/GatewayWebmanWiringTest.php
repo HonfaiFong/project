@@ -119,7 +119,7 @@ final class GatewayWebmanWiringTest extends TestCase
         $socialResponse = Http::getCallback('', 'ApiGateway', $social['callback'], [], true, $social['route'])($socialRequest);
         $this->assertSame(ErrorCode::AUTH_SOCIAL_PROVIDER_UNSUPPORTED->httpStatus(), $socialResponse->getStatusCode());
 
-        // The phone-binding routes were replaced by the authenticated social bind route.
+        // 手机号绑定路由已由认证后的社交绑定路由替代。
         [$status] = Route::dispatch('POST', '/api/v1/auth/social/phone/code');
         $this->assertSame(Dispatcher::NOT_FOUND, $status);
         [$status] = Route::dispatch('POST', '/api/v1/auth/social/phone/bind');
@@ -177,7 +177,7 @@ final class GatewayWebmanWiringTest extends TestCase
         $counter = static function (string $key) use (&$keys): int {
             return $keys[$key] = ($keys[$key] ?? 0) + 1;
         };
-        // Replace only the external counter; retain real container limit/window wiring.
+        // 仅替换外部计数器，保留真实容器中的限额和窗口配置绑定。
         $counterProperty = new \ReflectionProperty(SocialLoginRateLimitMiddleware::class, 'counter');
         foreach ([SocialBindRateLimitMiddleware::class, SocialBindUserRateLimitMiddleware::class] as $class) {
             $counterProperty->setValue($container->get($class), $counter);
@@ -199,8 +199,7 @@ final class GatewayWebmanWiringTest extends TestCase
     }
 
     /**
-     * Webman includes config/ once per process at worker startup, so the values
-     * (including the environment) are snapshots taken at load time.
+     * Webman 在工作进程启动时为每个进程加载 config/ 一次，因此配置值（包括环境）是加载时的快照。
      */
     #[RunInSeparateProcess]
     public function testGatewayConfigIsLoadedAtStartupAndEnvironmentIsSnapshotted(): void
@@ -210,16 +209,14 @@ final class GatewayWebmanWiringTest extends TestCase
         Config::load($gatewayPath . '/config', ['route']);
         putenv('APP_ENV=production');
 
-        // Webman includes the config directory once at worker startup, so
-        // request handling reads an in-memory array instead of loading files.
+        // Webman 在工作进程启动时仅加载一次配置目录，请求处理读取内存数组，无须加载文件。
         $this->assertSame('development', Config::get('gateway.environment'));
         $this->assertSame('auth-service:50051', Config::get('gateway.grpc.auth.target'));
         $this->assertSame('user-service:50052', Config::get('gateway.grpc.user.target'));
         $this->assertSame(60, Config::get('gateway.social_login_rate_limit.limit'));
         $this->assertSame(60, Config::get('gateway.social_login_rate_limit.window_seconds'));
 
-        // The pipeline value is the one captured when the config was loaded:
-        // the later putenv('APP_ENV=production') must not change the decision.
+        // 处理管线使用配置加载时捕获的值；后续 putenv('APP_ENV=production') 不能改变决定。
         $middleware = new AppEnvironmentMiddleware((string) Config::get('gateway.environment'));
         $request = new GatewayRequest("POST /api/v1/auth/login HTTP/1.1\r\nHost: localhost\r\n\r\n");
         $response = $middleware->process($request, static fn (Request $request): Response => new Response(200));
@@ -243,13 +240,13 @@ final class GatewayWebmanWiringTest extends TestCase
         $this->assertInstanceOf(Factory::class, $container->get(Factory::class));
         $this->assertSame($container->get(Factory::class), $container->get(Factory::class));
 
-        // Action dependencies resolve through their interfaces.
+        // 动作依赖通过各自接口解析。
         $this->assertSame($container->get(AuthServiceClient::class), $container->get(WsTicketClient::class));
         $this->assertSame($container->get(UserServiceClient::class), $container->get(PersonaLookup::class));
         $this->assertSame($container->get(CreateWsTicketAction::class), $container->get(CreateWsTicketAction::class));
         $this->assertSame($container->get(AuthController::class), $container->get(AuthController::class));
 
-        // Middleware singletons consume the settings loaded from config/gateway.php.
+        // 中间件单例使用 config/gateway.php 加载的配置。
         $middleware = $container->get(AppEnvironmentMiddleware::class);
         $this->assertSame($middleware, $container->get(AppEnvironmentMiddleware::class));
         $request = new GatewayRequest("POST /api/v1/auth/login HTTP/1.1\r\nHost: localhost\r\n\r\n");
@@ -258,9 +255,8 @@ final class GatewayWebmanWiringTest extends TestCase
     }
 
     /**
-     * Phone (SMS) login is a development capability. Outside local/development/
-     * dev/testing the route middleware has to reject the request before the
-     * controller can call AuthService, without relying on any runtime flag.
+     * 手机短信登录仅用于开发；在 local/development/dev/testing 之外，路由中间件须在控制器调用 AuthService 前拒绝请求，
+     * 且不能依赖任何运行时标志。
      *
      * @throws ContainerExceptionInterface
      * @throws NotFoundExceptionInterface
@@ -281,8 +277,7 @@ final class GatewayWebmanWiringTest extends TestCase
         $this->assertSame(Dispatcher::FOUND, $status);
         $request = new GatewayRequest("POST /api/v1/auth/login HTTP/1.1\r\nHost: localhost\r\n\r\n");
         $response = Http::getCallback('', 'ApiGateway', $route['callback'], [], true, $route['route'])($request);
-        // 401 proves the environment middleware short-circuited the pipeline: a reachable
-        // controller without valid credentials would answer 422 here.
+        // 401 证明环境中间件已提前结束处理管线；若控制器能被调用，此处无效凭据应返回 422。
         $this->assertSame(ErrorCode::AUTH_UNAUTHORIZED->httpStatus(), $response->getStatusCode());
     }
 }

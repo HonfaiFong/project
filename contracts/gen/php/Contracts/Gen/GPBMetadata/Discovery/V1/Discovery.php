@@ -23,3 +23,4 @@ class Discovery
         static::$is_initialized = true;
     }
 }
+

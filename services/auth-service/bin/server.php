@@ -41,7 +41,7 @@ use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
 use Spiral\RoadRunner\Worker;
 
-// Reject invalid deadlines before opening database or Redis connections.
+// 建立数据库或 Redis 连接前，拒绝无效截止时间配置。
 $deadlineConfig = GrpcDeadlineConfig::fromEnvironment();
 $socialHttpConnectTimeoutMs = DeadlineEnv::positiveMilliseconds('SOCIAL_HTTP_CONNECT_TIMEOUT_MS', 1000);
 $socialHttpTimeoutMs = DeadlineEnv::positiveMilliseconds('SOCIAL_HTTP_TIMEOUT_MS', 3000);
@@ -51,16 +51,14 @@ if ($socialHttpConnectTimeoutMs > $socialHttpTimeoutMs) {
 
 $logger = new JsonLogger('auth-service', getenv('SERVICE_INSTANCE_ID') ?: 'auth-01');
 
-// Database Connection
+// 数据库连接
 $mysqlHost = getenv('MYSQL_HOST') ?: '127.0.0.1';
 $mysqlPort = getenv('MYSQL_PORT') ?: '3306';
 $mysqlUser = getenv('MYSQL_USER') ?: 'root';
 $mysqlPass = getenv('MYSQL_PASSWORD') ?: 'root_password';
 $mysqlDb   = getenv('AUTH_DB_NAME') ?: 'auth_db';
 
-// The two bootstrap retry loops below stay intentionally independent: each
-// dependency keeps its own probe and logging, and cross-service de-duplication
-// is outside this start-up script.
+// 下方两个启动重试循环有意保持独立，各依赖保留自身探测和日志；跨服务去重不在本启动脚本的范围内。
 /** @noinspection DuplicatedCode */
 $maxRetries = 15;
 $pdo = null;
@@ -114,9 +112,8 @@ if (!$redis) {
     exit(1);
 }
 
-// WorkerId::resolve() reads the CSPRNG and may throw RandomException; the
-// worker cannot start without a stable worker id, so the failure must abort
-// startup instead of being swallowed.
+// WorkerId::resolve() 使用 CSPRNG，可能抛出 RandomException；工作进程不能在缺少稳定工作节点 ID 时启动，因此失败
+// 须终止启动，不能被吞掉。
 /** @noinspection PhpUnhandledExceptionInspection */
 $snowflake = new Snowflake(WorkerId::resolve());
 $authRepo = new EloquentAuthRepository($pdo, $snowflake);
@@ -131,9 +128,8 @@ if (!$credentialVerifier->isDevelopment() && !$credentialVerifier->hasProvider()
     $logger->info('Phone credential login is disabled in production; configured OAuth providers authenticate users.');
 }
 $userServiceTarget = getenv('GRPC_USER_SERVICE') ?: 'user-service:50052';
-// Strict parsing plus the cross-service relationship check: an invalid
-// deadline or a directory budget that eats the gateway's whole auth deadline
-// refuses startup instead of degrading into RPC_TIMEOUT traffic.
+// 严格解析配置并校验跨服务预算关系；无效截止时间或占满网关认证总预算的用户目录调用预算须阻止启动，避免退化为大量
+// RPC_TIMEOUT 请求。
 $userDirectory = new GrpcUserDirectoryClient(
     target: $userServiceTarget,
     timeoutMs: $deadlineConfig->userDirectoryTimeoutMs,
@@ -197,9 +193,8 @@ if ($enableQq) {
 
 $phoneNormalizer = new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGION') ?: 'CN')));
 $socialIdentityRepository = new EloquentSocialIdentityRepository($pdo, $snowflake);
-// Eloquent boots each model class lazily on first use; without this warmup the
-// first RPC on a fresh worker pays ~250ms of boot cost and misses the gateway
-// gRPC deadline.
+// Eloquent 首次使用时才初始化各模型；若不预热，新工作进程的首个 RPC 需承担约 250 毫秒初始化开销，会超出网关 gRPC
+// 截止时间。
 EloquentConnection::warmup(
     $pdo,
     Device::class,
@@ -207,9 +202,8 @@ EloquentConnection::warmup(
     SocialIdentity::class,
     SocialIdentityAlias::class,
 );
-// The first protobuf encode initializes the shared descriptor pool (~80ms), the
-// first phone normalization loads country metadata, and the first JWT encode
-// loads the codec; pay all of it at worker start instead of on the first RPC.
+// 首次 Protobuf 编码会初始化共享描述符池（约 80 毫秒），首次手机号规范化会加载国家元数据，首次 JWT 编码会加载编
+// 解码器；这些开销应在工作进程启动时承担。
 (new LoginRequest())->serializeToString();
 (new SocialLoginRequest())->serializeToString();
 (new VerifyTokenRequest())->serializeToString();

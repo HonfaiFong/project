@@ -180,3 +180,4 @@ class CreatePersonaRequest extends \Google\Protobuf\Internal\Message
     }
 
 }
+

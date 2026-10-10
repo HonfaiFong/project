@@ -110,3 +110,4 @@ class ResolvePersonaModeRequest extends \Google\Protobuf\Internal\Message
     }
 
 }
+

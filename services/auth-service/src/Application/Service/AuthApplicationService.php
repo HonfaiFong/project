@@ -29,8 +29,8 @@ final readonly class AuthApplicationService
         private WsTicketIssuer $wsTicketIssuer,
         private CredentialVerifierInterface $credentialVerifier,
         private UserDirectoryInterface $userDirectory,
-        private int $accessTokenTtl = 7200,      // 2 hours
-        private int $refreshTokenTtl = 2592000,   // 30 days
+        private int $accessTokenTtl = 7200,      // 2 小时
+        private int $refreshTokenTtl = 2592000,   // 30 天
         private ?AccessTokenRevocationStoreInterface $accessTokenRevocationStore = null,
         private ?SocialAuthProviderRegistry $socialProviderRegistry = null,
         private ?SocialIdentityRepositoryInterface $socialIdentityRepository = null,
@@ -40,13 +40,12 @@ final readonly class AuthApplicationService
     }
 
     /**
-     * Authenticates public credentials (phone + verification code/password),
-     * resolves or registers the user in UserService, and issues session tokens.
+     * 认证公共凭据（手机号 + 验证码或密码），在 UserService 中查找或注册用户，并签发会话令牌。
      *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
      * @return array{user_id: string, access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int, is_new_user: bool}
-     * @throws Exception when the UserService directory transport fails outside the mapped status path
-     * @throws RandomException when the CSPRNG cannot mint the device hint or refresh token
+     * @throws Exception UserService 用户目录传输失败且未进入已映射状态路径时抛出
+     * @throws RandomException CSPRNG 无法生成设备提示或刷新令牌时抛出
      */
     public function login(
         string $phone,
@@ -76,12 +75,12 @@ final readonly class AuthApplicationService
     }
 
     /**
-     * Verifies OAuth and resumes an idempotent registration before issuing a session.
+     * 验证 OAuth 并恢复幂等注册流程，然后签发会话。
      *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
      * @return array{state: string, login: array<string, mixed>}
-     * @throws Exception when the UserService directory transport fails outside the mapped status path
-     * @throws RandomException when the CSPRNG cannot mint the device hint or refresh token
+     * @throws Exception UserService 用户目录传输失败且未进入已映射状态路径时抛出
+     * @throws RandomException CSPRNG 无法生成设备提示或刷新令牌时抛出
      */
     public function socialLogin(
         SocialProvider $provider,
@@ -115,8 +114,7 @@ final readonly class AuthApplicationService
             return $this->authenticatedSocialLogin($identity, $deviceInfo);
         }
 
-        // Persist intent before the RPC: a timeout must never let a manual bind
-        // steal an identity whose UserService transaction may already have committed.
+        // RPC 前先持久化注册意图；即使调用超时，也不能让手动绑定抢占可能已在 UserService 事务中提交的身份。
         $identity = $this->socialIdentityRepository->beginRegistration($identity->id);
         if ($identity->isActive()) {
             return $this->authenticatedSocialLogin($identity, $deviceInfo);
@@ -149,7 +147,7 @@ final readonly class AuthApplicationService
         $userId = $session['user_id'];
         $externalIdentity = $this->socialProviderRegistry->get($provider)->authenticate($code);
         $identity = $this->socialIdentityRepository->reserve($externalIdentity);
-        // Recheck after the external request, which may have taken several seconds.
+        // 外部请求可能持续数秒，完成后须重新检查。
         if (!$this->verifyToken($accessToken)['valid']) {
             throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
@@ -159,11 +157,9 @@ final readonly class AuthApplicationService
     }
 
     /**
-     * @deprecated Phone binding is no longer a public authentication flow.
+     * @deprecated 手机号绑定已不再是公共认证流程。
      *
-     * The parameters stay part of the retired signature so existing callers,
-     * including named-argument calls, keep compiling even though every call is
-     * rejected.
+     * 保留废弃方法签名中的参数，使现有调用（包括命名参数调用）仍可编译，但所有调用都会被拒绝。
      *
      * @noinspection PhpUnusedParameterInspection
      */
@@ -173,11 +169,9 @@ final readonly class AuthApplicationService
     }
 
     /**
-     * @deprecated Phone binding is no longer a public authentication flow.
+     * @deprecated 手机号绑定已不再是公共认证流程。
      *
-     * The parameters stay part of the retired signature so existing callers,
-     * including named-argument calls, keep compiling even though every call is
-     * rejected.
+     * 保留废弃方法签名中的参数，使现有调用（包括命名参数调用）仍可编译，但所有调用都会被拒绝。
      *
      * @noinspection PhpUnusedParameterInspection
      */
@@ -187,13 +181,13 @@ final readonly class AuthApplicationService
     }
 
     /**
-     * Issues access token and refresh token directly for an already authenticated user.
-     * Used internally by login().
+     * 直接为已认证用户签发访问令牌和刷新令牌。
+     * 由 login() 内部调用。
      *
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
      * @return array{user_id: string, access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int, is_new_user: bool}
-     * @throws Exception when the UserService directory transport fails outside the mapped status path
-     * @throws RandomException when the CSPRNG cannot mint the device hint or refresh token
+     * @throws Exception UserService 用户目录传输失败且未进入已映射状态路径时抛出
+     * @throws RandomException CSPRNG 无法生成设备提示或刷新令牌时抛出
      */
     private function issueTokenForUser(string $userId, array $deviceInfo, bool $isNewUser = false): array
     {
@@ -240,13 +234,12 @@ final readonly class AuthApplicationService
     }
 
     /**
-     * The device hint is accepted for transport-signature compatibility, but
-     * rotation binds the device from the stored refresh-token record.
+     * 为兼容传输层签名而接受设备提示，但令牌轮换使用已存储刷新令牌记录中的设备。
      *
      * @param array{device_uuid?: string, platform?: string, app_version?: string} $deviceInfo
      * @return array{access_token: string, refresh_token: string, access_token_expires_at: int, refresh_token_expires_at: int}
-     * @throws Exception when the UserService directory transport fails outside the mapped status path
-     * @throws RandomException when the CSPRNG cannot mint the rotated refresh token
+     * @throws Exception UserService 用户目录传输失败且未进入已映射状态路径时抛出
+     * @throws RandomException CSPRNG 无法生成轮换后的刷新令牌时抛出
      *
      * @noinspection PhpUnusedParameterInspection
      */
@@ -308,7 +301,7 @@ final readonly class AuthApplicationService
             try {
                 $payload = $this->jwtCodec->decode($rawAccessToken);
             } catch (Throwable) {
-                // An invalid access token cannot be used for authentication and needs no blacklist entry.
+                // 无效访问令牌无法用于认证，无须添加黑名单条目。
             }
 
             if (
@@ -354,7 +347,7 @@ final readonly class AuthApplicationService
                 return ['valid' => false];
             }
 
-            // Reject legacy sessions whose device was reassigned to another user.
+            // 拒绝设备已被重新分配给其他用户的历史会话。
             if (!$this->authRepo->deviceBelongsToUser($userId, (string)($payload['device_id'] ?? ''))) {
                 return ['valid' => false];
             }
@@ -386,7 +379,7 @@ final readonly class AuthApplicationService
         ];
     }
 
-    /** @throws RandomException when the CSPRNG cannot produce the websocket ticket */
+    /** @throws RandomException CSPRNG 无法生成 WebSocket 票据时抛出 */
     public function createWsTicket(string $userId, string $personaId, string $deviceId): array
     {
         return $this->wsTicketIssuer->issue($userId, $personaId, $deviceId);
@@ -394,8 +387,8 @@ final readonly class AuthApplicationService
 
     /**
      * @param array{device_uuid: string, platform: string, app_version: string, push_token?: ?string, ip?: ?string} $deviceInfo
-     * @throws Exception when the UserService directory transport fails outside the mapped status path
-     * @throws RandomException when the CSPRNG cannot mint the device hint or refresh token
+     * @throws Exception UserService 用户目录传输失败且未进入已映射状态路径时抛出
+     * @throws RandomException CSPRNG 无法生成设备提示或刷新令牌时抛出
      */
     private function authenticatedSocialLogin(SocialIdentity $identity, array $deviceInfo): array
     {
@@ -433,7 +426,7 @@ final readonly class AuthApplicationService
         return $this->phoneNormalizer?->normalize($phone) ?? trim($phone);
     }
 
-    /** @throws Exception when the UserService directory transport fails outside the mapped status path */
+    /** @throws Exception UserService 用户目录传输失败且未进入已映射状态路径时抛出 */
     private function assertUserCanAuthenticate(string $userId): void
     {
         $user = $this->userDirectory->findById($userId);

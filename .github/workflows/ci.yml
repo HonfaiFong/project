@@ -43,7 +43,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # buf breaking compares against the merge base
+          # buf breaking 与合并基点比较
           fetch-depth: 0
 
       - name: Setup PHP

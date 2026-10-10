@@ -1,9 +1,9 @@
-# Environment
+# 环境配置
 .env
 .env.local
 *.env
 
-# Composer & PHP
+# Composer 和 PHP
 vendor/
 composer.phar
 .phpunit.result.cache
@@ -18,7 +18,7 @@ bin/gateway
 *.test
 *.out
 
-# IDE & OS
+# IDE 和操作系统
 .idea/
 .vscode/
 *.swp
@@ -26,15 +26,15 @@ bin/gateway
 .DS_Store
 Thumbs.db
 
-# Docker / local data
+# Docker 和本地数据
 data/
 minio_data/
 mysql_data/
 redis_data/
 kafka_data/
 
-# Protobuf generated
-# (keep committed if needed or ignore according to team preference; standard is contracts/gen or committed contracts)
+# Protobuf 生成文件
+# 按团队约定提交或忽略；通常位于 contracts/gen，或作为协议生成代码提交。
 
-# CodeGraph local index
+# CodeGraph 本地索引
 .codegraph/

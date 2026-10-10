@@ -178,16 +178,12 @@ services:
       - SERVICE_NAME=auth-service
       - INTERNAL_RPC_GATEWAY_AUTH_TOKEN=${INTERNAL_RPC_GATEWAY_AUTH_TOKEN:?Set INTERNAL_RPC_GATEWAY_AUTH_TOKEN in .env}
       - GRPC_USER_SERVICE_TOKEN=${INTERNAL_RPC_AUTH_USER_TOKEN:?Set INTERNAL_RPC_AUTH_USER_TOKEN in .env}
-      # Per-hop budget for the AuthService -> UserService directory calls; must
-      # stay below the gateway's GRPC_AUTH_TIMEOUT_MS so the outer deadline rules.
+      # AuthService -> UserService 用户目录调用的单跳预算须小于网关的 GRPC_AUTH_TIMEOUT_MS，确保外层截止时间起决定作用。
       - GRPC_USER_DIRECTORY_TIMEOUT_MS=${GRPC_USER_DIRECTORY_TIMEOUT_MS:-250}
-      # The gateway's outer auth deadline, injected here as well so the worker
-      # can reject a deployed pair that violates the relationship at startup.
+      # 此处也注入网关的外层认证截止时间，以便工作进程在启动时拒绝违反预算关系的部署配置。
       - GRPC_AUTH_TIMEOUT_MS=${GRPC_AUTH_TIMEOUT_MS:-300}
       - APP_ENV=${APP_ENV:-production}
-      # Snowflake service slot (0-31). Replicas of this service must use
-      # distinct values; WorkerId::resolve() spreads rr worker processes
-      # within the slot automatically.
+      # Snowflake 服务槽位（0-31）。本服务的各副本须使用不同值；WorkerId::resolve() 自动在槽位内分配 rr 工作进程编号。
       - WORKER_ID=1
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
@@ -236,7 +232,7 @@ services:
       - SERVICE_NAME=user-service
       - INTERNAL_RPC_GATEWAY_USER_TOKEN=${INTERNAL_RPC_GATEWAY_USER_TOKEN:?Set INTERNAL_RPC_GATEWAY_USER_TOKEN in .env}
       - INTERNAL_RPC_AUTH_USER_TOKEN=${INTERNAL_RPC_AUTH_USER_TOKEN:?Set INTERNAL_RPC_AUTH_USER_TOKEN in .env}
-      # Snowflake service slot (0-31). See auth-service note above.
+      # Snowflake 服务槽位（0-31）；参见上方 auth-service 的说明。
       - WORKER_ID=2
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
@@ -303,8 +299,7 @@ services:
       - GRPC_AUTH_TIMEOUT_MS=${GRPC_AUTH_TIMEOUT_MS:-300}
       - GRPC_SOCIAL_LOGIN_TIMEOUT_MS=${GRPC_SOCIAL_LOGIN_TIMEOUT_MS:-7000}
       - GRPC_SOCIAL_BIND_TIMEOUT_MS=${GRPC_SOCIAL_BIND_TIMEOUT_MS:-7000}
-      # Layered social rate limits: global per-IP ceiling (CGNAT-sized), then
-      # per-IP-per-scenario, per-(IP, device), and per-user bind buckets.
+      # 分层社交限流：先设置适合 CGNAT 的每 IP 全局总上限，再设置 IP 与场景、IP 与设备、以及用户绑定限流桶。
       - SOCIAL_LOGIN_RATE_LIMIT=${SOCIAL_LOGIN_RATE_LIMIT:-60}
       - SOCIAL_LOGIN_RATE_WINDOW_SECONDS=${SOCIAL_LOGIN_RATE_WINDOW_SECONDS:-60}
       - SOCIAL_LOGIN_RATE_SCENARIO_LIMIT=${SOCIAL_LOGIN_RATE_SCENARIO_LIMIT:-30}

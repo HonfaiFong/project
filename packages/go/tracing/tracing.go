@@ -54,8 +54,8 @@ func GenerateUUIDv7() string {
 	uuid[5] = byte(now)
 
 	_, _ = rand.Read(uuid[6:])
-	uuid[6] = (uuid[6] & 0x0f) | 0x70 // version 7
-	uuid[8] = (uuid[8] & 0x3f) | 0x80 // variant 10
+	uuid[6] = (uuid[6] & 0x0f) | 0x70 // 版本 7
+	uuid[8] = (uuid[8] & 0x3f) | 0x80 // 变体 10
 
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		uuid[0:4],

@@ -353,3 +353,4 @@ class PersonaProfile extends \Google\Protobuf\Internal\Message
     }
 
 }
+

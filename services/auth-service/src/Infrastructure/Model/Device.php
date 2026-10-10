@@ -7,10 +7,9 @@ namespace Services\AuthService\Infrastructure\Model;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Persistence mapping for the `devices` table.
+ * `devices` 表的持久化映射。
  *
- * Snowflake ids are strings and the repository writes created_at/updated_at
- * itself, so Eloquent must not cast dates or auto-increment the key.
+ * Snowflake ID 使用字符串，created_at/updated_at 由仓储自行写入，因此 Eloquent 不得转换日期或自动递增主键。
  */
 final class Device extends Model
 {

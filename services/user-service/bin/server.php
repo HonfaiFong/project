@@ -33,15 +33,14 @@ use Spiral\RoadRunner\Worker;
 
 $logger = new JsonLogger('user-service', getenv('SERVICE_INSTANCE_ID') ?: 'user-01');
 
-// Database Connection
+// 数据库连接
 $mysqlHost = getenv('MYSQL_HOST') ?: '127.0.0.1';
 $mysqlPort = getenv('MYSQL_PORT') ?: '3306';
 $mysqlUser = getenv('MYSQL_USER') ?: 'root';
 $mysqlPass = getenv('MYSQL_PASSWORD') ?: 'root_password';
 $mysqlDb   = getenv('USER_DB_NAME') ?: 'user_db';
 
-// The startup retry loop intentionally mirrors the sibling services' worker
-// bootstrap so every service stays independently deployable.
+// 启动重试循环有意沿用其他服务的工作进程启动方式，使每个服务都能独立部署。
 /** @noinspection DuplicatedCode */
 $maxRetries = 15;
 $pdo = null;
@@ -66,17 +65,15 @@ if (!$pdo) {
     exit(1);
 }
 
-// A missing worker id or an unreadable CSPRNG must abort startup: the process
-// exits non-zero and the supervisor observes the crash.
+// 缺少工作节点 ID 或无法使用 CSPRNG 时，须终止启动；进程以非零状态退出，使监管器能观察到崩溃。
 /** @noinspection PhpUnhandledExceptionInspection */
 $snowflake = new Snowflake(WorkerId::resolve());
 $userRepo = new EloquentUserRepository($pdo);
 $personaRepo = new EloquentPersonaRepository($pdo);
 $transactionManager = new EloquentTransactionManager($pdo);
 $outbox = new OutboxRepository($pdo, $snowflake);
-// Eloquent boots each model class lazily on first use; without this warmup the
-// first RPC on a fresh worker pays ~250ms of boot cost and misses the gateway
-// gRPC deadline.
+// Eloquent 首次使用时才初始化各模型；若不预热，新工作进程的首个 RPC 需承担约 250 毫秒初始化开销，会超出网关 gRPC
+// 截止时间。
 EloquentConnection::warmup(
     $pdo,
     UserModel::class,
@@ -85,9 +82,8 @@ EloquentConnection::warmup(
 );
 
 $phoneNormalizer = new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGION') ?: 'CN')));
-// The first protobuf encode initializes the shared descriptor pool (~80ms) and
-// the first phone normalization loads country metadata; pay both at worker
-// start instead of on the first RPC.
+// 首次 Protobuf 编码会初始化共享描述符池（约 80 毫秒），首次手机号规范化会加载国家元数据；这些开销应在工作进程启
+// 动时承担。
 (new FindOrCreateByPhoneRequest())->serializeToString();
 (new FindOrCreateBySocialIdentityRequest())->serializeToString();
 (new GetUserRequest())->serializeToString();

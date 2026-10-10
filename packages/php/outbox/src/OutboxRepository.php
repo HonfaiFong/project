@@ -23,7 +23,7 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
         $this->model = EloquentConnection::model(OutboxEvent::class, $pdo);
     }
 
-    /** @throws Exception If secure random generation, JSON encoding, or persistence fails. */
+    /** @throws Exception 安全随机数生成、JSON 编码或持久化失败时抛出。 */
     public function recordEvent(
         string $eventId,
         string $aggregateType,
@@ -57,18 +57,15 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
     }
 
     /**
-     * Atomically claims pending events for this worker.
+     * 为当前工作进程原子领取待发布事件。
      *
-     * Runs a SELECT ... FOR UPDATE SKIP LOCKED pass inside a transaction and
-     * flips the claimed rows to status=2 before committing, so concurrent
-     * workers never receive the same row. Crashed workers leave rows claimed;
-     * releaseStaleClaims() returns them to the queue.
-     * Earlier unpublished rows with the same broker event_key block the claim,
-     * even when their aggregate types and IDs differ.
+     * 在事务内执行 SELECT ... FOR UPDATE SKIP LOCKED，并在提交前将领取行改为 status=2，确保并发工作进程不会领取同一
+     * 行。崩溃进程会留下已领取行，由 releaseStaleClaims() 重新放回队列。
+     * 相同消息代理 event_key 下更早的未发布行会阻止领取，即使它们的聚合类型和 ID 不同。
      *
-     * Statuses: 0 = pending, 1 = published, 2 = claimed (in-flight).
+     * 状态：0 = 待发布，1 = 已发布，2 = 已领取（处理中）。
      *
-     * @throws Throwable If the claim transaction fails.
+     * @throws Throwable 领取事务失败时抛出。
      * @return array<OutboxRecord>
      */
     public function claimPending(int $limit = 50): array
@@ -117,10 +114,9 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
     }
 
     /**
-     * Returns rows claimed longer than $olderThanSeconds ago to the pending
-     * queue (crash recovery for workers that died mid-publish).
+     * 将领取时间早于 $olderThanSeconds 秒之前的行放回待发布队列，用于恢复发布中途崩溃的工作进程留下的事件。
      *
-     * @return int number of released rows
+     * @return int 已释放的行数
      */
     public function releaseStaleClaims(int $olderThanSeconds = 300): int
     {

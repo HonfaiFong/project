@@ -14,7 +14,7 @@ use Closure;
 use PDO;
 use InvalidArgumentException;
 
-/** Registers the service's existing PDO with Eloquent, preserving shared transactions. */
+/** 将服务现有的 PDO 注册到 Eloquent，保留共享事务。 */
 final class EloquentConnection
 {
     private static ?ConnectionResolver $resolver = null;
@@ -28,8 +28,7 @@ final class EloquentConnection
         $name = 'pdo_' . spl_object_id($pdo);
         if (!self::$resolver->hasConnection($name)) {
             $connection = match ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME)) {
-                // These PDOs are owned by service bootstrap, not Laravel's
-                // connection factory. Preserve failures without replaying writes.
+                // 这些 PDO 由服务启动流程管理；保留失败结果，不通过 Laravel 连接工厂重放写入。
                 'mysql' => new class($pdo, config: ['name' => $name]) extends MySqlConnection {
                     protected function handleQueryException(QueryException $e, $query, $bindings, Closure $callback)
                     {
@@ -58,9 +57,8 @@ final class EloquentConnection
     }
 
     /**
-     * Pay Eloquent's per-process boot cost (class autoload, trait boot, grammar
-     * and first-query compilation) at worker start instead of on the first RPC,
-     * which must fit inside the gateway's gRPC deadline.
+     * 在工作进程启动时承担 Eloquent 的进程级初始化开销（类自动加载、trait 初始化、语法及首次查询编译），确保首个 RPC
+     * 能满足网关的 gRPC 截止时间。
      *
      * @param class-string<Model> ...$modelClasses
      */
@@ -71,7 +69,7 @@ final class EloquentConnection
         }
     }
 
-    /** Release a connection once its service worker or relay has stopped using it. */
+    /** 服务工作进程或中继不再使用连接时，将其释放。 */
     public static function forget(PDO $pdo): void
     {
         unset(self::$connections['pdo_' . spl_object_id($pdo)]);

@@ -93,3 +93,4 @@ class GetMessagesResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

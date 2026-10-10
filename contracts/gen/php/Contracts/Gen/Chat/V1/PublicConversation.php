@@ -191,3 +191,4 @@ class PublicConversation extends \Google\Protobuf\Internal\Message
     }
 
 }
+

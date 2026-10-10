@@ -7,19 +7,17 @@ namespace Packages\Tracing;
 use Random\RandomException;
 
 /**
- * Request tracing context holding correlation identifiers and trusted user context.
+ * 保存关联标识和可信用户身份的请求追踪上下文。
  *
- * ARCHITECTURAL CONCURRENCY NOTE / TECHNICAL DEBT:
- * Currently `private static ?self $current = null` stores the active context. This is
- * safe under the current synchronous process-per-worker model (Workerman single-event-loop
- * worker / RoadRunner worker), where each request cleans up via `TraceContext::reset()`
- * in a `finally` block before processing the next request.
+ * 架构并发说明与技术债务：
+ * 当前用 `private static ?self $current = null` 保存活动上下文。在现有同步、每工作进程独立处理的模型（Workerman
+ * 单事件循环工作进程或 RoadRunner 工作进程）下是安全的：每个请求在处理下一请求前，都会在 `finally` 块中通过
+ * `TraceContext::reset()` 清理上下文。
  *
- * TODO (CRITICAL before enabling Webman Coroutine / Fibers / Async concurrency):
- * When coroutine/fiber concurrency is enabled, `static $current` is shared across concurrent
- * requests in the same process worker, causing trace context crosstalk when a coroutine yields.
- * Before enabling coroutines, this static property MUST be migrated to Coroutine-Local
- * / Fiber-Local storage (e.g. Swow/Swoole Coroutine::getContext() or Fiber-scoped context).
+ * TODO（启用 Webman 协程、Fiber 或异步并发前必须处理）：
+ * 启用协程或 Fiber 并发后，同一工作进程的并发请求共享 `static $current`，协程让出执行权时会导致追踪上下文串扰。
+ * 启用协程前必须将此静态属性迁移到协程或 Fiber 局部存储，如 Swow/Swoole Coroutine::getContext() 或 Fiber 作用域
+ * 上下文。
  */
 final class TraceContext
 {
@@ -110,15 +108,15 @@ final class TraceContext
     /** @throws RandomException */
     public static function generateUuidV7(): string
     {
-        // 48-bit timestamp in milliseconds
+        // 48 位毫秒时间戳
         $milliTime = (int)floor(microtime(true) * 1000);
         $timeHex = str_pad(dechex($milliTime), 12, '0', STR_PAD_LEFT);
 
-        // 12-bit rand_a with version 7 (0111)
+        // 12 位 rand_a，包含版本 7（0111）
         $randA = random_int(0, 0x0fff);
         $randAHex = '7' . str_pad(dechex($randA), 3, '0', STR_PAD_LEFT);
 
-        // 62-bit rand_b with variant 10
+        // 62 位 rand_b，包含变体 10
         $randB = random_int(0, 0x3fff);
         $randBHex = dechex(0x8000 | $randB);
         $randTail = bin2hex(random_bytes(6));

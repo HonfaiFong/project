@@ -1,7 +1,7 @@
-# NOTE: buf.gen.yaml is not the canonical PHP gRPC generator.
-# Always use `make proto` for committed generated contracts (which invokes protoc
-# with protoc-gen-php-grpc for Spiral RoadRunner PHP gRPC service interfaces).
-# Buf CLI is used primarily for linting (`buf lint`) and breaking changes (`buf breaking`).
+# 注意：buf.gen.yaml 不是 PHP gRPC 生成代码的标准入口。
+# 提交协议生成代码时始终使用 `make proto`，它调用 protoc 和 protoc-gen-php-grpc 生成 Spiral RoadRunner PHP gRPC
+# 服务接口。
+# Buf CLI 主要用于规范检查（`buf lint`）和破坏性变更检查（`buf breaking`）。
 version: v2
 plugins:
   - remote: buf.build/protocolbuffers/php

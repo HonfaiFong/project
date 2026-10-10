@@ -159,9 +159,8 @@ final class PdoDeviceIsolationTest extends TestCase
         $workers = [];
 
         try {
-            // Each worker parks immediately before its devices insert inside
-            // the Eloquent beforeExecuting hook, so the unique key - not the
-            // pre-check read - has to serialize the two workers.
+            // 各工作进程在 Eloquent beforeExecuting 钩子中、插入 devices 之前等待；须由唯一键而非预检查读取来串行化两个工作
+            // 进程。
             $workerScript = __DIR__ . '/fixtures/PdoDeviceReserveWorker.php';
             foreach ([1, 2] as $index) {
                 $pipes = [];
@@ -238,8 +237,7 @@ final class PdoDeviceIsolationTest extends TestCase
     }
 
     /**
-     * Legacy pre-0006 shape: the device UUID carries a global unique key, so
-     * applying 0006 must re-scope it to the owning user.
+     * 历史 0006 迁移前，设备 UUID 具有全局唯一键；应用 0006 后须将唯一性限定在所属用户内。
      */
     private function createLegacySchema(): void
     {
@@ -279,8 +277,7 @@ final class PdoDeviceIsolationTest extends TestCase
     }
 
     /**
-     * Runs the shipped 0006 migration file itself instead of re-creating its
-     * DDL in the test, so the versioned migration artifact keeps its coverage.
+     * 执行实际交付的 0006 迁移文件，不在测试中重新编写 DDL，确保覆盖版本化迁移产物。
      */
     private function applyDeviceMigration(): void
     {

@@ -20,7 +20,7 @@ final class RedisSocialBindSessionStore implements SocialBindSessionStoreInterfa
     {
     }
 
-    /** @throws RandomException when the CSPRNG cannot produce the bind token */
+    /** @throws RandomException CSPRNG 无法生成绑定令牌时抛出 */
     public function issue(string $socialIdentityId, int $ttlSeconds): array
     {
         if ($ttlSeconds < 1) {
@@ -173,7 +173,7 @@ LUA, [self::TOKEN_PREFIX . $session->tokenHash, self::IDENTITY_PREFIX . $session
         return $session;
     }
 
-    /** @throws RandomException when the CSPRNG cannot produce the bind token */
+    /** @throws RandomException CSPRNG 无法生成绑定令牌时抛出 */
     private function randomToken(): string
     {
         return rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');

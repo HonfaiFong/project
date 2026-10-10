@@ -16,7 +16,7 @@ interface PhoneVerificationServiceInterface
         array $context = []
     ): void;
 
-    /** With bindToken, consumption and verified-session persistence must be atomic. */
+    /** 提供 bindToken 时，消费验证码和持久化已验证会话须原子完成。 */
     public function verify(
         string $phone,
         string $code,

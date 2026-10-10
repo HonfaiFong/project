@@ -7,14 +7,10 @@ use Phinx\Migration\IrreversibleMigrationException;
 use Phinx\Db\Table\Column;
 
 /**
- * Persists the caller-owned registration key used by
- * `user.v1.UserService/FindOrCreateBySocialIdentity` on the user row it created.
+ * 在新建用户行中持久化 `user.v1.UserService/FindOrCreateBySocialIdentity` 使用的、由调用方持有的注册键。
  *
- * The column is nullable and unique: MySQL allows any number of NULLs in a
- * unique index, so existing phone/email users keep working untouched, while a
- * repeated or retried social registration can never create a second account
- * for the same key. The unique key fails the competing insert and the service
- * re-reads the winning row instead of guessing.
+ * 该列允许为空并具有唯一约束：MySQL 的唯一索引允许多个 NULL，因此现有手机或邮箱用户不受影响；同一键的重复注册或
+ * 重试无法创建第二个账户。唯一约束会拒绝竞争插入，服务随后重新读取成功插入的行。
  */
 final class AddUserSocialRegistrationKey extends AbstractMigration
 {

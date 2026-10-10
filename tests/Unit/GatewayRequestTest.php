@@ -32,7 +32,7 @@ final class GatewayRequestTest extends TestCase
         ];
     }
 
-    /** @throws Exception If the secure random source is unavailable. */
+    /** @throws Exception 安全随机源不可用时抛出。 */
     public function testLoginDevicePrefersBodyValuesAndRetainsAdditionalFields(): void
     {
         $request = new GatewayRequest("POST /?device=query HTTP/1.1\r\nHost: localhost\r\n\r\n");
@@ -43,7 +43,7 @@ final class GatewayRequestTest extends TestCase
         $this->assertSame($device, $request->loginDevice());
     }
 
-    /** @throws Exception If the secure random source is unavailable. */
+    /** @throws Exception 安全随机源不可用时抛出。 */
     public function testLoginDeviceFallsBackToHeadersForEmptyAndNullValues(): void
     {
         $request = new GatewayRequest("POST / HTTP/1.1\r\nHost: localhost\r\n\r\n");
@@ -57,7 +57,7 @@ final class GatewayRequestTest extends TestCase
         ], $request->loginDevice());
     }
 
-    /** @throws Exception If the secure random source is unavailable. */
+    /** @throws Exception 安全随机源不可用时抛出。 */
     public function testLoginDeviceGeneratesAnIdAndUsesExistingDefaultsWithoutHeaders(): void
     {
         $request = new GatewayRequest("POST / HTTP/1.1\r\nHost: localhost\r\n\r\n");

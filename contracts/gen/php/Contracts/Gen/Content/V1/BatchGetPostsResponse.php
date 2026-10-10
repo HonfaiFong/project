@@ -56,3 +56,4 @@ class BatchGetPostsResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

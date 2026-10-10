@@ -40,9 +40,7 @@ final class EloquentSocialIdentityRepositoryTest extends TestCase
             $this->markTestSkipped('MySQL integration service is not available: ' . $e->getMessage());
         }
 
-        // Post-migration production shape: the identity identifiers are
-        // case-sensitive (utf8mb4_bin) and the aliases table keeps its
-        // composite primary key plus the identity foreign key.
+        // 迁移后的生产表结构：身份标识区分大小写（utf8mb4_bin），别名表保留复合主键及身份外键。
         $schema = EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder();
         $schema->dropIfExists('social_identity_aliases');
         $schema->dropIfExists('social_identities');
@@ -111,9 +109,8 @@ final class EloquentSocialIdentityRepositoryTest extends TestCase
         /** @var array<int, array{process: resource, pipes: array<int, resource>}> $workers */
         $workers = [];
         try {
-            // Each worker parks immediately before its social_identities
-            // insert inside the Eloquent beforeExecuting hook, so the unique
-            // key - not the pre-check read - has to serialize them.
+            // 各工作进程在 Eloquent beforeExecuting 钩子中、插入 social_identities 之前等待；须由唯一键而非预检查读取来串行
+            // 化。
             $workerScript = __DIR__ . '/fixtures/PdoSocialIdentityReserveWorker.php';
             foreach ([0, 1] as $index) {
                 $pipes = [];
@@ -169,8 +166,7 @@ final class EloquentSocialIdentityRepositoryTest extends TestCase
             $this->assertSame($firstId, $secondId);
             $this->assertSame(1, $this->identities->newQuery()->count());
         } finally {
-            // Release workers even when the ready barrier fails, then terminate
-            // and reap them before the fixture table is torn down.
+            // 即使就绪屏障失败，也须释放工作进程，再终止并回收它们，之后才能删除测试表。
             file_put_contents($startPath, 'start');
             $this->stopReserveWorkers($workers);
             foreach ($readyPaths as $path) {
@@ -394,9 +390,7 @@ final class EloquentSocialIdentityRepositoryTest extends TestCase
     public function testSameUserLegacyUnionAndOpenIdRowsAreMergedAndOpenIdRowRemoved(): void
     {
         $repository = $this->repository();
-        // Legacy duplicate rows could exist before uniq_user_provider was added.
-        // Drop only that invariant while preparing the fixture, then restore it
-        // after reconciliation proves that one canonical row remains.
+        // 添加 uniq_user_provider 前可能存在历史重复行；准备测试数据时仅移除此约束，合并验证仅剩一条规范记录后再恢复。
         EloquentConnection::fromPdo($this->pdo)->getSchemaBuilder()->table(
             'social_identities',
             static function (Blueprint $table): void {
@@ -623,7 +617,7 @@ final class EloquentSocialIdentityRepositoryTest extends TestCase
         while (microtime(true) < $deadline) {
             $allExited = true;
             foreach ($workers as $index => $worker) {
-                // PHP 8.2 only reports the exit code on the first status read.
+                // PHP 8.2 仅在首次读取进程状态时报告退出码。
                 if (isset($statuses[$index]) && !$statuses[$index]['running']) {
                     continue;
                 }

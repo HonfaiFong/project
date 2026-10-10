@@ -110,3 +110,4 @@ class SyncMessagesResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

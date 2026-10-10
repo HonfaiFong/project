@@ -63,9 +63,8 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
 
         $this->assertArrayHasKey($loginScenario, $keys);
         $this->assertArrayHasKey($bindScenario, $keys);
-        // The IP ceiling is one shared bucket across both scenarios: several
-        // CGNAT users behind one IPv4 hit one generous ceiling, while the
-        // scenario buckets keep login and bind allowances independent.
+        // 两个场景共用每 IP 总限流桶：共享一个 IPv4 的多个 CGNAT 用户受到同一宽松总上限约束，场景桶则保持登录与绑定配额
+        // 独立。
         $this->assertSame(2, $keys[$global] ?? 0);
     }
 
@@ -118,8 +117,7 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
 
         $this->assertSame(1, $keys[$this->deviceKey('198.51.100.10', 'device-a')]);
         $this->assertSame(1, $keys[$this->deviceKey('198.51.100.10', 'device-b')]);
-        // Rotating a forged device id mints fresh device buckets but never
-        // lifts the IP buckets: both requests still counted on the IP keys.
+        // 轮换伪造设备 ID 会生成新设备桶，但不会放宽 IP 限制；两个请求仍计入 IP 键。
         $this->assertSame(2, $keys['auth:gateway:social-login:' . hash('sha256', '198.51.100.10')]);
         $this->assertSame(2, $keys['auth:gateway:social-login:login:' . hash('sha256', '198.51.100.10')]);
     }
@@ -160,7 +158,7 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
         $middleware->process($this->request('203.0.113.99', authContext: ['user_id' => '737373']), $handler);
 
         $identityKey = 'auth:gateway:social-login:user:bind:' . hash('sha256', '737373');
-        // Same user from two different IPs still lands in one identity bucket.
+        // 同一用户从两个不同 IP 请求，仍落入同一身份桶。
         $this->assertSame(2, $keys[$identityKey] ?? 0);
 
         try {
@@ -215,8 +213,7 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
 
     public function testDualCdnLbChainKeepsDistinctClientBuckets(): void
     {
-        // Two clients arrive through the same dual CDN -> LB chain; they must
-        // never share one bucket keyed on the shared proxy infrastructure.
+        // 两个客户端经过相同的双层 CDN -> LB 链路；不能按共享代理基础设施地址将它们归入同一限流桶。
         $keys = [];
         $middleware = new SocialLoginRateLimitMiddleware(
             counter: $this->recordingCounter($keys),
@@ -266,7 +263,7 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
         );
         $handler = static fn (Request $request): Response => new Response(200);
 
-        // Rotating the interface bits must not mint new buckets...
+        // 轮换接口标识位不能产生新限流桶……
         $middleware->process(
             $this->request('fd00::1', ['x-forwarded-for' => '2001:db8:aaaa:1::1, fd00::2']),
             $handler,
@@ -275,7 +272,7 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
             $this->request('fd00::1', ['x-forwarded-for' => '2001:db8:aaaa:1::dead, fd00::2']),
             $handler,
         );
-        // ...while a different /64 is a different subscriber.
+        // ……不同 /64 则表示不同订户。
         $middleware->process(
             $this->request('fd00::1', ['x-forwarded-for' => '2001:db8:bbbb:1::1, fd00::2']),
             $handler,
@@ -407,8 +404,7 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
     }
 
     /**
-     * A counter that tallies every key it sees, so tests can assert on the
-     * exact bucket layout and per-bucket counts.
+     * 记录每个键的计数器，便于测试断言精确的限流桶布局及各桶计数。
      *
      * @param array<string, int> $keys
      */

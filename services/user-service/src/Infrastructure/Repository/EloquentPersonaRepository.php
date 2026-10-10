@@ -109,8 +109,7 @@ final readonly class EloquentPersonaRepository implements PersonaRepositoryInter
     ): ?Persona {
         $now = gmdate('Y-m-d H:i:s.v');
 
-        // Same COALESCE semantics as the previous SQL: a null argument keeps
-        // the stored column untouched.
+        // 沿用原 SQL 的 COALESCE 语义：参数为 null 时，保留已有列值。
         $attributes = ['updated_at' => $now];
         if ($nickname !== null) {
             $attributes['nickname'] = $nickname;

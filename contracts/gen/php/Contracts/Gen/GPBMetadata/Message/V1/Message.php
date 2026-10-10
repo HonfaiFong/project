@@ -24,3 +24,4 @@ class Message
         static::$is_initialized = true;
     }
 }
+

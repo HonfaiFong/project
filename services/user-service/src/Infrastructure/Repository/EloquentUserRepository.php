@@ -52,7 +52,7 @@ final readonly class EloquentUserRepository implements UserRepositoryInterface
 
     public function socialRegistrationKeyExists(string $registrationKey): bool
     {
-        // A deleted account still owns its unique registration key.
+        // 已删除账户仍占用其唯一注册键。
         return $this->model->newQueryWithoutScopes()->where('social_registration_key', $registrationKey)->exists();
     }
 

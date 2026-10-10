@@ -37,8 +37,7 @@ final class TrustedProxyClientIpResolverTest extends TestCase
 
     public function testDualCdnAndLbHopsInSeparateTrustedRangesResolveTheClient(): void
     {
-        // CDN edge 100.64.0.0/10 -> L2 LB 10.0.0.0/8 -> gateway. The chain is
-        // "client, cdn-edge" with the LB as the socket peer.
+        // CDN 边缘 100.64.0.0/10 -> 二层负载均衡 10.0.0.0/8 -> 网关；转发链为“client, cdn-edge”，连接对端为负载均衡器。
         $resolver = new TrustedProxyClientIpResolver(['100.64.0.0/10', '10.0.0.0/8']);
 
         $this->assertSame(
@@ -54,8 +53,7 @@ final class TrustedProxyClientIpResolverTest extends TestCase
     {
         $resolver = new TrustedProxyClientIpResolver(['100.64.0.0/10', '10.0.0.0/8']);
 
-        // The attacker prepends a decoy public IP; the CDN appends the real
-        // client IP, so the rightmost untrusted address still wins.
+        // 攻击者在前方添加诱饵公网 IP，CDN 追加真实客户端 IP，因此仍使用最右侧不可信地址。
         $this->assertSame(
             '198.51.100.10',
             $resolver->resolve($this->request(
@@ -69,8 +67,7 @@ final class TrustedProxyClientIpResolverTest extends TestCase
     {
         $resolver = new TrustedProxyClientIpResolver(['100.64.0.0/10', '10.0.0.0/8']);
 
-        // The client sends "X-Forwarded-For: 10.9.9.9" itself; the trusted CDN
-        // appends the client's real address, which stays the resolved key.
+        // 客户端自行发送“X-Forwarded-For: 10.9.9.9”，可信 CDN 追加客户端真实地址；解析后的键仍应是真实地址。
         $this->assertSame(
             '198.51.100.77',
             $resolver->resolve($this->request(
@@ -82,9 +79,8 @@ final class TrustedProxyClientIpResolverTest extends TestCase
 
     public function testIpv4MappedIpv6PeerIsComparedAsItsEmbeddedAddress(): void
     {
-        // A dual-stack LB presenting ::ffff:10.1.0.1 must still count as the
-        // configured 10.0.0.0/8 proxy; otherwise every client behind it would
-        // collapse into one shared socket-peer rate bucket.
+        // 双栈负载均衡器提供 ::ffff:10.1.0.1 时，仍须视为已配置的 10.0.0.0/8 代理，否则其后的所有客户端会落入同一连接对
+        // 端限流桶。
         $resolver = new TrustedProxyClientIpResolver(['10.0.0.0/8']);
 
         $this->assertSame(
@@ -99,9 +95,8 @@ final class TrustedProxyClientIpResolverTest extends TestCase
     #[DataProvider('ipv4MappedSpellings')]
     public function testEveryIpv4MappedTextualSpellingBehavesIdentically(string $spelling): void
     {
-        // inet_pton parses all of these to the same 16 bytes; a prefix-based
-        // normalizer only handled the dotted lowercase one and would demote
-        // the same trusted LB to untrusted for the others.
+        // inet_pton 将这些表示解析为相同的 16 字节；基于前缀的规范化器此前只处理小写点分形式，会将其他形式的同一可信负载
+        // 均衡器误判为不可信。
         $resolver = new TrustedProxyClientIpResolver(['10.0.0.0/8']);
 
         $this->assertSame(

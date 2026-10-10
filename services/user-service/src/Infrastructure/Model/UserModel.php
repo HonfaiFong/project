@@ -9,8 +9,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Services\UserService\Domain\Entity\User;
 
 /**
- * Eloquent model for the users table. Timestamps and incrementing stay off
- * because ids are Snowflake strings and the service writes UTC strings itself.
+ * users 表的 Eloquent 模型；关闭自动时间戳和主键自增，因为 ID 是 Snowflake 字符串，UTC 时间字符串由服务自行写入。
  */
 final class UserModel extends Model
 {

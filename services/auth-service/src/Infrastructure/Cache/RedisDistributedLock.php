@@ -14,7 +14,7 @@ final readonly class RedisDistributedLock implements DistributedLockInterface
     {
     }
 
-    /** @throws RandomException when the CSPRNG cannot produce the lock owner */
+    /** @throws RandomException CSPRNG 无法生成锁持有者标识时抛出 */
     public function acquire(string $key, int $ttlSeconds): ?string
     {
         $owner = bin2hex(random_bytes(16));

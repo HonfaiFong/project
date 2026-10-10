@@ -28,7 +28,7 @@ interface AuthRepositoryInterface
     ): RefreshToken;
 
     /**
-     * Atomically consume an active refresh token and create its replacement.
+     * 原子消费有效刷新令牌并创建替代令牌。
      */
     public function rotateRefreshToken(
         string $tokenHash,

@@ -44,12 +44,10 @@ use Tests\TestCase;
 use const Grpc\STATUS_INVALID_ARGUMENT;
 
 /**
- * Contract tests for the `x-app-error-code` gRPC response trailer.
+ * `x-app-error-code` gRPC 响应尾部元数据的协议测试。
  *
- * The gateway client treats a present trailer as the authoritative business ErrorCode and skips
- * its gRPC transport-status fallback, so anything published in this trailer must be a real
- * ErrorCode -- never a gRPC status (INVALID_ARGUMENT = 3) and never an infrastructure exception
- * code (PDO 23000).
+ * 网关客户端将存在的尾部元数据视为权威业务 ErrorCode，并跳过 gRPC 传输状态回退；因此其中发布的值必须是真实
+ * ErrorCode，不能是 gRPC 状态（INVALID_ARGUMENT = 3）或基础设施异常代码（PDO 23000）。
  */
 final class GrpcErrorTrailerContractTest extends TestCase
 {
@@ -60,7 +58,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
         [$service, $ctx, $trailers] = $this->userServiceFixture();
 
         try {
-            // An empty user_id makes requireId() throw GRPCException(INVALID_ARGUMENT = 3).
+            // 空 user_id 会使 requireId() 抛出 GRPCException(INVALID_ARGUMENT = 3)。
             $service->GetUser($ctx, new GetUserRequest());
             $this->fail('Expected GRPCException for an empty user_id');
         } catch (GRPCException $e) {
@@ -143,8 +141,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
         [$service, $ctx, $trailers] = $this->userServiceFixture();
 
         try {
-            // No user is registered, so UserApplicationService throws
-            // RuntimeException('User not found', ErrorCode::USER_NOT_FOUND).
+            // 未注册任何用户，因此 UserApplicationService 抛出 RuntimeException('User not found', ErrorCode::USER_NOT_FOUND)。
             $service->GetUser($ctx, new GetUserRequest(['user_id' => 4242]));
             $this->fail('Expected GRPCException for an unknown user');
         } catch (GRPCException $e) {
@@ -165,7 +162,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
             $service->Login($ctx, new LoginRequest(['phone' => '+8613800000000', 'code' => 'wrong-code']));
             $this->fail('Expected GRPCException for rejected credentials');
         } catch (GRPCException $e) {
-            // UNAUTHENTICATED = 16 is the transport status, not the business code.
+            // UNAUTHENTICATED = 16 是传输状态，不是业务代码。
             $this->assertSame(StatusCode::UNAUTHENTICATED, $e->getCode());
             $this->assertSame(ErrorCode::AUTH_INVALID_CREDENTIALS->message(), $e->getMessage());
         }
@@ -181,7 +178,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
         [$service, $ctx, $trailers] = $this->authFixture(userDirectoryFails: true);
 
         try {
-            // Valid credentials so the failure happens later, in the user directory lookup.
+            // 使用有效凭据，使失败发生在后续用户目录查询中。
             $service->Login($ctx, new LoginRequest(['phone' => '+8613800000000', 'code' => 'dev-code']));
             $this->fail('Expected GRPCException bubbling up the database failure');
         } catch (GRPCException $e) {
@@ -189,7 +186,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
             $this->assertStringNotContainsString('SQLSTATE', $e->getMessage());
         }
 
-        // The regression guard: the PDO code 23000 must not be readable from the trailer.
+        // 回归检查：不能从尾部元数据读取到 PDO 代码 23000。
         $this->assertNull(
             $trailers->get(self::TRAILER_KEY, null),
             'PDO exception codes must never be published as x-app-error-code'
@@ -197,17 +194,15 @@ final class GrpcErrorTrailerContractTest extends TestCase
     }
 
     /**
-     * Regression guard: an unknown non-zero handler code is still a FAILURE. It must be rejected
-     * rather than falling through to the success response factory, which is what turned a
-     * database outage into "gRPC OK" with empty tokens.
+     * 回归检查：未知的非零处理器代码仍表示失败，须拒绝，不能继续进入成功响应工厂；此前该行为会把数据库故障转换为带空
+     * 令牌的“gRPC OK”。
      *
-     * Logout is used deliberately: its response factory tolerates a minimal payload, so a
-     * fall-through surfaces as an unambiguous successful response instead of an unrelated
-     * protobuf type error that would mask the bug.
+     * 有意使用退出登录，因为其响应工厂允许最小载荷；错误放行会明确表现为成功响应，而不会被无关的 Protobuf 类型错误掩
+     * 盖。
      */
     public function testUnknownNonZeroHandlerCodeFailsInsteadOfReturningSuccess(): void
     {
-        // The auth repository throws PDOException(23000), which is NOT a contract ErrorCode.
+        // 认证仓储抛出 PDOException(23000)，它不是协议定义的 ErrorCode。
         $ctx = $this->context();
         $trailers = $this->trailers($ctx);
         $service = new RoadRunnerAuthService(
@@ -222,8 +217,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
                 var_export($response->getSuccess(), true)
             ));
         } catch (GRPCException $e) {
-            // Pin the exact transport contract: a fault inside this service is INTERNAL(13),
-            // not UNKNOWN(2). A loose assertion here would let the error chain drift again.
+            // 固定明确传输协议：服务内部故障应为 INTERNAL(13)，而非 UNKNOWN(2)；宽松断言会让错误链再次产生偏差。
             $this->assertSame(StatusCode::INTERNAL, $e->getCode());
             $this->assertSame(ErrorCode::INTERNAL_SERVER_ERROR->message(), $e->getMessage());
             $this->assertStringNotContainsString('SQLSTATE', $e->getMessage());
@@ -240,9 +234,8 @@ final class GrpcErrorTrailerContractTest extends TestCase
         $client = new UserServiceClient('127.0.0.1:1', 150);
         $ref = new ReflectionMethod($client, 'mapGrpcCallException');
 
-        // This is exactly what the client sees for a server-side GRPCException(INVALID_ARGUMENT):
-        // no trailer -> appErrorCode is null -> the transport status decides the business code,
-        // which is what turns the old x-app-error-code: 3 regression into HTTP 500.
+        // 客户端收到服务端 GRPCException(INVALID_ARGUMENT) 时的实际情况：缺少尾部元数据 -> appErrorCode 为 null -> 由传
+        // 输状态决定业务代码；此前 x-app-error-code: 3 的错误会因此转换为 HTTP 500。
         $ex = new GrpcCallException(STATUS_INVALID_ARGUMENT, null, 'user_id is required');
         /** @var RuntimeException $mapped */
         $mapped = $ref->invoke($client, $ex);
@@ -280,8 +273,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
     }
 
     /**
-     * Drives RoadRunnerAuthService directly over doubles, so the trailer
-     * contract is asserted against the production error-mapping chain.
+     * 使用测试替身直接驱动 RoadRunnerAuthService，针对生产错误映射链断言尾部元数据协议。
      *
      * @return array{0: RoadRunnerAuthService, 1: ContextInterface, 2: ResponseTrailers}
      */
@@ -301,8 +293,8 @@ final class GrpcErrorTrailerContractTest extends TestCase
     }
 
     /**
-     * @param bool $userDirectoryFails makes the credential check pass and the user lookup fail
-     * @param bool $failingAuthRepository makes the local token store fail
+     * @param bool $userDirectoryFails 使凭据检查通过、用户查询失败
+     * @param bool $failingAuthRepository 使本地令牌存储失败
      */
     private function authService(
         bool $userDirectoryFails = false,
@@ -349,8 +341,8 @@ final class GrpcErrorTrailerContractTest extends TestCase
     }
 
     /**
-     * Mirrors the context Server::serve() builds for every RPC
-     * (see spiral/roadrunner-grpc Server.php: ResponseHeaders/ResponseTrailers are context values).
+     * 沿用 Server::serve() 为每个 RPC 构建的上下文（参见 spiral/roadrunner-grpc Server.php：
+     * ResponseHeaders/ResponseTrailers 均为上下文值）。
      */
     private function context(): Context
     {
@@ -375,8 +367,7 @@ final class GrpcErrorTrailerContractTest extends TestCase
 }
 
 /**
- * Minimal non-persisting repository doubles: these contract tests only exercise the transport
- * error mapping, so the application service never gets past its first lookup.
+ * 不执行持久化的最小仓储替身：协议测试仅验证传输错误映射，应用服务不会越过首次查询。
  */
 class EmptyUserRepository implements UserRepositoryInterface
 {
@@ -495,7 +486,7 @@ class EmptyPersonaRepository implements PersonaRepositoryInterface
 }
 
 /**
- * Non-persisting auth repository double: the contract tests never reach token persistence.
+ * 不执行持久化的认证仓储替身；协议测试不会进入令牌持久化步骤。
  */
 class EmptyAuthRepository implements AuthRepositoryInterface
 {

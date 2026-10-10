@@ -66,3 +66,4 @@ class GetPostResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

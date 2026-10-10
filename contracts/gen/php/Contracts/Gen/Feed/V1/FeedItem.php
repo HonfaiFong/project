@@ -120,3 +120,4 @@ class FeedItem extends \Google\Protobuf\Internal\Message
     }
 
 }
+

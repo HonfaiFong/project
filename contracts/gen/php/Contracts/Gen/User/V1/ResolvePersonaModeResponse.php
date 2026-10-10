@@ -66,3 +66,4 @@ class ResolvePersonaModeResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

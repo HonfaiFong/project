@@ -9,7 +9,7 @@ import (
 )
 
 type Hub struct {
-	clients  map[string]map[string]*Client // userID -> connID -> Client
+	clients  map[string]map[string]*Client // 用户 ID -> 连接 ID -> Client
 	mu       sync.Mutex
 	draining bool
 	pumps    sync.WaitGroup
@@ -51,14 +51,14 @@ func (h *Hub) IsDraining() bool {
 	return h.draining
 }
 
-// StartDraining stops new registrations before HTTP shutdown begins.
+// StartDraining 在 HTTP 关闭开始之前停止接受新连接注册。
 func (h *Hub) StartDraining() {
 	h.mu.Lock()
 	h.draining = true
 	h.mu.Unlock()
 }
 
-// Drain asks existing writers to send GoingAway and waits for both pumps.
+// Drain 要求现有写协程发送 GoingAway，并等待读写两个循环结束。
 func (h *Hub) Drain(ctx context.Context) error {
 	h.StartDraining()
 	h.mu.Lock()
@@ -84,8 +84,7 @@ func (h *Hub) Drain(ctx context.Context) error {
 	}
 }
 
-// removeSlow runs under h.mu. It removes the client before closing Send, so
-// another producer cannot enqueue into a closed channel.
+// removeSlow 在持有 h.mu 时执行，先移除客户端再关闭 Send，防止其他生产者向已关闭的通道发送消息。
 func (h *Hub) removeSlow(client *Client) {
 	userClients := h.clients[client.UserID]
 	if userClients == nil || userClients[client.ConnID] != client {
@@ -99,7 +98,7 @@ func (h *Hub) removeSlow(client *Client) {
 	}
 }
 
-// enqueue runs under h.mu. Only TYPING may be dropped on a full queue.
+// enqueue 在持有 h.mu 时执行；队列已满时仅允许丢弃 TYPING 消息。
 func (h *Hub) enqueue(client *Client, message []byte, ephemeral bool) bool {
 	select {
 	case client.Send <- message:

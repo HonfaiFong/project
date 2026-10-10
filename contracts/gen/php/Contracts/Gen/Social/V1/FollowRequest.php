@@ -110,3 +110,4 @@ class FollowRequest extends \Google\Protobuf\Internal\Message
     }
 
 }
+

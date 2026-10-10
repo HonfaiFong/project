@@ -303,12 +303,11 @@ final readonly class UserGrpcService implements UserServiceInterface
         try {
             return $operation();
         } catch (GRPCException $e) {
-            // GRPCException::getCode() is the gRPC transport status (e.g. INVALID_ARGUMENT = 3),
-            // never a business ErrorCode, so it must not be propagated as x-app-error-code.
-            // The gateway client maps the transport status via its own fallback table.
+            // GRPCException::getCode() 是 gRPC 传输状态（如 INVALID_ARGUMENT = 3），不是业务 ErrorCode，因此不能作为
+            // x-app-error-code 传递。网关客户端通过自己的回退映射表处理传输状态。
             throw $e;
         } catch (Throwable $e) {
-            // Each service maps its own domain exceptions and response trailers.
+            // 各服务自行映射领域异常和响应尾部元数据。
             /** @noinspection DuplicatedCode */
             $this->logger->error("Error in $method: " . $e->getMessage(), [
                 'exception' => $e::class,
@@ -331,10 +330,9 @@ final readonly class UserGrpcService implements UserServiceInterface
     }
 
     /**
-     * Only contract ErrorCode values may travel in `x-app-error-code`: the gateway client treats a
-     * present trailer as the authoritative business code and skips its gRPC status fallback
-     * entirely. Infrastructure exception codes (PDO 23000, arbitrary codes) resolve to null, and
-     * OK (0) is excluded too -- it means success, not a failure to publish.
+     * `x-app-error-code` 仅能传递协议定义的 ErrorCode；网关客户端将存在的尾部元数据视为权威业务代码，并完全跳过 gRPC
+     * 状态回退。基础设施异常代码（如 PDO 23000 或任意代码）解析为 null；OK（0）也须排除，因为它表示成功，不能作为失
+     * 败代码发布。
      */
     private function appErrorCode(int $code): ?ErrorCode
     {
@@ -376,7 +374,7 @@ final readonly class UserGrpcService implements UserServiceInterface
     }
 
     /**
-     * Service trace parsing stays independent of internal caller authorization.
+     * 服务追踪解析与内部调用方授权保持独立。
      * @noinspection DuplicatedCode
      */
     private function metadataValue(ContextInterface $ctx, string $key): ?string
@@ -425,7 +423,7 @@ final readonly class UserGrpcService implements UserServiceInterface
 
     private function publicErrorMessage(Throwable $exception): string
     {
-        // PDO exceptions can return SQLSTATE strings; retain integer normalization.
+        // PDO 异常可能返回 SQLSTATE 字符串，保留整数规范化处理。
         /** @noinspection PhpCastIsUnnecessaryInspection */
         return match ((int)$exception->getCode()) {
             ErrorCode::INVALID_ARGUMENT->value,

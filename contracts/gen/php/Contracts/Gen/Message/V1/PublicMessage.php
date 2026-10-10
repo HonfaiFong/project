@@ -258,3 +258,4 @@ class PublicMessage extends \Google\Protobuf\Internal\Message
     }
 
 }
+

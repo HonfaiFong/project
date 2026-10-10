@@ -26,12 +26,10 @@ use Tests\TestCase;
 use Throwable;
 
 /**
- * Real MySQL registration chain for social logins: users + default persona +
- * outbox events are written in one transaction, and concurrent or repeated
- * calls with the same registration key must converge on a single account.
+ * 真实 MySQL 社交注册调用链：用户、默认人格及 Outbox 事件在一个事务内写入；使用相同注册键的并发或重复调用须收敛
+ * 为单一账户。
  *
- * The table set mirrors the post-migration user_db schema, so the assertions
- * run against the same DDL shape the service uses in production.
+ * 测试表集合与迁移后的 user_db 表结构一致，断言针对服务在生产中使用的相同 DDL 结构执行。
  */
 final class UserSocialRegistrationConcurrencyTest extends TestCase
 {
@@ -88,9 +86,7 @@ final class UserSocialRegistrationConcurrencyTest extends TestCase
     public function testConcurrentRegistrationsWithOneKeyCreateOneAccountChain(): void
     {
         $registrationKey = 'social:9000' . random_int(100000, 999999);
-        // Workers park right before their INSERT into users until every worker
-        // has arrived, so the unique key -- not the pre-check read -- has to
-        // serialize them.
+        // 工作进程在 INSERT users 之前等待，直至全部到达；须由唯一键而非预检查读取来串行化。
         $results = $this->registerConcurrently($registrationKey);
 
         $userIds = [];
@@ -214,11 +210,9 @@ final class UserSocialRegistrationConcurrencyTest extends TestCase
     }
 
     /**
-     * Runs every worker against the same key and returns their raw results.
+     * 让所有工作进程使用同一注册键，并返回原始结果。
      *
-     * Each worker connects, signals readiness and then parks inside its own
-     * INSERT into users; the test releases all of them at once so the unique
-     * registration key is what serializes the race.
+     * 每个进程连接、报告就绪后，在各自的 INSERT users 内等待；测试同时释放全部进程，使注册键唯一约束串行化竞争。
      *
      * @return list<string>
      */
@@ -283,13 +277,12 @@ final class UserSocialRegistrationConcurrencyTest extends TestCase
 
             return $this->collectResults($workers, $resultPaths);
         } finally {
-            // Release and reap every worker even when a barrier fails, so the
-            // shared tables are only dropped after the last writer stops.
+            // 即使屏障失败，也须释放并回收每个工作进程；最后一个写入进程停止后，才能删除共享表。
             file_put_contents($startPath, 'start');
             file_put_contents($insertReleasePath, 'release');
             $this->stopWorkers($workers);
 
-            // Coordination files are only removed once no worker can write them.
+            // 确认没有工作进程能继续写入后，才能删除协调文件。
             foreach (array_merge($readyPaths, $insertReadyPaths, $resultPaths, [$startPath, $insertReleasePath]) as $path) {
                 if (is_file($path)) {
                     unlink($path);

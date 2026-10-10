@@ -120,3 +120,4 @@ class PublicConversationMember extends \Google\Protobuf\Internal\Message
     }
 
 }
+

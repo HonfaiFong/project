@@ -110,3 +110,4 @@ class AnonymousChatTarget extends \Google\Protobuf\Internal\Message
     }
 
 }
+

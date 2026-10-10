@@ -45,8 +45,7 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
             ->first();
 
         if ($device !== null) {
-            // COALESCE(:push_token, push_token) in the previous SQL: a null
-            // push token must keep the value already stored on the row.
+            // 保持原 SQL 的 COALESCE(:push_token, push_token) 语义：推送令牌为 null 时，保留行中已有值。
             $device->setAttribute('platform', $platform);
             $device->setAttribute('app_version', $appVersion);
             $device->setAttribute('push_token', $pushToken ?? $device->getAttribute('push_token'));
@@ -93,9 +92,8 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
                 throw $exception;
             }
 
-            // Two requests for the same user's device can both miss the
-            // initial SELECT. The composite unique key makes one insert win;
-            // reuse that committed row instead of surfacing a duplicate error.
+            // 同一用户设备的两个请求可能都未在首次 SELECT 中查到记录。复合唯一键保证只有一次插入成功；随后复用已提交的行，避
+            // 免向外抛出重复键错误。
             $existing = $this->device->newQuery()
                 ->where('user_id', $userId)
                 ->where('device_uuid', $deviceUuid)
@@ -170,7 +168,7 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
         );
     }
 
-    /** @throws Throwable If the token rotation transaction fails. */
+    /** @throws Throwable 令牌轮换事务失败时抛出。 */
     public function rotateRefreshToken(
         string $tokenHash,
         string $newTokenHash,
@@ -271,8 +269,7 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
     }
 
     /**
-     * Only the devices unique key may be treated as a reserve race. The
-     * repository must not swallow other integrity failures.
+     * 仅 devices 唯一键冲突可视为预留竞争，仓储不得吞掉其他完整性错误。
      */
     private function isUniqueConstraintViolation(QueryException $exception): bool
     {

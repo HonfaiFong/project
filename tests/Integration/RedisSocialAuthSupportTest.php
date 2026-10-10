@@ -245,8 +245,7 @@ final class RedisSocialAuthSupportTest extends TestCase
         array_push($this->keysToDelete, $key, $key . ':cooldown', 'auth:sms:rate:phone:' . $hash, 'auth:sms:rate:phone-day:' . $hash);
         $service->send($phone, VerificationScene::SOCIAL_BIND_PHONE, $identityId);
 
-        // Stop immediately after verification, as if the worker lost its reply
-        // or died before markPhoneVerified / UserService could execute.
+        // 验证后立即停止，模拟工作进程丢失回复或在 markPhoneVerified / UserService 执行前崩溃。
         $service->verify($phone, '123456', VerificationScene::SOCIAL_BIND_PHONE, $identityId, $token);
         $this->assertSame(0, $this->redis->exists($key));
         $recovered = (new RedisSocialBindSessionStore($this->redis))->verify($token);
@@ -254,7 +253,7 @@ final class RedisSocialAuthSupportTest extends TestCase
         $this->assertTrue($recovered->phoneVerified);
         $this->assertSame($phone, $recovered->verifiedPhone);
         $this->assertGreaterThanOrEqual(time() + 299, $recovered->expiresAt);
-        // Retrying the same state transition is idempotent without an SMS key.
+        // 重复相同状态转换保持幂等，无须短信键。
         $service->verify($phone, 'unused', VerificationScene::SOCIAL_BIND_PHONE, $identityId, $token);
         $this->assertTrue($store->verify($token)->phoneVerified);
     }

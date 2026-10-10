@@ -6,7 +6,7 @@ namespace Services\AuthService\Infrastructure\Model;
 
 use Illuminate\Database\Eloquent\Model;
 
-/** Persistence mapping for the `refresh_tokens` table. */
+/** `refresh_tokens` 表的持久化映射。 */
 final class RefreshToken extends Model
 {
     protected $table = 'refresh_tokens';

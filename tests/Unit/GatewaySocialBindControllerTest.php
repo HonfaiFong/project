@@ -18,10 +18,9 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
- * Gateway contract for `POST /api/v1/auth/social/bind`.
+ * `POST /api/v1/auth/social/bind` 的网关协议约定。
  *
- * The bound user always comes from the verified Authorization access token;
- * a body user_id must never reach the AuthService call.
+ * 绑定用户始终来自已验证的 Authorization 访问令牌；请求体中的 user_id 不得传入 AuthService 调用。
  */
 final class GatewaySocialBindControllerTest extends TestCase
 {
@@ -60,8 +59,7 @@ final class GatewaySocialBindControllerTest extends TestCase
     }
 
     /**
-     * Route middleware normally blocks this, but the controller must stay safe
-     * on its own and never call AuthService without a bearer token.
+     * 路由中间件通常会阻止此请求，但控制器自身也须安全，缺少 Bearer 令牌时不能调用 AuthService。
      *
      * @throws JsonException
      */

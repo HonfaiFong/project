@@ -108,3 +108,4 @@ class PersonaOperation
         return constant($const);
     }
 }
+

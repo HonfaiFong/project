@@ -34,11 +34,8 @@ try {
         ],
     );
     $connection = EloquentConnection::fromPdo($pdo);
-    // Replaces the removed BEFORE INSERT trigger: the worker parks directly
-    // before its devices insert until the test releases the start file, so
-    // both workers have already missed the pre-check select when the database
-    // unique key decides the race. The deadline keeps a lost release from
-    // blocking the worker forever.
+    // 替代已移除的 BEFORE INSERT 触发器：工作进程在插入 devices 之前等待，直到测试释放启动文件，使两个进程都先完成未
+    // 命中的预检查 SELECT，再由数据库唯一键决定竞争结果。截止时间可避免释放信号丢失导致永久阻塞。
     $released = false;
     $connection->beforeExecuting(static function (string $query) use ($readyPath, $startPath, &$released): void {
         if ($released || !str_starts_with($query, 'insert into `devices`')) {

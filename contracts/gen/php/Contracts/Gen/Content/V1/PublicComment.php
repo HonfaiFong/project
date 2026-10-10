@@ -284,3 +284,4 @@ class PublicComment extends \Google\Protobuf\Internal\Message
     }
 
 }
+

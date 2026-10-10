@@ -54,3 +54,4 @@ class IdentityMode
         return constant($const);
     }
 }
+

@@ -15,7 +15,7 @@ enum ModerationStatus {
 }
 
 message SubmitContentRequest {
-  int32 content_type = 1; // 1 = post, 2 = comment, 3 = persona profile
+  int32 content_type = 1; // 1 = 帖子，2 = 评论，3 = 人格资料
   uint64 content_id = 2;
   uint64 user_id = 3;
   uint64 persona_id = 4;

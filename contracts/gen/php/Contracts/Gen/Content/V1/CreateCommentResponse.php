@@ -66,3 +66,4 @@ class CreateCommentResponse extends \Google\Protobuf\Internal\Message
     }
 
 }
+

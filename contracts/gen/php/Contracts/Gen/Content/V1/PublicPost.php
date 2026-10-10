@@ -420,3 +420,4 @@ class PublicPost extends \Google\Protobuf\Internal\Message
     }
 
 }
+

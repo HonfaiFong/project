@@ -272,3 +272,4 @@ class CreatePostRequest extends \Google\Protobuf\Internal\Message
     }
 
 }
+

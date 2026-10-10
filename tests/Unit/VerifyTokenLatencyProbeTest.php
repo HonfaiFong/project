@@ -21,11 +21,9 @@ use VerifyTokenLatencyProbe;
 require_once dirname(__DIR__, 2) . '/scripts/verify_token_latency_probe.php';
 
 /**
- * Deterministic, network-free coverage for the opt-in full-chain probe:
- * percentile/statistics math, outcome classification, the failure/budget gate
- * and the hard CLI contract (non-zero exit on HTTP/business/timeout failures,
- * token and exception URLs never printed). The Guzzle handler is replaced with
- * MockHandler, so nothing here touches a real gateway or auth service.
+ * 为按需启用的全链路探测提供确定性、无网络测试：百分位及统计计算、结果分类、失败及预算门槛，以及严格 CLI 约定（
+ * HTTP、业务或超时失败时非零退出，绝不输出令牌和异常 URL）。用 MockHandler 替代 Guzzle 处理器，不访问真实网关或
+ * 认证服务。
  */
 final class VerifyTokenLatencyProbeTest extends TestCase
 {
@@ -53,11 +51,8 @@ final class VerifyTokenLatencyProbeTest extends TestCase
     }
 
     /**
-     * No-network handler whose promises stay pending until the Guzzle wait loop
-     * drives them: each wait function settles the whole current batch of tickets
-     * with a fixed TransferStats duration, so Pool concurrency and the seconds to
-     * milliseconds conversion are observable instead of MockHandler's instant 0 s
-     * completions. No sleeps and no sockets are involved.
+     * 无网络处理器的 Promise 保持等待，直到 Guzzle 等待循环驱动；每个等待函数以固定 TransferStats 耗时完成当前整批任
+     * 务，使 Pool 并发和秒到毫秒的转换可被观察，避免 MockHandler 立即以 0 秒完成。无须休眠或套接字。
      *
      * @param array{settled: int, inflight: int, max_inflight: int} $log
      */
@@ -144,7 +139,7 @@ final class VerifyTokenLatencyProbeTest extends TestCase
             ['ok', 'http', 'business', 'timeout', 'business', 'business', 'business'],
             array_column($run['outcomes'], 'category')
         );
-        // A non-integer or null business code must never collapse to a false success.
+        // 非整数或 null 业务代码绝不能被误判为成功。
         $this->assertSame(7, $run['outcomes'][2]['business_code']);
         $this->assertNull($run['outcomes'][5]['business_code']);
         $this->assertNull($run['outcomes'][6]['business_code']);
@@ -249,7 +244,7 @@ final class VerifyTokenLatencyProbeTest extends TestCase
         $this->assertSame(0, $belowBudget['exit_code']);
         $this->assertSame([], $belowBudget['reasons']);
 
-        // One outlier above the budget only fails when it lands on the P95 rank.
+        // 单个超预算异常值仅在落入 P95 秩位置时导致失败。
         $twenty = $this->probe(['VERIFY_TOKEN_PROBE_BUDGET_MS' => '40', 'VERIFY_TOKEN_PROBE_REQUESTS' => '20']);
         $summary = VerifyTokenLatencyProbe::summary(array_merge(array_fill(0, 19, 10.0), [5000.0]));
         $this->assertSame(10.0, $summary['p95']);
@@ -271,8 +266,7 @@ final class VerifyTokenLatencyProbeTest extends TestCase
         $this->assertStringContainsString('NOT an isolated VerifyToken RPC', $stdout);
         $this->assertStringContainsString('user-service work', $stdout);
         $this->assertStringNotContainsString('unit-test-token-never-printed', $stdout);
-        // "auth-side" is reserved for the 50 ms local cumulative budget in
-        // AuthWarmPathLatencyTest, which the probe does not measure.
+        // “auth-side”专指 AuthWarmPathLatencyTest 中 50 毫秒的本地累计预算，本探测不测量该部分。
         $this->assertStringNotContainsString('auth-side', $stdout);
     }
 
@@ -306,7 +300,7 @@ final class VerifyTokenLatencyProbeTest extends TestCase
 
         $run = $probe->run($this->delayedPromiseHandler($log, 0.25));
 
-        // A fixed 0.25 s TransferStats must surface as exactly 250 ms.
+        // 固定 0.25 秒的 TransferStats 须精确显示为 250 毫秒。
         $this->assertSame([250.0, 250.0, 250.0], $run['timings_ms']);
         $this->assertSame(2, $log['max_inflight']);
         $this->assertSame(5, $log['settled']);

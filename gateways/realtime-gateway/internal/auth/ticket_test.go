@@ -62,8 +62,7 @@ func TestVerifyTicketSignatureMismatch(t *testing.T) {
 }
 
 func TestVerifyTicketAcceptsURLSafeBase64(t *testing.T) {
-	// A signature with URL-unsafe standard-base64 characters must survive the
-	// round trip now that tickets are base64url-encoded.
+	// 签名包含不适合 URL 的标准 base64 字符时，也须在往返传输后保持完整，因为票据现在使用 base64url 编码。
 	secret := "test-secret-key-at-least-32-chars-long"
 	now := time.Now().Unix() + 60
 

@@ -52,10 +52,8 @@ try {
         throw new RuntimeException('Timed out waiting for the registration barrier');
     }
 
-    // Replaces the removed "slow_user_insert" trigger: every worker parks here,
-    // inside its own transaction and just before its INSERT into users, until
-    // the test has seen all workers arrive and releases them together, so the
-    // unique registration key -- not the pre-check read -- serializes the race.
+    // 替代已移除的“slow_user_insert”触发器：各工作进程在自身事务中、紧接 INSERT users 之前等待，直至测试确认全部到达
+    // 后同时释放，使注册键唯一约束而非预检查读取串行化竞争。
     EloquentConnection::fromPdo($pdo)->beforeExecuting(
         static function (string $query) use ($insertReadyPath, $insertReleasePath): void {
             if (!str_starts_with($query, 'insert ') || !str_contains($query, '`users`')) {

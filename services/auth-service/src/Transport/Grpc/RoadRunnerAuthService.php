@@ -51,7 +51,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws RandomException 共享追踪初始化无法生成 UUIDv7 时抛出
      * @throws GRPCException
      */
     public function Login(ContextInterface $ctx, LoginRequest $in): LoginResponse
@@ -81,7 +81,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws RandomException 共享追踪初始化无法生成 UUIDv7 时抛出
      * @throws GRPCException
      */
     public function RefreshToken(ContextInterface $ctx, RefreshTokenRequest $in): RefreshTokenResponse
@@ -102,7 +102,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws RandomException 共享追踪初始化无法生成 UUIDv7 时抛出
      * @throws GRPCException
      */
     public function SocialLogin(ContextInterface $ctx, SocialLoginRequest $in): SocialLoginResponse
@@ -114,8 +114,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
                 $this->deviceInfo($in->getDevice()),
             );
 
-            // Social login now always registers or resumes the user and returns
-            // a session; the phone-binding-required state is retired.
+            // 社交登录现在始终注册或恢复用户并返回会话；需要绑定手机号的状态已废弃。
             return new SocialLoginResponse([
                 'state' => SocialLoginState::SOCIAL_LOGIN_STATE_AUTHENTICATED,
                 'login' => $this->loginResponse($login['login']),
@@ -127,9 +126,8 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
         ContextInterface $ctx,
         SendSocialPhoneCodeRequest $in
     ): SendSocialPhoneCodeResponse {
-        // The phone-binding flow was replaced by authenticated social login
-        // (BindSocialIdentity). The RPC stays declared for wire compatibility
-        // and is rejected before any application or OAuth call.
+        // 手机号绑定流程已由认证后的社交登录绑定（BindSocialIdentity）替代。为保持协议兼容保留 RPC 声明，并在调用应用服
+        // 务或 OAuth 之前拒绝执行。
         throw $this->rejectedLegacyRpc($ctx, 'SendSocialPhoneCode');
     }
 
@@ -141,7 +139,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws RandomException 共享追踪初始化无法生成 UUIDv7 时抛出
      * @throws GRPCException
      */
     public function BindSocialIdentity(
@@ -163,7 +161,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws RandomException 共享追踪初始化无法生成 UUIDv7 时抛出
      * @throws GRPCException
      */
     public function Logout(ContextInterface $ctx, LogoutRequest $in): LogoutResponse
@@ -184,7 +182,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws RandomException 共享追踪初始化无法生成 UUIDv7 时抛出
      * @throws GRPCException
      */
     public function VerifyToken(ContextInterface $ctx, VerifyTokenRequest $in): VerifyTokenResponse
@@ -207,7 +205,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * @throws RandomException when the shared trace bootstrap cannot mint a UUIDv7
+     * @throws RandomException 共享追踪初始化无法生成 UUIDv7 时抛出
      * @throws GRPCException
      */
     public function CreateWsTicket(ContextInterface $ctx, CreateWsTicketRequest $in): CreateWsTicketResponse
@@ -231,20 +229,17 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
      * @param callable(): T $operation
      * @return T
      * @throws GRPCException
-     * @throws RandomException when the trace bootstrap cannot mint a UUIDv7; nothing
-     *                         swallows it here, the RoadRunner gRPC server turns it
-     *                         into an UNKNOWN response
+     * @throws RandomException 追踪初始化无法生成 UUIDv7 时抛出；此处不捕获，由 RoadRunner gRPC 服务器转换为 UNKNOWN
+     * 响应
      */
     private function call(ContextInterface $ctx, string $method, callable $operation): mixed
     {
         $this->authorizer?->authorize($ctx, $method);
 
-        // Caller-supplied deadline is trusted only behind RPC authorization;
-        // downstream hops clamp their budgets to whatever is left of it.
+        // 仅在 RPC 授权后才信任调用方提供的截止时间；下游各跳预算限制在剩余时间内。
         $this->bindDeadlineContext($ctx);
 
-        // TraceContext::create() can throw RandomException; intentionally not
-        // caught so the failure surfaces to the gRPC server (see @throws above).
+        // TraceContext::create() 可能抛出 RandomException；有意不捕获，使失败传播到 gRPC 服务器（参见上方 @throws）。
         $trace = TraceContext::create(
             requestId: $this->metadataValue($ctx, 'x-request-id'),
             traceId: $this->metadataValue($ctx, 'x-trace-id'),
@@ -260,13 +255,11 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
         try {
             return $operation();
         } catch (GRPCException $e) {
-            // GRPCException::getCode() is the gRPC transport status (e.g. INVALID_ARGUMENT = 3),
-            // never a business ErrorCode, so it must not be propagated as x-app-error-code.
-            // The gateway client maps the transport status via its own fallback table.
+            // GRPCException::getCode() 是 gRPC 传输状态（如 INVALID_ARGUMENT = 3），不是业务 ErrorCode，因此不能作为
+            // x-app-error-code 传递。网关客户端通过自己的回退映射表处理传输状态。
             throw $e;
         } catch (Throwable $e) {
-            // Duplicated by design with the sibling services' RoadRunner
-            // transports: the error-code and trailer mapping stay service-owned.
+            // 有意与其他服务的 RoadRunner 传输层保持重复实现：错误代码和尾部元数据映射由各服务自行管理。
             /** @noinspection DuplicatedCode */
             $this->logger->error("Error in $method: " . $e->getMessage(), [
                 'exception' => $e::class,
@@ -290,12 +283,8 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * The gateway propagates its absolute deadline as x-deadline-unix-ms
-     * because RoadRunner does not surface the transport deadline to PHP
-     * workers. Garbage or missing values leave the configured budgets in
-     * charge; the value can only shrink downstream hop budgets, never extend
-     * them, so a misbehaving authorized caller can only time out its own
-     * request earlier.
+     * RoadRunner 不向 PHP 工作进程暴露传输截止时间，因此网关通过 x-deadline-unix-ms 传递绝对截止时间。无效或缺失值仍
+     * 使用配置预算；该值只能缩短下游预算，不能延长，因此行为异常的已授权调用方只能让自己的请求更早超时。
      */
     private function bindDeadlineContext(ContextInterface $ctx): void
     {
@@ -306,10 +295,9 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * Only contract ErrorCode values may travel in `x-app-error-code`: the gateway client treats a
-     * present trailer as the authoritative business code and skips its gRPC status fallback
-     * entirely. Infrastructure exception codes (PDO 23000, arbitrary codes) resolve to null, and
-     * OK (0) is excluded too -- it means success, not a failure to publish.
+     * `x-app-error-code` 仅能传递协议定义的 ErrorCode；网关客户端将存在的尾部元数据视为权威业务代码，并完全跳过 gRPC
+     * 状态回退。基础设施异常代码（如 PDO 23000 或任意代码）解析为 null；OK（0）也须排除，因为它表示成功，不能作为失
+     * 败代码发布。
      */
     private function appErrorCode(int $code): ?ErrorCode
     {
@@ -328,9 +316,8 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
 
     private function publicErrorMessage(Throwable $exception): string
     {
-        // PDOException::getCode() can return a SQLSTATE string at runtime even
-        // though the declared Throwable contract says int; normalize at the
-        // boundary before the typed appErrorCode() parameter.
+        // PDOException::getCode() 在运行时可能返回 SQLSTATE 字符串，尽管 Throwable 声明返回 int；传入有类型约束的
+        // appErrorCode() 参数前须在边界规范化。
         /** @noinspection PhpCastIsUnnecessaryInspection */
         $error = $this->appErrorCode((int)$exception->getCode());
 
@@ -359,15 +346,14 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
     }
 
     /**
-     * Rejects a retired RPC without touching the application service.
+     * 拒绝废弃 RPC，不调用应用服务。
      *
-     * The response trailers are set inline because this failure never reaches
-     * call()'s error mapping; a missing trailer would let the gateway fall back
-     * to the transport status instead of the business code.
+     * 此处直接设置响应尾部元数据，因为失败不会进入 call() 的错误映射；缺少尾部元数据会使网关回退到传输状态，而无法使
+     * 用业务代码。
      */
     private function rejectedLegacyRpc(ContextInterface $ctx, string $method): GRPCException
     {
-        // Authorize first: an unknown caller must not learn which RPCs exist.
+        // 先授权，防止未知调用方获知哪些 RPC 存在。
         $this->authorizer?->authorize($ctx, $method);
 
         $this->logger->warning("Rejected deprecated Auth gRPC call: $method", ['method' => $method]);
@@ -394,8 +380,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
 
     private function metadataValue(ContextInterface $ctx, string $key): ?string
     {
-        // Same lookup order as InternalRpcAuthorizer; the auth transport keeps
-        // its own reader and cross-service extraction is out of scope here.
+        // 查找顺序与 InternalRpcAuthorizer 相同；认证传输层保留自己的读取逻辑，此处不进行跨服务提取。
         /** @noinspection DuplicatedCode */
         $values = $ctx->getValues();
         $value = $values[$key] ?? null;

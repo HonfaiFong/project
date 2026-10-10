@@ -8,15 +8,11 @@ use RuntimeException;
 use Tests\TestCase;
 
 /**
- * Regression guard for scripts/auth_latency_probe.sh: the printed P50/P95/P99
- * report and the P95 budget gate must be computed from the same sorted sample,
- * so the verdict stays identical no matter which attempt happened to finish
- * last.
+ * scripts/auth_latency_probe.sh 的回归检查：输出的 P50/P95/P99 报告和 P95 预算门槛须根据同一排序样本计算，确保判
+ * 定不受最后完成的请求影响。
  *
- * curl is shadowed by a stub first in PATH (no network is touched); the stub
- * answers with the same "HTTP_CODE TIME_TOTAL" contract the probe parses, so
- * the whole script — loop, business-code check, report and gate — runs for
- * real against a controlled latency sample.
+ * 用 PATH 首位的桩替代 curl，不访问网络；桩返回探测所解析的“HTTP_CODE TIME_TOTAL”格式，使整个脚本（循环、业务代
+ * 码检查、报告和预算门槛）针对可控延迟样本实际执行。
  */
 final class AuthLatencyProbeSortingRegressionTest extends TestCase
 {
@@ -125,12 +121,11 @@ final class AuthLatencyProbeSortingRegressionTest extends TestCase
     }
 
     /**
-     * Runs the real probe script with a stubbed curl first in PATH and a fixed
-     * latency sample; the network is never touched.
+     * 使用 PATH 首位的 curl 桩及固定延迟样本执行真实探测脚本，不访问网络。
      *
      * @param  list<string> $timingsSeconds
-     * @param  string       $httpCode    HTTP status answered by the curl stub
-     * @param  string       $body        Body written by the curl stub to -o
+     * @param  string       $httpCode    curl 桩返回的 HTTP 状态
+     * @param  string       $body        curl 桩写入 -o 目标的响应体
      * @return array{exit: int, stdout: string, stderr: string}
      */
     private function runProbe(array $timingsSeconds, string $httpCode = '200', string $body = '{"code":0}'): array
@@ -179,12 +174,12 @@ final class AuthLatencyProbeSortingRegressionTest extends TestCase
     {
         return <<<'SH'
             #!/bin/bash
-            # Test double for curl, installed first in PATH by the regression
-            # test: answers with the "HTTP_CODE TIME_TOTAL" contract the latency
-            # probe parses, writes the configured body to the -o target and
-            # never touches the network. Status/body come from
-            # FAKE_CURL_HTTP_CODE / FAKE_CURL_BODY; the Nth call reports the
-            # Nth latency from FAKE_CURL_TIMINGS.
+            # curl 测试替身，由回归测试放在 PATH 首位；返回延迟
+            # 探测解析的“HTTP_CODE TIME_TOTAL”格式，将配置的响应体
+            # 写入 -o 目标，不访问网络。状态和响应体来自
+            # FAKE_CURL_HTTP_CODE / FAKE_CURL_BODY；第 N 次调用
+            # 返回 FAKE_CURL_TIMINGS 中的第 N 个延迟值。
+            # 所有输出均由测试配置控制。
             set -euo pipefail
 
             body_file=""

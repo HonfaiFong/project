@@ -51,3 +51,4 @@ class PersonaMode
         return constant($const);
     }
 }
+

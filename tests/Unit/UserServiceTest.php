@@ -26,10 +26,10 @@ class InMemoryUserRepository implements UserRepositoryInterface
     /** @var array<string, User> */
     public array $users = [];
 
-    /** @var array<string, string> registration key => user id */
+    /** @var array<string, string> 注册键 => 用户 ID */
     public array $socialRegistrationKeys = [];
 
-    /** @var list<string> keys held by soft-deleted rows, mirrors the unique index */
+    /** @var list<string> 软删除行占用的注册键，与唯一索引保持一致 */
     public array $softDeletedSocialRegistrationKeys = [];
 
     public function findById(string $id): ?User
@@ -95,7 +95,7 @@ class InMemoryUserRepository implements UserRepositoryInterface
         ?string $socialRegistrationKey = null
     ): User {
         if ($socialRegistrationKey !== null && in_array($socialRegistrationKey, $this->softDeletedSocialRegistrationKeys, true)) {
-            // MySQL keeps the soft-deleted row's key in the unique index.
+            // MySQL 的唯一索引仍保留软删除行的注册键。
             throw new DuplicateUserException('Duplicate registration key');
         }
 
@@ -344,7 +344,7 @@ final class UserServiceTest extends TestCase
             ): User {
                 $this->attempts++;
                 if ($this->attempts === 1) {
-                    // Simulate concurrent transaction winning the insert
+                    // 模拟并发事务成功插入
                     $this->parent->create('20002', $phone, $email);
                     throw new DuplicateUserException('Duplicate user');
                 }
@@ -381,7 +381,7 @@ final class UserServiceTest extends TestCase
                 int $riskLevel = 0,
                 ?string $socialRegistrationKey = null
             ): User {
-                // Simulates Snowflake ID collision or other DB 1062 where user is NOT found by phone
+                // 模拟 Snowflake ID 冲突或其他数据库 1062 错误，且无法按手机号找到用户
                 throw new DuplicateUserException('Duplicate key on PRIMARY', ErrorCode::USER_ALREADY_EXISTS->value);
             }
         };
@@ -505,7 +505,7 @@ final class UserServiceTest extends TestCase
             ): User {
                 $this->attempts++;
                 if ($this->attempts === 1) {
-                    // Simulate the concurrent transaction winning the unique key
+                    // 模拟并发事务成功占用唯一键
                     $this->parent->create(
                         id: '20003',
                         phone: null,

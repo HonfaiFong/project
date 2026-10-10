@@ -23,3 +23,4 @@ class User
         static::$is_initialized = true;
     }
 }
+

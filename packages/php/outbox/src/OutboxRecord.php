@@ -15,7 +15,7 @@ final readonly class OutboxRecord
         public array $payload,
         public string $eventKey,
         public string $traceId,
-        public int $status = 0, // 0 = pending, 1 = published, 2 = claimed (in-flight)
+        public int $status = 0, // 0 = 待发布，1 = 已发布，2 = 已领取（处理中）
         public ?string $availableAt = null,
         public ?string $publishedAt = null,
         public ?string $createdAt = null,

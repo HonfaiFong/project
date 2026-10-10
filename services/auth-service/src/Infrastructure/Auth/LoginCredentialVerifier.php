@@ -10,8 +10,7 @@ use Services\AuthService\Domain\Auth\CredentialVerifierInterface;
 use Throwable;
 
 /**
- * Non-final by design so tests and future callers can substitute it with a
- * stub; every property is already declared readonly.
+ * 有意不声明为 final，便于测试及后续调用方用桩替代；所有属性均已声明为 readonly。
  *
  * @noinspection PhpClassCanBeReadonlyInspection
  */

@@ -1,6 +1,5 @@
--- Persist the broker ordering key and originating request trace with each event.
--- Existing persona events are keyed by their payload's user_id; other events
--- retain their aggregate_id as the ordering key. Historical traces are unknown.
+-- 随事件持久化消息代理的排序键和原始请求追踪信息。
+-- 现有的人格事件使用载荷中的 user_id 作为排序键；其他事件沿用 aggregate_id。历史事件的追踪信息未知。
 ALTER TABLE `auth_db`.`outbox_events`
   ADD COLUMN `event_key` VARCHAR(64) NOT NULL DEFAULT '' AFTER `aggregate_id`,
   ADD COLUMN `trace_id` VARCHAR(64) NOT NULL DEFAULT '' AFTER `event_key`;

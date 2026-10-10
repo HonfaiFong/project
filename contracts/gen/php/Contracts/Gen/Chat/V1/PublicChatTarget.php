@@ -94,3 +94,4 @@ class PublicChatTarget extends \Google\Protobuf\Internal\Message
     }
 
 }
+

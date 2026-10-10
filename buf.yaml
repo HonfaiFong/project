@@ -7,8 +7,7 @@ lint:
   except:
     - PACKAGE_VERSION_SUFFIX
   ignore_only:
-    # health.proto intentionally mirrors the gRPC health checking protocol's
-    # message names (HealthCheckRequest / HealthCheckResponse).
+    # health.proto 有意沿用 gRPC 健康检查协议的消息名称（HealthCheckRequest / HealthCheckResponse）。
     RPC_REQUEST_STANDARD_NAME:
       - contracts/proto/common/v1/health.proto
     RPC_RESPONSE_STANDARD_NAME:

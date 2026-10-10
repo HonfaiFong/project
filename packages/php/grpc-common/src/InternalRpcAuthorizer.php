@@ -10,18 +10,16 @@ use Spiral\RoadRunner\GRPC\StatusCode;
 use InvalidArgumentException;
 
 /**
- * Authenticates and authorizes callers on the internal gRPC boundary.
+ * 在内部 gRPC 边界认证并授权调用方。
  *
- * The caller identity is carried in metadata because the public protobuf
- * contracts must remain unchanged. Each caller has its own token, and an
- * optional method allow-list keeps a service with read-only needs from
- * reaching write methods on the same target.
+ * 为保持公共 Protobuf 协议不变，通过元数据传递调用方身份。每个调用方使用独立令牌；可选的方法白名单防止仅需读取权
+ * 限的服务调用同一目标的写入方法。
  */
 final readonly class InternalRpcAuthorizer
 {
     /**
      * @param array<string, string> $callerTokens
-     * @param array<string, array<string>> $allowedMethodsByCaller Empty means all methods for that caller
+     * @param array<string, array<string>> $allowedMethodsByCaller 为空时允许该调用方访问所有方法
      */
     public function __construct(
         private array $callerTokens,
@@ -38,7 +36,7 @@ final readonly class InternalRpcAuthorizer
     }
 
     /**
-     * @throws GRPCException when the caller is absent, unknown, or presents an invalid token
+     * @throws GRPCException 调用方缺失、未知或提供无效令牌时抛出
      */
     public function authorize(ContextInterface $ctx, string $method = ''): void
     {
@@ -68,7 +66,7 @@ final readonly class InternalRpcAuthorizer
     }
 
     /**
-     * Keep caller authentication independent of the service-specific trace readers.
+     * 调用方认证与各服务的追踪信息读取逻辑保持独立。
      * @noinspection DuplicatedCode
      */
     private function metadataValue(ContextInterface $ctx, string $key): ?string

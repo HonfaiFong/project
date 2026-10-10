@@ -13,11 +13,10 @@ use Spiral\RoadRunner\GRPC\ContextInterface;
 use Throwable;
 
 /**
- * gRPC health service (common.v1.HealthService) registered by RoadRunner workers.
+ * 由 RoadRunner 工作进程注册的 gRPC 健康服务（common.v1.HealthService）。
  *
- * Current Phase 1 scope: proves RoadRunner PHP worker liveness (process alive & responding).
- * Phase 2 evolution: support readiness probe by injecting downstream checkers (e.g. MySQL/Redis ping)
- * to distinguish Liveness (/live) from Readiness (/ready).
+ * 第一阶段：验证 RoadRunner PHP 工作进程存活且能响应。
+ * 第二阶段：注入下游检查器（如 MySQL/Redis ping），支持就绪探测，区分存活检查（/live）和就绪检查（/ready）。
  */
 final class RoadRunnerHealthService implements HealthServiceInterface
 {

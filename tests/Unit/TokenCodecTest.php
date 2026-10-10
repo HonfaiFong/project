@@ -60,7 +60,7 @@ final class TokenCodecTest extends TestCase
         $this->assertNotEmpty($ticketInfo['ticket']);
         $this->assertGreaterThan(time(), $ticketInfo['expire_at']);
 
-        // Decode base64url and verify payload format: user_id:persona_id:device_id:nonce:expire_at:signature
+        // 解码 base64url 并验证载荷格式：user_id:persona_id:device_id:nonce:expire_at:signature
         $decoded = base64_decode(strtr($ticketInfo['ticket'], '-_', '+/'));
         $parts = explode(':', $decoded);
         $this->assertCount(6, $parts);

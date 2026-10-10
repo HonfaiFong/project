@@ -122,8 +122,7 @@ final class InternalRpcSmokeRunner
             StatusCode::UNAUTHENTICATED,
         );
 
-        // The retired SMS phone-binding RPCs stay declared for wire
-        // compatibility but must never serve a caller.
+        // 废弃的短信手机号绑定 RPC 为保持协议兼容而保留声明，但不能再处理任何调用方请求。
         $this->expectRejected(
             'gateway legacy SendSocialPhoneCode rejected',
             new UnaryGrpcClient($authTarget, $authToken),
@@ -219,9 +218,7 @@ final class InternalRpcSmokeRunner
     }
 
     /**
-     * A retired RPC must be rejected for an authorization reason. A deadline,
-     * an unavailable backend, or any other transport fault is not evidence
-     * that the RPC is closed, so it fails the check.
+     * 废弃 RPC 须因授权原因拒绝调用；截止时间已过、后端不可用或其他传输故障不能证明 RPC 已关闭，因此检查必须失败。
      *
      * @param class-string<Message> $responseClass
      */

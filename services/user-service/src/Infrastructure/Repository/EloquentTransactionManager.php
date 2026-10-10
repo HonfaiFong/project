@@ -15,13 +15,12 @@ final readonly class EloquentTransactionManager implements TransactionManagerInt
     {
     }
 
-    /** @throws Throwable Propagates a failed transaction to the caller. */
+    /** @throws Throwable 将事务失败传播给调用方。 */
     public function transaction(callable $callback): mixed
     {
         $connection = EloquentConnection::fromPdo($this->pdo);
 
-        // An outer caller already owns a PDO-level transaction (for example the
-        // outbox relay): reuse it instead of nesting a second BEGIN.
+        // 外层调用方（如 Outbox 中继）已持有 PDO 事务时，复用该事务，避免嵌套开启第二个 BEGIN。
         if ($this->pdo->inTransaction() && $connection->transactionLevel() === 0) {
             return $callback();
         }

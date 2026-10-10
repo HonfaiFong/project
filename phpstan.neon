@@ -3,9 +3,8 @@ includes:
 
 parameters:
     level: 5
-    # The baseline is generated on hosts both with and without ext-grpc /
-    # ext-redis; entries for extension-provided symbols legitimately stop
-    # matching depending on the environment, which must not fail the run.
+    # 基线由安装或未安装 ext-grpc / ext-redis 的主机生成；扩展提供的符号可能随环境变化而不再匹配，不能因此导致检查失
+    # 败。
     reportUnmatchedIgnoredErrors: false
     paths:
         - apps
@@ -18,5 +17,5 @@ parameters:
         - tests
         - scripts/verify_token_latency_probe.php
     excludePaths:
-        # generated protobuf code
+        # 自动生成的 Protobuf 代码
         - contracts/gen

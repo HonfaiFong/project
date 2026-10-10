@@ -14,20 +14,15 @@ use Tests\TestCase;
 use Webman\Http\Request;
 
 /**
- * Warm-path benchmark against the gRPC deadline budget.
+ * 针对 gRPC 截止时间预算的预热路径基准测试。
  *
- * Budget arithmetic (defaults shipped in compose.yaml / .env.example): the
- * gateway gives auth calls GRPC_AUTH_TIMEOUT_MS = 300 ms, and the auth->user
- * directory hop consumes up to GRPC_USER_DIRECTORY_TIMEOUT_MS = 250 ms, so the
- * auth worker has roughly 50 ms of its own per call. The worker bootstraps
- * Eloquent, the protobuf pool, and the JWT codec precisely so that this
- * per-call work stays in the sub-millisecond warm range; a regression here is
- * what turns "first login after deploy" into a 503 Deadline Exceeded.
+ * 预算计算使用 compose.yaml / .env.example 的默认值：网关为认证调用提供 GRPC_AUTH_TIMEOUT_MS = 300 毫秒，
+ * auth->user 用户目录调用最多消耗 GRPC_USER_DIRECTORY_TIMEOUT_MS = 250 毫秒，因此认证工作进程每次调用约有 50 毫
+ * 秒可用于自身工作。启动时预热 Eloquent、Protobuf 描述符池及 JWT 编解码器，是为了将每次调用工作控制在亚毫秒范围；
+ * 此处退化会使部署后的首次登录返回 503 Deadline Exceeded。
  *
- * The benchmark measures the codec-shaped share of that work: one JWT
- * encode+decode, one serialization of each warmed protobuf message, and four
- * trusted-proxy resolutions. The threshold keeps a large safety margin for
- * slow CI runners while still failing on boot-cost-scale regressions.
+ * 基准测量其中类似编解码的工作：一次 JWT 编解码、每个预热 Protobuf 消息的一次序列化及四次可信代理解析。阈值为较
+ * 慢的 CI 运行器留出充足余量，同时仍能识别初始化开销量级的性能退化。
  */
 final class GrpcDeadlineBudgetBenchmarkTest extends TestCase
 {

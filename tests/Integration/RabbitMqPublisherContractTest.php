@@ -64,7 +64,7 @@ final class RabbitMqPublisherContractTest extends TestCase
                 try {
                     $consumer->wait(null, false, 1.0);
                 } catch (AMQPTimeoutException) {
-                    // Continue until the bounded deadline.
+                    // 继续执行，直到限定截止时间。
                 }
             }
             $this->assertInstanceOf(EventEnvelope::class, $received);

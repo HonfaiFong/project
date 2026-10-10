@@ -191,7 +191,7 @@ final class EloquentAuthRepositoryTest extends TestCase
         $connection->beforeExecuting(function (string $query) use (&$aborted): void {
             if (!$aborted && str_starts_with($query, 'update ')) {
                 $aborted = true;
-                // Simulate a database aborting the transaction before reporting a deadlock.
+                // 模拟数据库在报告死锁前中止事务。
                 $this->pdo->rollBack();
                 throw new PDOException('Deadlock found when trying to get lock', 40001);
             }

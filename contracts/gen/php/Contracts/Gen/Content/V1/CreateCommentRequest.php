@@ -245,3 +245,4 @@ class CreateCommentRequest extends \Google\Protobuf\Internal\Message
     }
 
 }
+

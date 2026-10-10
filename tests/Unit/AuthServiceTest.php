@@ -230,7 +230,7 @@ final class AuthServiceTest extends TestCase
         $this->assertNotEmpty($result['refresh_token']);
         $this->assertSame('20001', $result['user_id']);
 
-        // Verify generated JWT
+        // 验证生成的 JWT
         $verify = $this->authService->verifyToken($result['access_token']);
         $this->assertTrue($verify['valid']);
         $this->assertSame('20001', $verify['user_id']);
@@ -324,8 +324,7 @@ final class AuthServiceTest extends TestCase
         $this->userDirectory->status = 0;
         $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
 
-        // Status-based suspension: restoring active status restores a token
-        // that has not expired or been independently revoked by logout.
+        // 基于状态的暂停：恢复为有效状态后，尚未过期且未因退出而独立撤销的令牌恢复可用。
         $this->userDirectory->status = UserDirectoryInterface::STATUS_ACTIVE;
         $this->assertTrue($this->authService->verifyToken($login['access_token'])['valid']);
     }

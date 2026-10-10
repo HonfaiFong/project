@@ -6,7 +6,7 @@ namespace Services\AuthService\Infrastructure\Model;
 
 use Illuminate\Database\Eloquent\Model;
 
-/** Persistence mapping for the `social_identities` table. */
+/** `social_identities` 表的持久化映射。 */
 final class SocialIdentity extends Model
 {
     protected $table = 'social_identities';

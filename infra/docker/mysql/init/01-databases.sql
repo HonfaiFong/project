@@ -1,5 +1,5 @@
 -- -------------------------------------------------------------
--- Initialize logical databases for Social Backend
+-- 初始化社交后端的逻辑数据库
 -- -------------------------------------------------------------
 CREATE DATABASE IF NOT EXISTS `auth_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS `user_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -8,12 +8,12 @@ CREATE DATABASE IF NOT EXISTS `social_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_
 CREATE DATABASE IF NOT EXISTS `chat_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS `message_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- Grant privileges
+-- 授予权限
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 
 -- -------------------------------------------------------------
--- auth_db Schema
+-- auth_db 表结构
 -- -------------------------------------------------------------
 USE `auth_db`;
 
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS `outbox_events` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -------------------------------------------------------------
--- user_db Schema
+-- user_db 表结构
 -- -------------------------------------------------------------
 USE `user_db`;
 
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS `outbox_events` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -------------------------------------------------------------
--- content_db Schema
+-- content_db 表结构
 -- -------------------------------------------------------------
 USE `content_db`;
 
@@ -212,7 +212,7 @@ CREATE TABLE IF NOT EXISTS `outbox_events` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -------------------------------------------------------------
--- social_db Schema
+-- social_db 表结构
 -- -------------------------------------------------------------
 USE `social_db`;
 
@@ -261,7 +261,7 @@ CREATE TABLE IF NOT EXISTS `outbox_events` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -------------------------------------------------------------
--- chat_db Schema
+-- chat_db 表结构
 -- -------------------------------------------------------------
 USE `chat_db`;
 
@@ -310,7 +310,7 @@ CREATE TABLE IF NOT EXISTS `outbox_events` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -------------------------------------------------------------
--- message_db Schema
+-- message_db 表结构
 -- -------------------------------------------------------------
 USE `message_db`;
 

@@ -8,14 +8,11 @@ use InvalidArgumentException;
 use Packages\GrpcCommon\DeadlineEnv;
 
 /**
- * Deadline knobs for the auth-service worker, resolved once at bootstrap.
+ * 认证服务工作进程的截止时间配置，仅在启动时解析一次。
  *
- * The cross-service relationship — the auth->user directory hop must stay
- * below the gateway's outer auth deadline so the outer deadline is what
- * clients observe — spans two deployments. compose.yaml therefore injects the
- * gateway's GRPC_AUTH_TIMEOUT_MS into this container as well, and the worker
- * refuses to start when the deployed pair violates the relationship instead
- * of discovering it as RPC_TIMEOUT traffic in production.
+ * 跨服务预算关系涉及两个部署：auth->user 用户目录调用预算须小于网关的外层认证截止时间，确保客户端观察到外层截止
+ * 时间。因此 compose.yaml 也向本容器注入网关的 GRPC_AUTH_TIMEOUT_MS；违反预算关系时工作进程拒绝启动，避免在生产
+ * 中通过大量 RPC_TIMEOUT 才发现问题。
  */
 final readonly class GrpcDeadlineConfig
 {
