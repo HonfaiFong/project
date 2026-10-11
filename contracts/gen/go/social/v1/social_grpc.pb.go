@@ -26,6 +26,7 @@ const (
 	SocialService_Block_FullMethodName                    = "/social.v1.SocialService/Block"
 	SocialService_Unblock_FullMethodName                  = "/social.v1.SocialService/Unblock"
 	SocialService_BatchGetInteractionState_FullMethodName = "/social.v1.SocialService/BatchGetInteractionState"
+	SocialService_CheckBidirectionalBlock_FullMethodName  = "/social.v1.SocialService/CheckBidirectionalBlock"
 )
 
 // SocialServiceClient is the client API for SocialService service.
@@ -39,6 +40,7 @@ type SocialServiceClient interface {
 	Block(ctx context.Context, in *BlockRequest, opts ...grpc.CallOption) (*BlockResponse, error)
 	Unblock(ctx context.Context, in *UnblockRequest, opts ...grpc.CallOption) (*UnblockResponse, error)
 	BatchGetInteractionState(ctx context.Context, in *BatchGetInteractionStateRequest, opts ...grpc.CallOption) (*BatchGetInteractionStateResponse, error)
+	CheckBidirectionalBlock(ctx context.Context, in *CheckBidirectionalBlockRequest, opts ...grpc.CallOption) (*CheckBidirectionalBlockResponse, error)
 }
 
 type socialServiceClient struct {
@@ -119,6 +121,16 @@ func (c *socialServiceClient) BatchGetInteractionState(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *socialServiceClient) CheckBidirectionalBlock(ctx context.Context, in *CheckBidirectionalBlockRequest, opts ...grpc.CallOption) (*CheckBidirectionalBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckBidirectionalBlockResponse)
+	err := c.cc.Invoke(ctx, SocialService_CheckBidirectionalBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SocialServiceServer is the server API for SocialService service.
 // All implementations must embed UnimplementedSocialServiceServer
 // for forward compatibility.
@@ -130,6 +142,7 @@ type SocialServiceServer interface {
 	Block(context.Context, *BlockRequest) (*BlockResponse, error)
 	Unblock(context.Context, *UnblockRequest) (*UnblockResponse, error)
 	BatchGetInteractionState(context.Context, *BatchGetInteractionStateRequest) (*BatchGetInteractionStateResponse, error)
+	CheckBidirectionalBlock(context.Context, *CheckBidirectionalBlockRequest) (*CheckBidirectionalBlockResponse, error)
 	mustEmbedUnimplementedSocialServiceServer()
 }
 
@@ -160,6 +173,9 @@ func (UnimplementedSocialServiceServer) Unblock(context.Context, *UnblockRequest
 }
 func (UnimplementedSocialServiceServer) BatchGetInteractionState(context.Context, *BatchGetInteractionStateRequest) (*BatchGetInteractionStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BatchGetInteractionState not implemented")
+}
+func (UnimplementedSocialServiceServer) CheckBidirectionalBlock(context.Context, *CheckBidirectionalBlockRequest) (*CheckBidirectionalBlockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckBidirectionalBlock not implemented")
 }
 func (UnimplementedSocialServiceServer) mustEmbedUnimplementedSocialServiceServer() {}
 func (UnimplementedSocialServiceServer) testEmbeddedByValue()                       {}
@@ -308,6 +324,24 @@ func _SocialService_BatchGetInteractionState_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SocialService_CheckBidirectionalBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckBidirectionalBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SocialServiceServer).CheckBidirectionalBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SocialService_CheckBidirectionalBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SocialServiceServer).CheckBidirectionalBlock(ctx, req.(*CheckBidirectionalBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SocialService_ServiceDesc is the grpc.ServiceDesc for SocialService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -342,6 +376,10 @@ var SocialService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BatchGetInteractionState",
 			Handler:    _SocialService_BatchGetInteractionState_Handler,
+		},
+		{
+			MethodName: "CheckBidirectionalBlock",
+			Handler:    _SocialService_CheckBidirectionalBlock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

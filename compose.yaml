@@ -6,6 +6,15 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       MYSQL_DATABASE: auth_db
+      # 账号仅在首次初始化或手工重跑 02-runtime-accounts.sh 时使用；不注入业务容器。
+      MYSQL_AUTH_RUNTIME_PASSWORD: ${MYSQL_AUTH_RUNTIME_PASSWORD:?Set MYSQL_AUTH_RUNTIME_PASSWORD in .env}
+      MYSQL_USER_RUNTIME_PASSWORD: ${MYSQL_USER_RUNTIME_PASSWORD:?Set MYSQL_USER_RUNTIME_PASSWORD in .env}
+      MYSQL_CONTENT_RUNTIME_PASSWORD: ${MYSQL_CONTENT_RUNTIME_PASSWORD:?Set MYSQL_CONTENT_RUNTIME_PASSWORD in .env}
+      MYSQL_SOCIAL_RUNTIME_PASSWORD: ${MYSQL_SOCIAL_RUNTIME_PASSWORD:?Set MYSQL_SOCIAL_RUNTIME_PASSWORD in .env}
+      MYSQL_CHAT_RUNTIME_PASSWORD: ${MYSQL_CHAT_RUNTIME_PASSWORD:?Set MYSQL_CHAT_RUNTIME_PASSWORD in .env}
+      MYSQL_MESSAGE_RUNTIME_PASSWORD: ${MYSQL_MESSAGE_RUNTIME_PASSWORD:?Set MYSQL_MESSAGE_RUNTIME_PASSWORD in .env}
+      MYSQL_USER_OUTBOX_RELAY_PASSWORD: ${MYSQL_USER_OUTBOX_RELAY_PASSWORD:?Set MYSQL_USER_OUTBOX_RELAY_PASSWORD in .env}
+      MYSQL_MIGRATION_PASSWORD: ${MYSQL_MIGRATION_PASSWORD:?Set MYSQL_MIGRATION_PASSWORD in .env}
     ports:
       - "${MYSQL_BIND_ADDRESS:-127.0.0.1}:${MYSQL_PORT:-3306}:3306"
     volumes:
@@ -22,7 +31,10 @@ services:
     image: redis:7.2.4-alpine
     container_name: social-redis
     restart: unless-stopped
-    command: redis-server --save "" --appendonly no
+    # Access-token/device revocations are security state, not disposable cache.
+    # Keep the named volume and fsync the AOF at least once per second so a
+    # Redis process/container restart cannot silently accept a revoked token.
+    command: redis-server --save "" --appendonly yes --appendfsync everysec --no-appendfsync-on-rewrite no
     ports:
       - "${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
@@ -78,8 +90,8 @@ services:
       rustfs-permissions:
         condition: service_completed_successfully
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${RUSTFS_BIND_ADDRESS:-127.0.0.1}:9000:9000"
+      - "${RUSTFS_BIND_ADDRESS:-127.0.0.1}:9001:9001"
     environment:
       RUSTFS_VOLUMES: /data/rustfs{0...3}
       RUSTFS_ADDRESS: 0.0.0.0:9000
@@ -148,8 +160,8 @@ services:
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: 3306
-      MYSQL_USER: root
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_USER: migration_ddl
+      MYSQL_PASSWORD: ${MYSQL_MIGRATION_PASSWORD:?Set MYSQL_MIGRATION_PASSWORD in .env}
       MYSQL_MIGRATION_LOCK_TIMEOUT: ${MYSQL_MIGRATION_LOCK_TIMEOUT:-30}
       MYSQL_SCHEMA_PREFIX: ${MYSQL_SCHEMA_PREFIX:-}
     volumes:
@@ -171,11 +183,16 @@ services:
     container_name: social-auth-service
     restart: unless-stopped
     working_dir: /app
-    command: rr serve -c infra/roadrunner/auth.yaml
+    command: sh /app/scripts/roadrunner-entrypoint.sh /app/infra/roadrunner/auth.yaml
     expose:
       - "50051"
+      - "9100"
     environment:
       - SERVICE_NAME=auth-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=auth-service
+      - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_AUTH_SERVICE:-auth-service}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
       - INTERNAL_RPC_GATEWAY_AUTH_TOKEN=${INTERNAL_RPC_GATEWAY_AUTH_TOKEN:?Set INTERNAL_RPC_GATEWAY_AUTH_TOKEN in .env}
       - GRPC_USER_SERVICE_TOKEN=${INTERNAL_RPC_AUTH_USER_TOKEN:?Set INTERNAL_RPC_AUTH_USER_TOKEN in .env}
       # AuthService -> UserService 用户目录调用的单跳预算须小于网关的 GRPC_AUTH_TIMEOUT_MS，确保外层截止时间起决定作用。
@@ -183,15 +200,31 @@ services:
       # 此处也注入网关的外层认证截止时间，以便工作进程在启动时拒绝违反预算关系的部署配置。
       - GRPC_AUTH_TIMEOUT_MS=${GRPC_AUTH_TIMEOUT_MS:-300}
       - APP_ENV=${APP_ENV:-production}
-      # Snowflake 服务槽位（0-31）。本服务的各副本须使用不同值；WorkerId::resolve() 自动在槽位内分配 rr 工作进程编号。
+      - GRPC_TLS_MODE=${GRPC_TLS_MODE:-plaintext}
+      - GRPC_TLS_CA_FILE=${GRPC_TLS_CA_FILE:-}
+      - GRPC_TLS_KEY_FILE=${GRPC_TLS_KEY_FILE:-}
+      - GRPC_TLS_CERT_FILE=${GRPC_TLS_CERT_FILE:-}
+      - GRPC_TLS_SERVER_CERT_FILE=${GRPC_TLS_SERVER_CERT_FILE:-}
+      - GRPC_TLS_SERVER_KEY_FILE=${GRPC_TLS_SERVER_KEY_FILE:-}
+      - GRPC_TLS_CLIENT_AUTH_TYPE=${GRPC_TLS_CLIENT_AUTH_TYPE:-no_client_certs}
+      - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
+      - GRPC_TLS_SERVER_NAME_AUTH_SERVICE=${GRPC_TLS_SERVER_NAME_AUTH_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_USER_SERVICE=${GRPC_TLS_SERVER_NAME_USER_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CONTENT_SERVICE=${GRPC_TLS_SERVER_NAME_CONTENT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE=${GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CHAT_SERVICE=${GRPC_TLS_SERVER_NAME_CHAT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE=${GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE:-}
+      # Snowflake 服务槽位（0-31）。同一服务的副本可复用此值；WorkerId::resolve()
+      # 通过 Redis 租约在槽位内原子分配 RoadRunner worker 编号。
       - WORKER_ID=1
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
-      - MYSQL_USER=root
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      - MYSQL_USER=auth_runtime
+      - MYSQL_PASSWORD=${MYSQL_AUTH_RUNTIME_PASSWORD:?Set MYSQL_AUTH_RUNTIME_PASSWORD in .env}
       - AUTH_DB_NAME=auth_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env}
       - WS_TICKET_SECRET=${WS_TICKET_SECRET:?Set WS_TICKET_SECRET in .env}
       - ENABLE_WECHAT_LOGIN=${ENABLE_WECHAT_LOGIN:-false}
@@ -225,22 +258,46 @@ services:
     container_name: social-user-service
     restart: unless-stopped
     working_dir: /app
-    command: rr serve -c infra/roadrunner/user.yaml
+    command: sh /app/scripts/roadrunner-entrypoint.sh /app/infra/roadrunner/user.yaml
     expose:
       - "50052"
+      - "9100"
     environment:
       - SERVICE_NAME=user-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=user-service
+      - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_USER_SERVICE:-user-service}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
+      - APP_ENV=${APP_ENV:-production}
+      - GRPC_TLS_MODE=${GRPC_TLS_MODE:-plaintext}
+      - GRPC_TLS_CA_FILE=${GRPC_TLS_CA_FILE:-}
+      - GRPC_TLS_KEY_FILE=${GRPC_TLS_KEY_FILE:-}
+      - GRPC_TLS_CERT_FILE=${GRPC_TLS_CERT_FILE:-}
+      - GRPC_TLS_SERVER_CERT_FILE=${GRPC_TLS_SERVER_CERT_FILE:-}
+      - GRPC_TLS_SERVER_KEY_FILE=${GRPC_TLS_SERVER_KEY_FILE:-}
+      - GRPC_TLS_CLIENT_AUTH_TYPE=${GRPC_TLS_CLIENT_AUTH_TYPE:-no_client_certs}
+      - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
+      - GRPC_TLS_SERVER_NAME_USER_SERVICE=${GRPC_TLS_SERVER_NAME_USER_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CONTENT_SERVICE=${GRPC_TLS_SERVER_NAME_CONTENT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE=${GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CHAT_SERVICE=${GRPC_TLS_SERVER_NAME_CHAT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE=${GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE:-}
       - INTERNAL_RPC_GATEWAY_USER_TOKEN=${INTERNAL_RPC_GATEWAY_USER_TOKEN:?Set INTERNAL_RPC_GATEWAY_USER_TOKEN in .env}
       - INTERNAL_RPC_AUTH_USER_TOKEN=${INTERNAL_RPC_AUTH_USER_TOKEN:?Set INTERNAL_RPC_AUTH_USER_TOKEN in .env}
-      # Snowflake 服务槽位（0-31）；参见上方 auth-service 的说明。
+      - INTERNAL_RPC_CONTENT_USER_TOKEN=${INTERNAL_RPC_CONTENT_USER_TOKEN:?Set INTERNAL_RPC_CONTENT_USER_TOKEN in .env}
+      - INTERNAL_RPC_SOCIAL_USER_TOKEN=${INTERNAL_RPC_SOCIAL_USER_TOKEN:?Set INTERNAL_RPC_SOCIAL_USER_TOKEN in .env}
+      - INTERNAL_RPC_CHAT_USER_TOKEN=${INTERNAL_RPC_CHAT_USER_TOKEN:?Set INTERNAL_RPC_CHAT_USER_TOKEN in .env}
+      # Snowflake 服务槽位（0-31）；副本可复用槽位，Redis 租约为每个 RoadRunner worker
+      # 分配唯一进程槽；参见上方 auth-service 的说明。
       - WORKER_ID=2
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306
-      - MYSQL_USER=root
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      - MYSQL_USER=user_runtime
+      - MYSQL_PASSWORD=${MYSQL_USER_RUNTIME_PASSWORD:?Set MYSQL_USER_RUNTIME_PASSWORD in .env}
       - USER_DB_NAME=user_db
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - PHONE_DEFAULT_REGION=${PHONE_DEFAULT_REGION:-CN}
     volumes:
       - .:/app
@@ -250,17 +307,256 @@ services:
       redis:
         condition: service_healthy
 
+  content-service:
+    image: project-php-runtime:rabbitmq
+    container_name: social-content-service
+    restart: unless-stopped
+    working_dir: /app
+    command: sh /app/scripts/roadrunner-entrypoint.sh /app/infra/roadrunner/content.yaml
+    expose:
+      - "50053"
+      - "9100"
+    environment:
+      - SERVICE_NAME=content-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=content-service
+      - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_CONTENT_SERVICE:-content-service}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
+      - APP_ENV=${APP_ENV:-production}
+      - GRPC_TLS_MODE=${GRPC_TLS_MODE:-plaintext}
+      - GRPC_TLS_CA_FILE=${GRPC_TLS_CA_FILE:-}
+      - GRPC_TLS_KEY_FILE=${GRPC_TLS_KEY_FILE:-}
+      - GRPC_TLS_CERT_FILE=${GRPC_TLS_CERT_FILE:-}
+      - GRPC_TLS_SERVER_CERT_FILE=${GRPC_TLS_SERVER_CERT_FILE:-}
+      - GRPC_TLS_SERVER_KEY_FILE=${GRPC_TLS_SERVER_KEY_FILE:-}
+      - GRPC_TLS_CLIENT_AUTH_TYPE=${GRPC_TLS_CLIENT_AUTH_TYPE:-no_client_certs}
+      - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
+      - GRPC_TLS_SERVER_NAME_USER_SERVICE=${GRPC_TLS_SERVER_NAME_USER_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CONTENT_SERVICE=${GRPC_TLS_SERVER_NAME_CONTENT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE=${GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CHAT_SERVICE=${GRPC_TLS_SERVER_NAME_CHAT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE=${GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE:-}
+      - INTERNAL_RPC_GATEWAY_CONTENT_TOKEN=${INTERNAL_RPC_GATEWAY_CONTENT_TOKEN:?Set INTERNAL_RPC_GATEWAY_CONTENT_TOKEN in .env}
+      - INTERNAL_RPC_CHAT_CONTENT_TOKEN=${INTERNAL_RPC_CHAT_CONTENT_TOKEN:?Set INTERNAL_RPC_CHAT_CONTENT_TOKEN in .env}
+      - INTERNAL_RPC_SOCIAL_CONTENT_TOKEN=${INTERNAL_RPC_SOCIAL_CONTENT_TOKEN:?Set INTERNAL_RPC_SOCIAL_CONTENT_TOKEN in .env}
+      - INTERNAL_RPC_MESSAGE_CONTENT_TOKEN=${INTERNAL_RPC_MESSAGE_CONTENT_TOKEN:?Set INTERNAL_RPC_MESSAGE_CONTENT_TOKEN in .env}
+      - INTERNAL_RPC_MODERATION_CONTENT_TOKEN=${INTERNAL_RPC_MODERATION_CONTENT_TOKEN:?Set INTERNAL_RPC_MODERATION_CONTENT_TOKEN in .env}
+      - GRPC_USER_SERVICE=user-service:50052
+      - GRPC_USER_TOKEN=${INTERNAL_RPC_CONTENT_USER_TOKEN:?Set INTERNAL_RPC_CONTENT_USER_TOKEN in .env}
+      - GRPC_USER_TIMEOUT_MS=${GRPC_USER_DIRECTORY_TIMEOUT_MS:-250}
+      - GRPC_SOCIAL_SERVICE=social-service:50054
+      - GRPC_SOCIAL_SERVICE_TOKEN=${INTERNAL_RPC_CONTENT_SOCIAL_TOKEN:?Set INTERNAL_RPC_CONTENT_SOCIAL_TOKEN in .env}
+      - GRPC_SOCIAL_BLOCK_TIMEOUT_MS=${GRPC_SOCIAL_BLOCK_TIMEOUT_MS:-200}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=content_runtime
+      - MYSQL_PASSWORD=${MYSQL_CONTENT_RUNTIME_PASSWORD:?Set MYSQL_CONTENT_RUNTIME_PASSWORD in .env}
+      - CONTENT_DB_NAME=content_db
+      - ANONYMOUS_IDENTITY_KEY=${ANONYMOUS_IDENTITY_KEY:?Set ANONYMOUS_IDENTITY_KEY in .env}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - WORKER_ID=3
+    volumes:
+      - .:/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+
+  social-service:
+    image: project-php-runtime:rabbitmq
+    container_name: social-social-service
+    restart: unless-stopped
+    working_dir: /app
+    command: sh /app/scripts/roadrunner-entrypoint.sh /app/infra/roadrunner/social.yaml
+    expose:
+      - "50054"
+      - "9100"
+    environment:
+      - SERVICE_NAME=social-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=social-service
+      - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_SOCIAL_SERVICE:-social-service}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
+      - APP_ENV=${APP_ENV:-production}
+      - GRPC_TLS_MODE=${GRPC_TLS_MODE:-plaintext}
+      - GRPC_TLS_CA_FILE=${GRPC_TLS_CA_FILE:-}
+      - GRPC_TLS_KEY_FILE=${GRPC_TLS_KEY_FILE:-}
+      - GRPC_TLS_CERT_FILE=${GRPC_TLS_CERT_FILE:-}
+      - GRPC_TLS_SERVER_CERT_FILE=${GRPC_TLS_SERVER_CERT_FILE:-}
+      - GRPC_TLS_SERVER_KEY_FILE=${GRPC_TLS_SERVER_KEY_FILE:-}
+      - GRPC_TLS_CLIENT_AUTH_TYPE=${GRPC_TLS_CLIENT_AUTH_TYPE:-no_client_certs}
+      - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
+      - GRPC_TLS_SERVER_NAME_USER_SERVICE=${GRPC_TLS_SERVER_NAME_USER_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CONTENT_SERVICE=${GRPC_TLS_SERVER_NAME_CONTENT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE=${GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CHAT_SERVICE=${GRPC_TLS_SERVER_NAME_CHAT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE=${GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE:-}
+      - INTERNAL_RPC_GATEWAY_SOCIAL_TOKEN=${INTERNAL_RPC_GATEWAY_SOCIAL_TOKEN:?Set INTERNAL_RPC_GATEWAY_SOCIAL_TOKEN in .env}
+      - INTERNAL_RPC_CHAT_SOCIAL_TOKEN=${INTERNAL_RPC_CHAT_SOCIAL_TOKEN:?Set INTERNAL_RPC_CHAT_SOCIAL_TOKEN in .env}
+      - INTERNAL_RPC_CONTENT_SOCIAL_TOKEN=${INTERNAL_RPC_CONTENT_SOCIAL_TOKEN:?Set INTERNAL_RPC_CONTENT_SOCIAL_TOKEN in .env}
+      - GRPC_USER_SERVICE=user-service:50052
+      - GRPC_USER_SERVICE_TOKEN=${INTERNAL_RPC_SOCIAL_USER_TOKEN:?Set INTERNAL_RPC_SOCIAL_USER_TOKEN in .env}
+      - GRPC_CONTENT_SERVICE=content-service:50053
+      - GRPC_CONTENT_SERVICE_TOKEN=${INTERNAL_RPC_SOCIAL_CONTENT_TOKEN:?Set INTERNAL_RPC_SOCIAL_CONTENT_TOKEN in .env}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=social_runtime
+      - MYSQL_PASSWORD=${MYSQL_SOCIAL_RUNTIME_PASSWORD:?Set MYSQL_SOCIAL_RUNTIME_PASSWORD in .env}
+      - SOCIAL_DB_NAME=social_db
+      - GRPC_USER_DIRECTORY_TIMEOUT_MS=${GRPC_USER_DIRECTORY_TIMEOUT_MS:-250}
+      - GRPC_CONTENT_AUTHORIZATION_TIMEOUT_MS=${GRPC_CONTENT_AUTHORIZATION_TIMEOUT_MS:-250}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - WORKER_ID=4
+    volumes:
+      - .:/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      content-service:
+        condition: service_started
+
+  chat-service:
+    image: project-php-runtime:rabbitmq
+    container_name: social-chat-service
+    restart: unless-stopped
+    working_dir: /app
+    command: sh /app/scripts/roadrunner-entrypoint.sh /app/infra/roadrunner/chat.yaml
+    expose:
+      - "50055"
+      - "9100"
+    environment:
+      - SERVICE_NAME=chat-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=chat-service
+      - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_CHAT_SERVICE:-chat-service}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
+      - APP_ENV=${APP_ENV:-production}
+      - GRPC_TLS_MODE=${GRPC_TLS_MODE:-plaintext}
+      - GRPC_TLS_CA_FILE=${GRPC_TLS_CA_FILE:-}
+      - GRPC_TLS_KEY_FILE=${GRPC_TLS_KEY_FILE:-}
+      - GRPC_TLS_CERT_FILE=${GRPC_TLS_CERT_FILE:-}
+      - GRPC_TLS_SERVER_CERT_FILE=${GRPC_TLS_SERVER_CERT_FILE:-}
+      - GRPC_TLS_SERVER_KEY_FILE=${GRPC_TLS_SERVER_KEY_FILE:-}
+      - GRPC_TLS_CLIENT_AUTH_TYPE=${GRPC_TLS_CLIENT_AUTH_TYPE:-no_client_certs}
+      - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
+      - GRPC_TLS_SERVER_NAME_USER_SERVICE=${GRPC_TLS_SERVER_NAME_USER_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CONTENT_SERVICE=${GRPC_TLS_SERVER_NAME_CONTENT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE=${GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CHAT_SERVICE=${GRPC_TLS_SERVER_NAME_CHAT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE=${GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE:-}
+      - INTERNAL_RPC_GATEWAY_CHAT_TOKEN=${INTERNAL_RPC_GATEWAY_CHAT_TOKEN:?Set INTERNAL_RPC_GATEWAY_CHAT_TOKEN in .env}
+      - INTERNAL_RPC_MESSAGE_CHAT_TOKEN=${INTERNAL_RPC_MESSAGE_CHAT_TOKEN:?Set INTERNAL_RPC_MESSAGE_CHAT_TOKEN in .env}
+      - GRPC_USER_SERVICE=user-service:50052
+      - GRPC_USER_SERVICE_TOKEN=${INTERNAL_RPC_CHAT_USER_TOKEN:?Set INTERNAL_RPC_CHAT_USER_TOKEN in .env}
+      - GRPC_CONTENT_SERVICE=content-service:50053
+      - GRPC_CONTENT_SERVICE_TOKEN=${INTERNAL_RPC_CHAT_CONTENT_TOKEN:?Set INTERNAL_RPC_CHAT_CONTENT_TOKEN in .env}
+      - GRPC_SOCIAL_SERVICE=social-service:50054
+      - GRPC_SOCIAL_SERVICE_TOKEN=${INTERNAL_RPC_CHAT_SOCIAL_TOKEN:?Set INTERNAL_RPC_CHAT_SOCIAL_TOKEN in .env}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=chat_runtime
+      - MYSQL_PASSWORD=${MYSQL_CHAT_RUNTIME_PASSWORD:?Set MYSQL_CHAT_RUNTIME_PASSWORD in .env}
+      - CHAT_DB_NAME=chat_db
+      - ANONYMOUS_IDENTITY_KEY=${ANONYMOUS_IDENTITY_KEY:?Set ANONYMOUS_IDENTITY_KEY in .env}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - WORKER_ID=5
+    volumes:
+      - .:/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      content-service:
+        condition: service_started
+      social-service:
+        condition: service_started
+
+  message-service:
+    image: project-php-runtime:rabbitmq
+    container_name: social-message-service
+    restart: unless-stopped
+    working_dir: /app
+    command: sh /app/scripts/roadrunner-entrypoint.sh /app/infra/roadrunner/message.yaml
+    expose:
+      - "50056"
+      - "9100"
+    environment:
+      - SERVICE_NAME=message-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=message-service
+      - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_MESSAGE_SERVICE:-message-service}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
+      - APP_ENV=${APP_ENV:-production}
+      - GRPC_TLS_MODE=${GRPC_TLS_MODE:-plaintext}
+      - GRPC_TLS_CA_FILE=${GRPC_TLS_CA_FILE:-}
+      - GRPC_TLS_KEY_FILE=${GRPC_TLS_KEY_FILE:-}
+      - GRPC_TLS_CERT_FILE=${GRPC_TLS_CERT_FILE:-}
+      - GRPC_TLS_SERVER_CERT_FILE=${GRPC_TLS_SERVER_CERT_FILE:-}
+      - GRPC_TLS_SERVER_KEY_FILE=${GRPC_TLS_SERVER_KEY_FILE:-}
+      - GRPC_TLS_CLIENT_AUTH_TYPE=${GRPC_TLS_CLIENT_AUTH_TYPE:-no_client_certs}
+      - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
+      - GRPC_TLS_SERVER_NAME_USER_SERVICE=${GRPC_TLS_SERVER_NAME_USER_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CONTENT_SERVICE=${GRPC_TLS_SERVER_NAME_CONTENT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE=${GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CHAT_SERVICE=${GRPC_TLS_SERVER_NAME_CHAT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE=${GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE:-}
+      - INTERNAL_RPC_GATEWAY_MESSAGE_TOKEN=${INTERNAL_RPC_GATEWAY_MESSAGE_TOKEN:?Set INTERNAL_RPC_GATEWAY_MESSAGE_TOKEN in .env}
+      - GRPC_CHAT_SERVICE=chat-service:50055
+      - GRPC_CHAT_SERVICE_TOKEN=${INTERNAL_RPC_MESSAGE_CHAT_TOKEN:?Set INTERNAL_RPC_MESSAGE_CHAT_TOKEN in .env}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=message_runtime
+      - MYSQL_PASSWORD=${MYSQL_MESSAGE_RUNTIME_PASSWORD:?Set MYSQL_MESSAGE_RUNTIME_PASSWORD in .env}
+      - MESSAGE_DB_NAME=message_db
+      - ANONYMOUS_IDENTITY_KEY=${ANONYMOUS_IDENTITY_KEY:?Set ANONYMOUS_IDENTITY_KEY in .env}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - WORKER_ID=6
+    volumes:
+      - .:/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chat-service:
+        condition: service_started
+
   user-outbox-relay:
     image: project-php-runtime:rabbitmq
     container_name: social-user-outbox-relay
     restart: unless-stopped
     working_dir: /app
     command: php services/user-service/bin/outbox-relay.php
+    expose:
+      - "9100"
     environment:
+      SERVICE_NAME: user-outbox-relay
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      OTEL_SERVICE_NAME: user-outbox-relay
+      OTEL_SERVICE_INSTANCE_ID: ${OTEL_SERVICE_INSTANCE_ID_OUTBOX_RELAY:-user-outbox-relay}
+      OTEL_DEPLOYMENT_ENVIRONMENT: ${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
-      MYSQL_USER: root
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_USER: user_outbox_relay
+      MYSQL_PASSWORD: ${MYSQL_USER_OUTBOX_RELAY_PASSWORD:?Set MYSQL_USER_OUTBOX_RELAY_PASSWORD in .env}
       USER_DB_NAME: user_db
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: "5672"
@@ -286,17 +582,44 @@ services:
       - "8787:8787"
     environment:
       - SERVICE_NAME=api-gateway
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=api-gateway
+      - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_API_GATEWAY:-api-gateway}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
+      - GRPC_TLS_MODE=${GRPC_TLS_MODE:-plaintext}
+      - GRPC_TLS_CA_FILE=${GRPC_TLS_CA_FILE:-}
+      - GRPC_TLS_KEY_FILE=${GRPC_TLS_KEY_FILE:-}
+      - GRPC_TLS_CERT_FILE=${GRPC_TLS_CERT_FILE:-}
+      - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
+      - GRPC_TLS_SERVER_NAME_AUTH_SERVICE=${GRPC_TLS_SERVER_NAME_AUTH_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_USER_SERVICE=${GRPC_TLS_SERVER_NAME_USER_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CONTENT_SERVICE=${GRPC_TLS_SERVER_NAME_CONTENT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE=${GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CHAT_SERVICE=${GRPC_TLS_SERVER_NAME_CHAT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE=${GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE:-}
       - GRPC_AUTH_TOKEN=${INTERNAL_RPC_GATEWAY_AUTH_TOKEN:?Set INTERNAL_RPC_GATEWAY_AUTH_TOKEN in .env}
       - GRPC_USER_TOKEN=${INTERNAL_RPC_GATEWAY_USER_TOKEN:?Set INTERNAL_RPC_GATEWAY_USER_TOKEN in .env}
       - APP_ENV=${APP_ENV:-production}
       - GRPC_AUTH_SERVICE=auth-service:50051
       - GRPC_USER_SERVICE=user-service:50052
+      - GRPC_CONTENT_SERVICE=content-service:50053
+      - GRPC_SOCIAL_SERVICE=social-service:50054
+      - GRPC_CHAT_SERVICE=chat-service:50055
+      - GRPC_MESSAGE_SERVICE=message-service:50056
+      - GRPC_CONTENT_TOKEN=${INTERNAL_RPC_GATEWAY_CONTENT_TOKEN:?Set INTERNAL_RPC_GATEWAY_CONTENT_TOKEN in .env}
+      - GRPC_SOCIAL_TOKEN=${INTERNAL_RPC_GATEWAY_SOCIAL_TOKEN:?Set INTERNAL_RPC_GATEWAY_SOCIAL_TOKEN in .env}
+      - GRPC_CHAT_TOKEN=${INTERNAL_RPC_GATEWAY_CHAT_TOKEN:?Set INTERNAL_RPC_GATEWAY_CHAT_TOKEN in .env}
+      - GRPC_MESSAGE_TOKEN=${INTERNAL_RPC_GATEWAY_MESSAGE_TOKEN:?Set INTERNAL_RPC_GATEWAY_MESSAGE_TOKEN in .env}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env}
       - SOCIAL_HTTP_TIMEOUT_MS=${SOCIAL_HTTP_TIMEOUT_MS:-3000}
       - GRPC_AUTH_TIMEOUT_MS=${GRPC_AUTH_TIMEOUT_MS:-300}
+      - GRPC_CONTENT_TIMEOUT_MS=${GRPC_CONTENT_TIMEOUT_MS:-500}
+      - GRPC_SOCIAL_TIMEOUT_MS=${GRPC_SOCIAL_TIMEOUT_MS:-500}
+      - GRPC_CHAT_TIMEOUT_MS=${GRPC_CHAT_TIMEOUT_MS:-700}
+      - GRPC_MESSAGE_TIMEOUT_MS=${GRPC_MESSAGE_TIMEOUT_MS:-700}
       - GRPC_SOCIAL_LOGIN_TIMEOUT_MS=${GRPC_SOCIAL_LOGIN_TIMEOUT_MS:-7000}
       - GRPC_SOCIAL_BIND_TIMEOUT_MS=${GRPC_SOCIAL_BIND_TIMEOUT_MS:-7000}
       # 分层社交限流：先设置适合 CGNAT 的每 IP 全局总上限，再设置 IP 与场景、IP 与设备、以及用户绑定限流桶。
@@ -312,7 +635,80 @@ services:
     depends_on:
       - auth-service
       - user-service
+      - content-service
+      - social-service
+      - chat-service
+      - message-service
       - redis
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.108.0
+    container_name: social-otel-collector
+    restart: unless-stopped
+    profiles:
+      - observability
+    command: ["--config=/etc/otelcol-contrib/otel-collector.yaml"]
+    ports:
+      - "${OTEL_COLLECTOR_BIND_ADDRESS:-127.0.0.1}:4317:4317"
+      - "${OTEL_COLLECTOR_BIND_ADDRESS:-127.0.0.1}:4318:4318"
+    volumes:
+      - ./infra/observability/otel-collector.yaml:/etc/otelcol-contrib/otel-collector.yaml:ro
+    depends_on:
+      tempo:
+        condition: service_started
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    container_name: social-tempo
+    restart: unless-stopped
+    profiles:
+      - observability
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    ports:
+      - "${TEMPO_BIND_ADDRESS:-127.0.0.1}:3200:3200"
+    volumes:
+      - ./infra/observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo_data:/var/tempo
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: social-prometheus
+    restart: unless-stopped
+    profiles:
+      - observability
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_BIND_ADDRESS:-127.0.0.1}:9090:9090"
+    volumes:
+      - ./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: social-grafana
+    restart: unless-stopped
+    profiles:
+      - observability
+    ports:
+      - "${GRAFANA_BIND_ADDRESS:-127.0.0.1}:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/etc/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
 
   realtime-gateway:
     build:
@@ -338,6 +734,9 @@ volumes:
   mysql_data:
   redis_data:
   rabbitmq_data:
+  tempo_data:
+  prometheus_data:
+  grafana_data:
   rustfs_data_0:
   rustfs_data_1:
   rustfs_data_2:

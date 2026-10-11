@@ -64,4 +64,40 @@ interface ContentServiceInterface extends GRPC\ServiceInterface
     * @throws GRPC\Exception\InvokeException
     */
     public function ListComments(GRPC\ContextInterface $ctx, ListCommentsRequest $in): ListCommentsResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param DeleteCommentRequest $in
+    * @return DeleteCommentResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function DeleteComment(GRPC\ContextInterface $ctx, DeleteCommentRequest $in): DeleteCommentResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param UpdatePostStatusRequest $in
+    * @return UpdatePostStatusResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function UpdatePostStatus(GRPC\ContextInterface $ctx, UpdatePostStatusRequest $in): UpdatePostStatusResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param ResolveAnonymousTargetRequest $in
+    * @return ResolveAnonymousTargetResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function ResolveAnonymousTarget(GRPC\ContextInterface $ctx, ResolveAnonymousTargetRequest $in): ResolveAnonymousTargetResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param CanAccessResourceRequest $in
+    * @return CanAccessResourceResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function CanAccessResource(GRPC\ContextInterface $ctx, CanAccessResourceRequest $in): CanAccessResourceResponse;
 }

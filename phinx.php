@@ -16,10 +16,15 @@ if ($lockTimeout === false) {
     throw new RuntimeException('MYSQL_MIGRATION_LOCK_TIMEOUT must be between 0 and 300 seconds');
 }
 
-$password = getenv('MYSQL_PASSWORD');
+$password = getenv('MYSQL_MIGRATION_PASSWORD');
+if ($password === false) {
+    // Compose passes the migration secret as MYSQL_PASSWORD for Phinx; direct
+    // invocations can use the explicit MYSQL_MIGRATION_PASSWORD name instead.
+    $password = getenv('MYSQL_PASSWORD');
+}
 $pdo = new PDO(
     sprintf('mysql:host=%s;port=%d;charset=utf8mb4', getenv('MYSQL_HOST') ?: '127.0.0.1', (int)(getenv('MYSQL_PORT') ?: 3306)),
-    getenv('MYSQL_USER') ?: 'root',
+    getenv('MYSQL_USER') ?: 'migration_ddl',
     $password === false ? '' : $password,
     [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,

@@ -55,4 +55,13 @@ interface ChatServiceInterface extends GRPC\ServiceInterface
     * @throws GRPC\Exception\InvokeException
     */
     public function MarkRead(GRPC\ContextInterface $ctx, MarkReadRequest $in): MarkReadResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param GetConversationMemberSnapshotRequest $in
+    * @return GetConversationMemberSnapshotResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function GetConversationMemberSnapshot(GRPC\ContextInterface $ctx, GetConversationMemberSnapshotRequest $in): GetConversationMemberSnapshotResponse;
 }

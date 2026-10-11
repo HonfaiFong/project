@@ -9,6 +9,7 @@ use Apps\ApiGateway\Grpc\HealthCheckClient;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Common\V1\HealthStatus;
+use Packages\Observability\MetricsRegistry;
 use Throwable;
 use Webman\Http\Response;
 
@@ -43,6 +44,7 @@ final readonly class HealthController
             if ($status !== 'SERVING') {
                 $healthy = false;
             }
+            MetricsRegistry::instance()->set('dependency_up', ['dependency' => $name], $status === 'SERVING' ? 1 : 0);
             $services[$name] = $status;
         }
 

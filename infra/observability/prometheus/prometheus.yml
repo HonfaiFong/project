@@ -1,0 +1,31 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: api-gateway
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api-gateway:8787"]
+
+  - job_name: php-grpc-services
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "auth-service:9100"
+          - "user-service:9100"
+          - "content-service:9100"
+          - "social-service:9100"
+          - "chat-service:9100"
+          - "message-service:9100"
+          - "user-outbox-relay:9100"
+
+  # The RabbitMQ Prometheus plugin is not enabled by the current compose
+  # stack. Add rabbitmq_prometheus and port 15692 before enabling this job.
+  # - job_name: rabbitmq
+  #   metrics_path: /metrics
+  #   static_configs:
+  #     - targets: ["rabbitmq:15692"]

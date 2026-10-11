@@ -8,9 +8,8 @@ CREATE DATABASE IF NOT EXISTS `social_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_
 CREATE DATABASE IF NOT EXISTS `chat_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS `message_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- 授予权限
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
-FLUSH PRIVILEGES;
+-- 运行时账号和迁移账号由同目录的 02-runtime-accounts.sh 按环境变量创建。
+-- 不在基线中把远程 root 暴露给业务容器；结构迁移也不得依赖 root。
 
 -- -------------------------------------------------------------
 -- auth_db 表结构
@@ -89,7 +88,7 @@ CREATE TABLE IF NOT EXISTS `personas` (
   `id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,
   `user_id` BIGINT UNSIGNED NOT NULL,
   `type` SMALLINT NOT NULL DEFAULT 1,
-  `is_internal_alias` TINYINT(1) NOT NULL DEFAULT 0,
+  `is_internal_alias` TINYINT UNSIGNED NOT NULL DEFAULT 0,
   `main_user_id` BIGINT UNSIGNED GENERATED ALWAYS AS (
     CASE WHEN `type` = 1 THEN `user_id` ELSE NULL END
   ) STORED,
@@ -136,11 +135,15 @@ USE `content_db`;
 
 CREATE TABLE IF NOT EXISTS `posts` (
   `id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  `author_user_id` BIGINT UNSIGNED NULL,
+  `request_id` VARCHAR(64) NULL,
   `persona_id` BIGINT UNSIGNED NOT NULL,
   `identity_mode` TINYINT UNSIGNED NOT NULL DEFAULT 0,
   `author_display_name` VARCHAR(64) NULL,
   `author_avatar_key` VARCHAR(255) NULL,
   `author_anonymous_ref` VARCHAR(128) NULL,
+  `author_scope_type` VARCHAR(255) NULL,
+  `author_scope_id` VARCHAR(255) NULL,
   `type` SMALLINT NOT NULL DEFAULT 1,
   `content` TEXT NULL,
   `visibility` SMALLINT NOT NULL DEFAULT 1,
@@ -154,6 +157,9 @@ CREATE TABLE IF NOT EXISTS `posts` (
   `created_at` DATETIME(3) NOT NULL,
   `updated_at` DATETIME(3) NOT NULL,
   `deleted_at` DATETIME(3) NULL,
+  INDEX `idx_author_user_created` (`author_user_id`, `created_at`),
+  UNIQUE KEY `uniq_author_request` (`author_user_id`, `request_id`),
+  INDEX `idx_alias_scope_exact` (`author_scope_type`(32), `author_scope_id`(64), `author_anonymous_ref`(128)),
   INDEX `idx_persona_created` (`persona_id`, `created_at`),
   INDEX `idx_status_published` (`status`, `published_at`),
   INDEX `idx_moderation_created` (`moderation_status`, `created_at`)
@@ -176,11 +182,15 @@ CREATE TABLE IF NOT EXISTS `post_media` (
 CREATE TABLE IF NOT EXISTS `comments` (
   `id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,
   `post_id` BIGINT UNSIGNED NOT NULL,
+  `author_user_id` BIGINT UNSIGNED NULL,
+  `request_id` VARCHAR(64) NULL,
   `persona_id` BIGINT UNSIGNED NOT NULL,
   `identity_mode` TINYINT UNSIGNED NOT NULL DEFAULT 0,
   `author_display_name` VARCHAR(64) NULL,
   `author_avatar_key` VARCHAR(255) NULL,
   `author_anonymous_ref` VARCHAR(128) NULL,
+  `author_scope_type` VARCHAR(255) NULL,
+  `author_scope_id` VARCHAR(255) NULL,
   `parent_id` BIGINT UNSIGNED NULL,
   `reply_to_comment_id` BIGINT UNSIGNED NULL,
   `content` VARCHAR(2000) NOT NULL,
@@ -189,6 +199,9 @@ CREATE TABLE IF NOT EXISTS `comments` (
   `created_at` DATETIME(3) NOT NULL,
   `updated_at` DATETIME(3) NOT NULL,
   `deleted_at` DATETIME(3) NULL,
+  INDEX `idx_author_user_created` (`author_user_id`, `created_at`),
+  UNIQUE KEY `uniq_author_request` (`author_user_id`, `request_id`),
+  INDEX `idx_alias_scope_exact` (`author_scope_type`(32), `author_scope_id`(64), `author_anonymous_ref`(128)),
   INDEX `idx_post_created` (`post_id`, `created_at`),
   INDEX `idx_parent_created` (`parent_id`, `created_at`),
   INDEX `idx_persona_created` (`persona_id`, `created_at`)
@@ -222,6 +235,7 @@ CREATE TABLE IF NOT EXISTS `likes` (
   `target_type` SMALLINT NOT NULL,
   `target_id` BIGINT UNSIGNED NOT NULL,
   `created_at` DATETIME(3) NOT NULL,
+  CONSTRAINT `chk_like_target_type` CHECK (`target_type` IN (1, 2)),
   UNIQUE KEY `uniq_persona_target` (`persona_id`, `target_type`, `target_id`),
   INDEX `idx_target_created` (`target_type`, `target_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -231,6 +245,7 @@ CREATE TABLE IF NOT EXISTS `follows` (
   `follower_persona_id` BIGINT UNSIGNED NOT NULL,
   `followee_persona_id` BIGINT UNSIGNED NOT NULL,
   `created_at` DATETIME(3) NOT NULL,
+  CONSTRAINT `chk_follow_not_self` CHECK (`follower_persona_id` <> `followee_persona_id`),
   UNIQUE KEY `uniq_follow` (`follower_persona_id`, `followee_persona_id`),
   INDEX `idx_followee_created` (`followee_persona_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -240,7 +255,9 @@ CREATE TABLE IF NOT EXISTS `blocks` (
   `blocker_user_id` BIGINT UNSIGNED NOT NULL,
   `blocked_user_id` BIGINT UNSIGNED NOT NULL,
   `created_at` DATETIME(3) NOT NULL,
-  UNIQUE KEY `uniq_block` (`blocker_user_id`, `blocked_user_id`)
+  CONSTRAINT `chk_block_not_self` CHECK (`blocker_user_id` <> `blocked_user_id`),
+  UNIQUE KEY `uniq_block` (`blocker_user_id`, `blocked_user_id`),
+  INDEX `idx_blocked_created` (`blocked_user_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `outbox_events` (
@@ -270,8 +287,19 @@ CREATE TABLE IF NOT EXISTS `conversations` (
   `type` SMALLINT NOT NULL DEFAULT 1,
   `last_message_id` BIGINT UNSIGNED NULL,
   `last_message_at` DATETIME(3) NULL,
+  `private_key` VARCHAR(64) NULL,
+  `creation_request_id` VARCHAR(128) NULL,
+  `requesting_user_id` BIGINT UNSIGNED NULL,
+  `target_mode` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  `target_user_id` BIGINT UNSIGNED NULL,
+  `target_persona_id` BIGINT UNSIGNED NULL,
+  `target_scope_type` VARCHAR(255) NULL,
+  `target_scope_id` VARCHAR(255) NULL,
+  `target_anonymous_ref` VARCHAR(128) NULL,
   `created_at` DATETIME(3) NOT NULL,
   `updated_at` DATETIME(3) NOT NULL,
+  UNIQUE KEY `uniq_private_key` (`private_key`),
+  INDEX `idx_creation_request` (`requesting_user_id`, `creation_request_id`),
   INDEX `idx_last_message_at` (`last_message_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -284,6 +312,8 @@ CREATE TABLE IF NOT EXISTS `conversation_members` (
   `display_name_snapshot` VARCHAR(64) NULL,
   `avatar_key_snapshot` VARCHAR(255) NULL,
   `anonymous_ref` VARCHAR(128) NULL,
+  `scope_type` VARCHAR(255) NULL,
+  `scope_id` VARCHAR(255) NULL,
   `last_read_seq` BIGINT UNSIGNED NOT NULL DEFAULT 0,
   `joined_at` DATETIME(3) NOT NULL,
   `left_at` DATETIME(3) NULL,
@@ -324,6 +354,8 @@ CREATE TABLE IF NOT EXISTS `messages` (
   `sender_display_name` VARCHAR(64) NULL,
   `sender_avatar_key` VARCHAR(255) NULL,
   `sender_anonymous_ref` VARCHAR(128) NULL,
+  `sender_scope_type` VARCHAR(255) NULL,
+  `sender_scope_id` VARCHAR(255) NULL,
   `client_message_id` VARCHAR(36) NOT NULL,
   `type` SMALLINT NOT NULL DEFAULT 1,
   `content` JSON NOT NULL,
@@ -331,7 +363,14 @@ CREATE TABLE IF NOT EXISTS `messages` (
   UNIQUE KEY `uniq_conv_seq` (`conversation_id`, `seq`),
   UNIQUE KEY `uniq_sender_client` (`sender_user_id`, `client_message_id`),
   INDEX `idx_conv_message` (`conversation_id`, `message_id`),
+  INDEX `idx_conv_seq_message` (`conversation_id`, `seq`, `message_id`),
   INDEX `idx_sender_created` (`sender_user_id`, `created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `conversation_sequences` (
+  `conversation_id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  `last_seq` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `updated_at` DATETIME(3) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `outbox_events` (

@@ -152,6 +152,59 @@ message ListCommentsResponse {
   common.v1.PaginationResponse pagination = 2;
 }
 
+message DeleteCommentRequest {
+  uint64 comment_id = 1;
+  // Deprecated body fields are retained for rolling source compatibility.
+  // The service uses authenticated metadata and the persisted owner.
+  uint64 user_id = 2;
+  uint64 persona_id = 3;
+}
+
+message DeleteCommentResponse {
+  bool success = 1;
+}
+
+message UpdatePostStatusRequest {
+  uint64 post_id = 1;
+  int32 status = 2;
+  int32 moderation_status = 3;
+}
+
+message UpdatePostStatusResponse {
+  bool success = 1;
+}
+
+// Internal-only lookup used by ChatService. The tuple is resolved against a
+// persisted alias snapshot; the opaque reference format is never accepted as
+// authentication by itself.
+message ResolveAnonymousTargetRequest {
+  string scope_type = 1;
+  string scope_id = 2;
+  string anonymous_ref = 3;
+}
+
+message ResolveAnonymousTargetResponse {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+  common.v1.IdentityMode identity_mode = 3;
+  common.v1.PublicAuthor author = 4;
+}
+
+message CanAccessResourceRequest {
+  string resource_type = 1;
+  uint64 resource_id = 2;
+  string action = 3;
+}
+
+message CanAccessResourceResponse {
+  bool allowed = 1;
+  string reason = 2;
+  // Internal authorization projection for SocialService. These fields never
+  // cross the public HTTP projection and let Social enforce blocks locally.
+  uint64 resource_author_user_id = 3;
+  uint64 root_author_user_id = 4;
+}
+
 service ContentService {
   rpc CreatePost(CreatePostRequest) returns (CreatePostResponse);
   rpc GetPost(GetPostRequest) returns (GetPostResponse);
@@ -159,4 +212,8 @@ service ContentService {
   rpc DeletePost(DeletePostRequest) returns (DeletePostResponse);
   rpc CreateComment(CreateCommentRequest) returns (CreateCommentResponse);
   rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse);
+  rpc DeleteComment(DeleteCommentRequest) returns (DeleteCommentResponse);
+  rpc UpdatePostStatus(UpdatePostStatusRequest) returns (UpdatePostStatusResponse);
+  rpc ResolveAnonymousTarget(ResolveAnonymousTargetRequest) returns (ResolveAnonymousTargetResponse);
+  rpc CanAccessResource(CanAccessResourceRequest) returns (CanAccessResourceResponse);
 }

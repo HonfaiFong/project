@@ -114,6 +114,203 @@ final class PhinxMigrationTest extends TestCase
             ->whereKey('100000000000000001')->value('openid'));
     }
 
+    public function testFreshSocialSchemaMatchesFinalMigrationContract(): void
+    {
+        $this->assertMigrationSucceeds();
+        $schema = $this->prefix . 'social_db';
+
+        $columns = $this->pdo->prepare(
+            'SELECT `TABLE_NAME` AS table_name, `COLUMN_NAME` AS column_name, '
+            . '`COLUMN_TYPE` AS column_type, `IS_NULLABLE` AS is_nullable '
+            . 'FROM `information_schema`.`columns` '
+            . 'WHERE `TABLE_SCHEMA` = :schema AND `TABLE_NAME` IN (\'likes\', \'follows\', \'blocks\')',
+        );
+        $columns->execute(['schema' => $schema]);
+        $actualColumns = [];
+        while ($column = $columns->fetch(PDO::FETCH_ASSOC)) {
+            $actualColumns[(string)$column['table_name']][(string)$column['column_name']] = [
+                'column_type' => strtolower((string)$column['column_type']),
+                'is_nullable' => strtoupper((string)$column['is_nullable']),
+            ];
+        }
+
+        foreach ([
+            'likes' => ['id', 'persona_id', 'target_id'],
+            'follows' => ['id', 'follower_persona_id', 'followee_persona_id'],
+            'blocks' => ['id', 'blocker_user_id', 'blocked_user_id'],
+        ] as $table => $names) {
+            foreach ($names as $name) {
+                $this->assertArrayHasKey($table, $actualColumns);
+                $this->assertArrayHasKey($name, $actualColumns[$table]);
+                $this->assertSame('bigint unsigned', $actualColumns[$table][$name]['column_type'], $table . '.' . $name);
+                $this->assertSame('NO', $actualColumns[$table][$name]['is_nullable'], $table . '.' . $name);
+            }
+            $this->assertArrayHasKey('created_at', $actualColumns[$table]);
+            $this->assertSame('datetime(3)', $actualColumns[$table]['created_at']['column_type'], $table . '.created_at');
+            $this->assertSame('NO', $actualColumns[$table]['created_at']['is_nullable'], $table . '.created_at');
+        }
+        $this->assertArrayHasKey('target_type', $actualColumns['likes']);
+        $this->assertSame('smallint', $actualColumns['likes']['target_type']['column_type']);
+        $this->assertSame('NO', $actualColumns['likes']['target_type']['is_nullable']);
+
+        foreach ([
+            ['likes', 'uniq_persona_target'], ['likes', 'idx_target_created'],
+            ['follows', 'uniq_follow'], ['follows', 'idx_followee_created'],
+            ['blocks', 'uniq_block'], ['blocks', 'idx_blocked_created'],
+        ] as [$table, $index]) {
+            $this->assertIndexExists('social_db', $table, $index);
+        }
+
+        $checks = $this->pdo->prepare(
+            'SELECT tc.`TABLE_NAME` AS table_name, tc.`CONSTRAINT_NAME` AS constraint_name, '
+            . 'cc.`CHECK_CLAUSE` AS check_clause, tc.`ENFORCED` AS enforced '
+            . 'FROM `information_schema`.`table_constraints` tc '
+            . 'INNER JOIN `information_schema`.`check_constraints` cc '
+            . 'ON cc.`CONSTRAINT_SCHEMA` = tc.`CONSTRAINT_SCHEMA` '
+            . 'AND cc.`CONSTRAINT_NAME` = tc.`CONSTRAINT_NAME` '
+            . 'WHERE tc.`TABLE_SCHEMA` = :schema AND tc.`CONSTRAINT_TYPE` = \'CHECK\'',
+        );
+        $checks->execute(['schema' => $schema]);
+        $actualChecks = [];
+        while ($check = $checks->fetch(PDO::FETCH_ASSOC)) {
+            $actualChecks[(string)$check['constraint_name']] = [
+                'table_name' => (string)$check['table_name'],
+                'check_clause' => strtolower(preg_replace('/\s+/', '', str_replace('`', '', (string)$check['check_clause'])) ?? ''),
+                'enforced' => strtoupper((string)$check['enforced']),
+            ];
+        }
+        foreach ([
+            'chk_like_target_type' => ['likes', 'target_typein1,2'],
+            'chk_follow_not_self' => ['follows', 'follower_persona_id<>followee_persona_id'],
+            'chk_block_not_self' => ['blocks', 'blocker_user_id<>blocked_user_id'],
+        ] as $name => [$table, $expression]) {
+            $this->assertArrayHasKey($name, $actualChecks);
+            $this->assertSame($table, $actualChecks[$name]['table_name'], $name);
+            $this->assertSame($expression, $this->normalizeSqlDefinition($actualChecks[$name]['check_clause']), $name);
+            $this->assertSame('YES', $actualChecks[$name]['enforced'], $name);
+        }
+    }
+
+    public function testFreshIdentityAndSnapshotColumnsMatchInitAndFinalMigrations(): void
+    {
+        $this->assertMigrationSucceeds();
+
+        $columns = $this->pdo->prepare(
+            'SELECT `COLUMN_TYPE` AS column_type, `IS_NULLABLE` AS is_nullable, '
+            . '`COLUMN_DEFAULT` AS column_default '
+            . 'FROM `information_schema`.`columns` '
+            . 'WHERE `TABLE_SCHEMA` = :schema AND `TABLE_NAME` = :table AND `COLUMN_NAME` = :column',
+        );
+        foreach ([
+            ['user_db', 'personas', 'is_internal_alias', 'tinyint unsigned', 'NO', '0'],
+            ['content_db', 'posts', 'author_scope_type', 'varchar(255)', 'YES', null],
+            ['content_db', 'posts', 'author_scope_id', 'varchar(255)', 'YES', null],
+            ['content_db', 'comments', 'author_scope_type', 'varchar(255)', 'YES', null],
+            ['content_db', 'comments', 'author_scope_id', 'varchar(255)', 'YES', null],
+            ['chat_db', 'conversation_members', 'scope_type', 'varchar(255)', 'YES', null],
+            ['chat_db', 'conversation_members', 'scope_id', 'varchar(255)', 'YES', null],
+            ['message_db', 'messages', 'sender_scope_type', 'varchar(255)', 'YES', null],
+            ['message_db', 'messages', 'sender_scope_id', 'varchar(255)', 'YES', null],
+        ] as [$database, $table, $column, $type, $nullable, $default]) {
+            $columns->execute([
+                'schema' => $this->prefix . $database,
+                'table' => $table,
+                'column' => $column,
+            ]);
+            $row = $columns->fetch(PDO::FETCH_ASSOC);
+            $this->assertIsArray($row, $database . '.' . $table . '.' . $column);
+            $this->assertSame($type, strtolower((string)$row['column_type']), $database . '.' . $table . '.' . $column);
+            $this->assertSame($nullable, strtoupper((string)$row['is_nullable']), $database . '.' . $table . '.' . $column);
+            $this->assertSame($default, $row['column_default'], $database . '.' . $table . '.' . $column);
+        }
+
+        $generated = $this->pdo->prepare(
+            'SELECT `COLUMN_TYPE` AS column_type, `EXTRA` AS extra, `GENERATION_EXPRESSION` AS expression '
+            . 'FROM `information_schema`.`columns` '
+            . 'WHERE `TABLE_SCHEMA` = :schema AND `TABLE_NAME` = \'personas\' AND `COLUMN_NAME` = :column',
+        );
+        foreach ([
+            ['main_user_id', 'type'],
+            ['alias_user_id', 'is_internal_alias'],
+        ] as [$column, $expressionPart]) {
+            $generated->execute(['schema' => $this->prefix . 'user_db', 'column' => $column]);
+            $row = $generated->fetch(PDO::FETCH_ASSOC);
+            $this->assertIsArray($row, 'user_db.personas.' . $column);
+            $this->assertSame('bigint unsigned', strtolower((string)$row['column_type']), $column);
+            $this->assertStringContainsString('STORED GENERATED', strtoupper((string)$row['extra']), $column);
+            $this->assertStringContainsString($expressionPart, strtolower((string)$row['expression']), $column);
+        }
+        $this->assertIndexExists('user_db', 'personas', 'uniq_main_persona_user');
+        $this->assertIndexExists('user_db', 'personas', 'uniq_internal_alias_user');
+
+        $checks = $this->pdo->prepare(
+            'SELECT `ENFORCED` AS enforced FROM `information_schema`.`table_constraints` '
+            . 'WHERE `TABLE_SCHEMA` = :schema AND `TABLE_NAME` = \'personas\' '
+            . 'AND `CONSTRAINT_NAME` = :constraint AND `CONSTRAINT_TYPE` = \'CHECK\'',
+        );
+        foreach (['chk_persona_type', 'chk_internal_alias_type'] as $constraint) {
+            $checks->execute(['schema' => $this->prefix . 'user_db', 'constraint' => $constraint]);
+            $row = $checks->fetch(PDO::FETCH_ASSOC);
+            $this->assertIsArray($row, $constraint);
+            $this->assertSame('YES', strtoupper((string)$row['enforced']), $constraint);
+        }
+    }
+
+    public function testFreshContentAndSessionStateColumnsMatchInitAndFinalMigrations(): void
+    {
+        $this->assertMigrationSucceeds();
+
+        $columns = $this->pdo->prepare(
+            'SELECT `COLUMN_TYPE` AS column_type, `IS_NULLABLE` AS is_nullable, '
+            . '`COLUMN_DEFAULT` AS column_default '
+            . 'FROM `information_schema`.`columns` '
+            . 'WHERE `TABLE_SCHEMA` = :schema AND `TABLE_NAME` = :table AND `COLUMN_NAME` = :column',
+        );
+        foreach ([
+            ['content_db', 'posts', 'author_user_id', 'bigint unsigned', 'YES', null],
+            ['content_db', 'posts', 'request_id', 'varchar(64)', 'YES', null],
+            ['content_db', 'comments', 'author_user_id', 'bigint unsigned', 'YES', null],
+            ['content_db', 'comments', 'request_id', 'varchar(64)', 'YES', null],
+            ['chat_db', 'conversations', 'private_key', 'varchar(64)', 'YES', null],
+            ['chat_db', 'conversations', 'creation_request_id', 'varchar(128)', 'YES', null],
+            ['chat_db', 'conversations', 'requesting_user_id', 'bigint unsigned', 'YES', null],
+            ['chat_db', 'conversations', 'target_mode', 'tinyint unsigned', 'NO', '1'],
+            ['chat_db', 'conversations', 'target_user_id', 'bigint unsigned', 'YES', null],
+            ['chat_db', 'conversations', 'target_persona_id', 'bigint unsigned', 'YES', null],
+            ['chat_db', 'conversations', 'target_scope_type', 'varchar(255)', 'YES', null],
+            ['chat_db', 'conversations', 'target_scope_id', 'varchar(255)', 'YES', null],
+            ['chat_db', 'conversations', 'target_anonymous_ref', 'varchar(128)', 'YES', null],
+            ['message_db', 'conversation_sequences', 'conversation_id', 'bigint unsigned', 'NO', null],
+            ['message_db', 'conversation_sequences', 'last_seq', 'bigint unsigned', 'NO', '0'],
+            ['message_db', 'conversation_sequences', 'updated_at', 'datetime(3)', 'NO', null],
+        ] as [$database, $table, $column, $type, $nullable, $default]) {
+            $columns->execute([
+                'schema' => $this->prefix . $database,
+                'table' => $table,
+                'column' => $column,
+            ]);
+            $row = $columns->fetch(PDO::FETCH_ASSOC);
+            $this->assertIsArray($row, $database . '.' . $table . '.' . $column);
+            $this->assertSame($type, strtolower((string)$row['column_type']), $database . '.' . $table . '.' . $column);
+            $this->assertSame($nullable, strtoupper((string)$row['is_nullable']), $database . '.' . $table . '.' . $column);
+            $this->assertSame($default, $row['column_default'], $database . '.' . $table . '.' . $column);
+        }
+
+        foreach ([
+            ['content_db', 'posts', 'idx_author_user_created'],
+            ['content_db', 'posts', 'uniq_author_request'],
+            ['content_db', 'posts', 'idx_alias_scope_exact'],
+            ['content_db', 'comments', 'idx_author_user_created'],
+            ['content_db', 'comments', 'uniq_author_request'],
+            ['content_db', 'comments', 'idx_alias_scope_exact'],
+            ['chat_db', 'conversations', 'uniq_private_key'],
+            ['chat_db', 'conversations', 'idx_creation_request'],
+            ['message_db', 'messages', 'idx_conv_seq_message'],
+        ] as [$database, $table, $index]) {
+            $this->assertIndexExists($database, $table, $index);
+        }
+    }
+
     public function testPersonaMainUniquenessIncludesSoftDeletedRows(): void
     {
         $this->assertMigrationSucceeds();
@@ -697,6 +894,11 @@ final class PhinxMigrationTest extends TestCase
     private function assertIndexExists(string $database, string $table, string $index): void
     {
         $this->assertTrue($this->schema()->hasIndex($this->prefix . $database . '.' . $table, $index), $database . '.' . $table . '.' . $index);
+    }
+
+    private function normalizeSqlDefinition(string $definition): string
+    {
+        return str_replace(['(', ')'], '', $definition);
     }
 
     private function userRowCount(string $table): int

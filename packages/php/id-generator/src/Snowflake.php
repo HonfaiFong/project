@@ -23,19 +23,34 @@ final class Snowflake
     private int $workerId;
     private int $sequence = 0;
     private int $lastTimestamp = -1;
+    private ?WorkerIdLease $lease;
 
-    public function __construct(int $workerId = 1, int $epoch = 1704067200000)
+    public function __construct(
+        int $workerId = 1,
+        int $epoch = 1704067200000,
+        ?WorkerIdLease $lease = null,
+    )
     {
         if ($workerId < 0 || $workerId > self::MAX_WORKER_ID) {
             throw new InvalidArgumentException(sprintf('Worker ID must be between 0 and %d', self::MAX_WORKER_ID));
         }
 
+        if ($lease !== null && $lease->workerId() !== $workerId) {
+            throw new InvalidArgumentException('Worker ID lease does not match the Snowflake worker ID');
+        }
+
         $this->workerId = $workerId;
         $this->epoch = $epoch;
+        $this->lease = $lease ?? WorkerId::leaseFor($workerId);
     }
 
     public function nextId(): string
     {
+        // A lease can expire while a RoadRunner worker is idle. Never emit an
+        // id after ownership is lost; the next process may have reclaimed the
+        // same slot after the Redis TTL elapsed.
+        $this->lease?->assertValid();
+
         $timestamp = $this->timeGen();
 
         if ($timestamp < $this->lastTimestamp) {

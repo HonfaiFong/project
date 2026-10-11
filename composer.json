@@ -36,6 +36,7 @@
       "Contracts\\Gen\\": "contracts/gen/php/Contracts/Gen/",
       "Packages\\IdGenerator\\": "packages/php/id-generator/src/",
       "Packages\\Tracing\\": "packages/php/tracing/src/",
+      "Packages\\Observability\\": "packages/php/observability/src/",
       "Packages\\Logging\\": "packages/php/logging/src/",
       "Packages\\Outbox\\": "packages/php/outbox/src/",
       "Packages\\Database\\": "packages/php/database/src/",
@@ -44,7 +45,11 @@
       "Packages\\Identity\\": "packages/php/identity/src/",
       "Apps\\ApiGateway\\": "apps/api-gateway/app/",
       "Services\\AuthService\\": "services/auth-service/src/",
-      "Services\\UserService\\": "services/user-service/src/"
+      "Services\\UserService\\": "services/user-service/src/",
+      "Services\\ContentService\\": "services/content-service/src/",
+      "Services\\SocialService\\": "services/social-service/src/",
+      "Services\\ChatService\\": "services/chat-service/src/",
+      "Services\\MessageService\\": "services/message-service/src/"
     }
   },
   "autoload-dev": {

@@ -7,20 +7,20 @@ namespace Packages\GrpcCommon;
 use Google\Protobuf\Internal\Message;
 use Exception;
 use Grpc\BaseStub;
-use Grpc\ChannelCredentials;
+use Packages\Observability\Span;
+use Packages\Observability\Tracer;
+use Throwable;
 use const Grpc\STATUS_OK;
 
 class UnaryGrpcClient extends BaseStub
 {
     /** @throws Exception */
     public function __construct(
-        string $target,
+        private readonly string $target,
         private readonly ?string $serviceToken = null,
     )
     {
-        parent::__construct($target, [
-            'credentials' => ChannelCredentials::createInsecure(),
-        ]);
+        parent::__construct($target, GrpcTlsConfig::fromEnvironment($target)->stubOptions());
     }
 
     /**
@@ -37,27 +37,40 @@ class UnaryGrpcClient extends BaseStub
         int $timeoutMs,
         array $metadata = []
     ): Message {
-        $options = GrpcClientContext::createCallOptions($timeoutMs, $metadata, $this->serviceToken);
-        // 本项目的 grpc/grpc 版本按 list($className, $func) 解构反序列化器,
-        // 只认二元数组不认 Closure,第二个元素仅占位
-        /** @var callable $deserialize */
-        $deserialize = [$responseClass, 'mergeFromString'];
-        $call = $this->_simpleRequest(
-            $method,
-            $request,
-            $deserialize,
-            $options['metadata'],
-            ['timeout' => $options['timeout']]
-        );
+        $scope = Tracer::enter('grpc.client', Span::KIND_CLIENT, [
+            'rpc.system' => 'grpc',
+            'rpc.method' => $method,
+            'server.address' => $this->target,
+        ]);
+        try {
+            $options = GrpcClientContext::createCallOptions($timeoutMs, $metadata, $this->serviceToken);
+            // 本项目的 grpc/grpc 版本按 list($className, $func) 解构反序列化器,
+            // 只认二元数组不认 Closure,第二个元素仅占位
+            /** @var callable $deserialize */
+            $deserialize = [$responseClass, 'mergeFromString'];
+            $call = $this->_simpleRequest(
+                $method,
+                $request,
+                $deserialize,
+                $options['metadata'],
+                ['timeout' => $options['timeout']]
+            );
 
-        [$response, $status] = $call->wait();
-        if ($status->code !== STATUS_OK || !$response instanceof $responseClass) {
-            $message = (string)($status->details ?? 'gRPC request failed');
-            $appErrorCode = $this->extractAppErrorCode($status->metadata ?? []);
-            throw new GrpcCallException($status->code, $appErrorCode, $message);
+            [$response, $status] = $call->wait();
+            $scope->span->setAttribute('rpc.grpc.status_code', (int)$status->code);
+            if ($status->code !== STATUS_OK || !$response instanceof $responseClass) {
+                $message = (string)($status->details ?? 'gRPC request failed');
+                $appErrorCode = $this->extractAppErrorCode($status->metadata ?? []);
+                throw new GrpcCallException($status->code, $appErrorCode, $message);
+            }
+
+            return $response;
+        } catch (Throwable $exception) {
+            $scope->fail($exception);
+            throw $exception;
+        } finally {
+            $scope->close();
         }
-
-        return $response;
     }
 
     private function extractAppErrorCode(mixed $metadata): ?int

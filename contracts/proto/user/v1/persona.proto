@@ -47,8 +47,8 @@ enum PersonaMode {
 
 message CreatePersonaRequest {
   uint64 user_id = 1;
-  // Deprecated compatibility field. The create endpoint always creates an
-  // ALIAS; zero (omitted) and 2 are accepted, while MAIN is rejected.
+  // Deprecated compatibility field. Persona creation is disabled; callers
+  // must not use this field. It is retained only for wire compatibility.
   int32 type = 2 [deprecated = true];
   string nickname = 3;
   string avatar_key = 4;

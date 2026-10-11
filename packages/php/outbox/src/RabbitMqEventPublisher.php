@@ -10,7 +10,9 @@ use DateTimeZone;
 use Exception;
 use PhpAmqpLib\Channel\AMQPChannel;
 use PhpAmqpLib\Message\AMQPMessage;
+use Packages\Observability\MetricsRegistry;
 use RuntimeException;
+use Throwable;
 
 final readonly class RabbitMqEventPublisher implements EventPublisher
 {
@@ -30,26 +32,40 @@ final readonly class RabbitMqEventPublisher implements EventPublisher
     /** @throws Exception */
     public function publish(OutboxRecord $event): void
     {
-        $body = (new EventEnvelope(
-            eventId: $event->eventId,
-            eventType: $event->eventType,
-            eventVersion: $event->eventVersion,
-            occurredAt: $event->createdAt === null
-                ? gmdate('Y-m-d\TH:i:s\Z')
-                : (new DateTimeImmutable($event->createdAt, new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
-            traceId: $event->traceId,
-            producer: $this->producer,
-            key: $event->eventKey,
-            payload: $event->payload,
-        ))->toJson();
+        $startedAt = hrtime(true);
+        MetricsRegistry::instance()->inc('rabbitmq_publish_total', ['event_type' => $event->eventType, 'status' => 'attempt']);
+        try {
+            $body = (new EventEnvelope(
+                eventId: $event->eventId,
+                eventType: $event->eventType,
+                eventVersion: $event->eventVersion,
+                occurredAt: $event->createdAt === null
+                    ? gmdate('Y-m-d\TH:i:s\Z')
+                    : (new DateTimeImmutable($event->createdAt, new DateTimeZone('UTC')))->format('Y-m-d\TH:i:s\Z'),
+                traceId: $event->traceId,
+                producer: $this->producer,
+                key: $event->eventKey,
+                payload: $event->payload,
+            ))->toJson();
 
-        $message = new AMQPMessage($body, [
-            'content_type' => 'application/json',
-            'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
-            'message_id' => $event->eventId,
-        ]);
+            $message = new AMQPMessage($body, [
+                'content_type' => 'application/json',
+                'delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT,
+                'message_id' => $event->eventId,
+            ]);
 
-        $this->channel->basic_publish($message, 'domain.events', $event->eventType, true);
-        $this->channel->wait_for_pending_acks_returns(5.0);
+            $this->channel->basic_publish($message, 'domain.events', $event->eventType, true);
+            $this->channel->wait_for_pending_acks_returns(5.0);
+            MetricsRegistry::instance()->inc('rabbitmq_publish_total', ['event_type' => $event->eventType, 'status' => 'ok']);
+        } catch (Throwable $exception) {
+            MetricsRegistry::instance()->inc('rabbitmq_publish_total', ['event_type' => $event->eventType, 'status' => 'error']);
+            throw $exception;
+        } finally {
+            MetricsRegistry::instance()->observe(
+                'rabbitmq_publish_duration_seconds',
+                max(0, hrtime(true) - $startedAt) / 1_000_000_000,
+                ['event_type' => $event->eventType],
+            );
+        }
     }
 }

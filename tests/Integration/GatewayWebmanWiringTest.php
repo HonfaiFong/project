@@ -70,7 +70,14 @@ final class GatewayWebmanWiringTest extends TestCase
                 self::assertInstanceOf(GetPersonaRequest::class, $request);
                 self::assertSame('123', (string)$request->getPersonaId());
 
-                return new GetPersonaResponse(['persona' => new PersonaProfile(['id' => '123', 'user_id' => '42'])]);
+                return new GetPersonaResponse(['persona' => new PersonaProfile([
+                    'id' => '123',
+                    'user_id' => '42',
+                    'type' => 1,
+                    'status' => 1,
+                    'identity_mode' => 'main',
+                    'profile_accessible' => true,
+                ])]);
             },
         );
         $container = config('container');
@@ -137,6 +144,17 @@ final class GatewayWebmanWiringTest extends TestCase
         $response = Http::getCallback('', 'ApiGateway', $protected['callback'], [], true, $protected['route'])($request);
         $this->assertSame(ErrorCode::AUTH_UNAUTHORIZED->httpStatus(), $response->getStatusCode());
         $this->assertSame('protected-123', json_decode($response->rawBody(), true)['request_id']);
+
+        foreach ([
+            ['GET', '/api/v1/posts/123'],
+            ['GET', '/api/v1/posts/123/comments'],
+        ] as [$method, $path]) {
+            [$status, $contentRoute] = Route::dispatch($method, $path);
+            $this->assertSame(Dispatcher::FOUND, $status);
+            $contentRequest = new GatewayRequest($method . ' ' . $path . " HTTP/1.1\r\nHost: localhost\r\n\r\n");
+            $contentResponse = Http::getCallback('', 'ApiGateway', $contentRoute['callback'], [], true, $contentRoute['route'])($contentRequest);
+            $this->assertSame(ErrorCode::AUTH_UNAUTHORIZED->httpStatus(), $contentResponse->getStatusCode());
+        }
 
         [$status, , $params] = Route::dispatch('GET', '/api/v1/personas/123');
         $this->assertSame(Dispatcher::FOUND, $status);

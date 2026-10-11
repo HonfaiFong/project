@@ -45,8 +45,12 @@ final class TraceContext
         ?string $traceparent = null,
     ): self {
         $reqId = $requestId ?: self::generateUuidV7();
-        $trId = $traceId ?: bin2hex(random_bytes(16));
-        $tp = $traceparent ?: sprintf('00-%s-%s-01', $trId, bin2hex(random_bytes(8)));
+        $incomingTraceparent = self::validTraceparent($traceparent);
+        $parentTraceId = $incomingTraceparent !== null ? substr($incomingTraceparent, 3, 32) : null;
+        $trId = $traceId ?: $parentTraceId ?: bin2hex(random_bytes(16));
+        $tp = $incomingTraceparent !== null && ($traceId === null || $parentTraceId === $trId)
+            ? $incomingTraceparent
+            : sprintf('00-%s-%s-01', $trId, bin2hex(random_bytes(8)));
 
         return new self(
             requestId: $reqId,
@@ -62,6 +66,11 @@ final class TraceContext
     public static function setCurrent(?self $context): void
     {
         self::$current = $context;
+    }
+
+    public static function peek(): ?self
+    {
+        return self::$current;
     }
 
     /** @throws RandomException */
@@ -103,6 +112,31 @@ final class TraceContext
         }
 
         return $headers;
+    }
+
+    public function withTraceparent(string $traceparent): self
+    {
+        return new self(
+            requestId: $this->requestId,
+            traceId: $this->traceId,
+            userId: $this->userId,
+            personaId: $this->personaId,
+            deviceId: $this->deviceId,
+            appVersion: $this->appVersion,
+            traceparent: $traceparent,
+        );
+    }
+
+    private static function validTraceparent(?string $traceparent): ?string
+    {
+        if ($traceparent === null || preg_match('/\A00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})\z/i', trim($traceparent), $matches) !== 1) {
+            return null;
+        }
+        if (trim($matches[1], '0') === '' || trim($matches[2], '0') === '') {
+            return null;
+        }
+
+        return strtolower(trim($traceparent));
     }
 
     /** @throws RandomException */

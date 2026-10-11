@@ -22,6 +22,7 @@
 - `social.v1.SocialService/Block`
 - `social.v1.SocialService/Unblock`
 - `social.v1.SocialService/BatchGetInteractionState`
+- `social.v1.SocialService/CheckBidirectionalBlock` (internal Chat query)
 
 ## 4. Consumed Events
 - None.
@@ -41,6 +42,11 @@ their reversals must not accept an ALIAS identity, and an unspecified or
 unknown operation fails closed. Public social responses must not use an alias
 id, nickname, or user id as a stable identifier.
 
-This service is currently a contract and README skeleton. The social tables,
-handlers, authorization flow, and public response projections are not yet
-implemented by the identity foundation.
+The Social worker now enforces the write/read boundary described above. The
+authenticated account comes from `x-user-id` metadata; request user ids and
+identity modes are checked for consistency but never promoted to actor
+identity. UserService validates the caller's persona as an active MAIN and
+validates follow targets as active MAIN personas. A block query is
+service-authenticated and returns true when either account has blocked the
+other. Content resource access is delegated through the optional internal
+ContentService authorizer; Social does not read content_db.

@@ -32,8 +32,11 @@ use Contracts\Gen\User\V1\ValidatePersonaOwnershipRequest;
 use Contracts\Gen\User\V1\ValidatePersonaOwnershipResponse;
 use Contracts\Gen\User\V1\ResolvePersonaModeRequest;
 use Contracts\Gen\User\V1\ResolvePersonaModeResponse;
+use Packages\GrpcCommon\BusinessActor;
 use Packages\GrpcCommon\ErrorStatusMapper;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\Observability\Span;
+use Packages\Observability\Tracer;
 use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
 use Services\UserService\Application\Service\UserApplicationService;
@@ -192,7 +195,8 @@ final readonly class UserGrpcService implements UserServiceInterface
         ContextInterface $ctx,
         ValidatePersonaOwnershipRequest $in
     ): ValidatePersonaOwnershipResponse {
-        return $this->call($ctx, 'ValidatePersonaOwnership', function () use ($in): ValidatePersonaOwnershipResponse {
+        return $this->call($ctx, 'ValidatePersonaOwnership', function () use ($ctx, $in): ValidatePersonaOwnershipResponse {
+            $this->assertTrustedUserMatchesRequest($ctx, $in->getUserId());
             $persona = $this->userService->assertPersonaUsableByUser(
                 userId: $this->requireId($in->getUserId(), 'user_id'),
                 personaId: $this->requireId($in->getPersonaId(), 'persona_id'),
@@ -215,7 +219,8 @@ final readonly class UserGrpcService implements UserServiceInterface
         ContextInterface $ctx,
         ResolvePersonaModeRequest $in
     ): ResolvePersonaModeResponse {
-        return $this->call($ctx, 'ResolvePersonaMode', function () use ($in): ResolvePersonaModeResponse {
+        return $this->call($ctx, 'ResolvePersonaMode', function () use ($ctx, $in): ResolvePersonaModeResponse {
+            $this->assertTrustedUserMatchesRequest($ctx, $in->getUserId());
             $persona = $this->userService->resolvePersonaMode(
                 userId: $this->requireId($in->getUserId(), 'user_id'),
                 mode: $in->getMode(),
@@ -298,15 +303,22 @@ final readonly class UserGrpcService implements UserServiceInterface
             traceparent: $this->metadataValue($ctx, 'traceparent'),
         );
         TraceContext::setCurrent($trace);
+        $scope = Tracer::enter('grpc.server', Span::KIND_SERVER, [
+            'rpc.system' => 'grpc',
+            'rpc.method' => $method,
+            'server.address' => getenv('SERVICE_NAME') ?: 'user-service',
+        ]);
         $this->logger->info("Handling User gRPC call: $method", ['method' => $method]);
 
         try {
             return $operation();
         } catch (GRPCException $e) {
+            $scope->fail($e);
             // GRPCException::getCode() 是 gRPC 传输状态（如 INVALID_ARGUMENT = 3），不是业务 ErrorCode，因此不能作为
             // x-app-error-code 传递。网关客户端通过自己的回退映射表处理传输状态。
             throw $e;
         } catch (Throwable $e) {
+            $scope->fail($e);
             // 各服务自行映射领域异常和响应尾部元数据。
             /** @noinspection DuplicatedCode */
             $this->logger->error("Error in $method: " . $e->getMessage(), [
@@ -325,6 +337,7 @@ final readonly class UserGrpcService implements UserServiceInterface
                 $e,
             );
         } finally {
+            $scope->close();
             TraceContext::reset();
         }
     }
@@ -389,6 +402,20 @@ final readonly class UserGrpcService implements UserServiceInterface
         }
 
         return is_scalar($value) && (string)$value !== '' ? (string)$value : null;
+    }
+
+    /**
+     * Identity authorization is only valid with a trusted account metadata
+     * value. Directory lookups intentionally do not use this guard, but
+     * ResolvePersonaMode and ValidatePersonaOwnership must never fall back to
+     * a body-only user id.
+     */
+    private function assertTrustedUserMatchesRequest(ContextInterface $ctx, int|string $requestUserId): void
+    {
+        $actor = BusinessActor::fromContext($ctx);
+        if ($actor->userId !== (string)$requestUserId) {
+            throw GRPCException::create('authenticated user does not match request', StatusCode::PERMISSION_DENIED);
+        }
     }
 
     private function toUserProfile(User $user): UserProfile

@@ -8,7 +8,10 @@ use Packages\Outbox\OutboxRelay;
 use Packages\Database\EloquentConnection;
 use Packages\Outbox\OutboxRepository;
 use Packages\Outbox\RabbitMqEventPublisher;
+use Packages\Observability\MetricsHttpServer;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
+
+MetricsHttpServer::startInBackground();
 
 for (;;) {
     try {
@@ -17,7 +20,7 @@ for (;;) {
             getenv('MYSQL_HOST') ?: 'mysql',
             getenv('MYSQL_PORT') ?: '3306',
             getenv('USER_DB_NAME') ?: 'user_db',
-        ), getenv('MYSQL_USER') ?: 'root', getenv('MYSQL_PASSWORD') ?: '', [
+        ), getenv('MYSQL_USER') ?: 'user_outbox_relay', getenv('MYSQL_PASSWORD') ?: '', [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         ]);
         $connection = new AMQPStreamConnection(

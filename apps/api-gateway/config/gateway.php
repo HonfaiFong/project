@@ -20,6 +20,10 @@ $deadlineSetting = DeadlineEnv::positiveMilliseconds(...);
 
 $grpcDeadlineSettings = [
     'GRPC_AUTH_TIMEOUT_MS'          => $deadlineSetting('GRPC_AUTH_TIMEOUT_MS', 300),
+    'GRPC_CONTENT_TIMEOUT_MS'       => $deadlineSetting('GRPC_CONTENT_TIMEOUT_MS', 500),
+    'GRPC_SOCIAL_TIMEOUT_MS'        => $deadlineSetting('GRPC_SOCIAL_TIMEOUT_MS', 500),
+    'GRPC_CHAT_TIMEOUT_MS'          => $deadlineSetting('GRPC_CHAT_TIMEOUT_MS', 700),
+    'GRPC_MESSAGE_TIMEOUT_MS'       => $deadlineSetting('GRPC_MESSAGE_TIMEOUT_MS', 700),
     'GRPC_SOCIAL_LOGIN_TIMEOUT_MS'  => $deadlineSetting('GRPC_SOCIAL_LOGIN_TIMEOUT_MS', 7000),
     'GRPC_SOCIAL_BIND_TIMEOUT_MS'   => $deadlineSetting('GRPC_SOCIAL_BIND_TIMEOUT_MS', 7000),
     'SOCIAL_HTTP_TIMEOUT_MS'        => $deadlineSetting('SOCIAL_HTTP_TIMEOUT_MS', 3000),
@@ -75,6 +79,26 @@ return [
         'user' => [
             'target' => getenv('GRPC_USER_SERVICE') ?: 'user-service:50052',
             'service_token' => trim((string)(getenv('GRPC_USER_TOKEN') ?: '')) ?: null,
+        ],
+        'content' => [
+            'target' => getenv('GRPC_CONTENT_SERVICE') ?: 'content-service:50053',
+            'timeout_ms' => $grpcDeadlineSettings['GRPC_CONTENT_TIMEOUT_MS'],
+            'service_token' => trim((string)(getenv('GRPC_CONTENT_TOKEN') ?: '')) ?: null,
+        ],
+        'social' => [
+            'target' => getenv('GRPC_SOCIAL_SERVICE') ?: 'social-service:50054',
+            'timeout_ms' => $grpcDeadlineSettings['GRPC_SOCIAL_TIMEOUT_MS'],
+            'service_token' => trim((string)(getenv('GRPC_SOCIAL_TOKEN') ?: '')) ?: null,
+        ],
+        'chat' => [
+            'target' => getenv('GRPC_CHAT_SERVICE') ?: 'chat-service:50055',
+            'timeout_ms' => $grpcDeadlineSettings['GRPC_CHAT_TIMEOUT_MS'],
+            'service_token' => trim((string)(getenv('GRPC_CHAT_TOKEN') ?: '')) ?: null,
+        ],
+        'message' => [
+            'target' => getenv('GRPC_MESSAGE_SERVICE') ?: 'message-service:50056',
+            'timeout_ms' => $grpcDeadlineSettings['GRPC_MESSAGE_TIMEOUT_MS'],
+            'service_token' => trim((string)(getenv('GRPC_MESSAGE_TOKEN') ?: '')) ?: null,
         ],
     ],
     'social_login_rate_limit' => [

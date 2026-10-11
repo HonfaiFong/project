@@ -1,0 +1,70 @@
+groups:
+  - name: social-backend-red-use
+    rules:
+      - alert: ApiGatewayHighErrorRate
+        expr: |
+          sum(rate(http_server_requests_total{status=~"5.."}[5m]))
+            /
+          clamp_min(sum(rate(http_server_requests_total[5m])), 1)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: API gateway 5xx error rate is above 5%
+          description: More than 5% of API gateway requests have returned a 5xx for 10 minutes.
+
+      - alert: ApiGatewayHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_server_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: API gateway p95 latency is above one second
+
+      - alert: GrpcDependencyFailures
+        expr: |
+          sum by (target) (rate(grpc_client_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: gRPC dependency calls are failing
+          description: "{{ $labels.target }} has reported gRPC client errors."
+
+      - alert: RedisDependencyDown
+        expr: dependency_up{dependency="redis"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Redis dependency is unavailable
+
+      - alert: OutboxBacklogGrowing
+        expr: outbox_backlog > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Outbox backlog is above 100 events
+          description: The relay is not draining the currently observable outbox backlog.
+
+      - alert: RabbitMqPublisherFailures
+        expr: sum(rate(rabbitmq_publish_total{status="error"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: RabbitMQ publication is failing
+          description: The outbox publisher is reporting broker publication failures.
+
+      - alert: ProcessMemorySaturation
+        expr: process_resident_memory_bytes > 0.8 * 1024 * 1024 * 1024
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: PHP process memory is above 800 MiB
+

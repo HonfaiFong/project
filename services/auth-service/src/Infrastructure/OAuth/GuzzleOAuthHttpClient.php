@@ -7,6 +7,8 @@ namespace Services\AuthService\Infrastructure\OAuth;
 use Contracts\Errors\ErrorCode;
 use GuzzleHttp\ClientInterface;
 use InvalidArgumentException;
+use Packages\Observability\Span;
+use Packages\Observability\Tracer;
 use RuntimeException;
 use Throwable;
 
@@ -36,30 +38,43 @@ final readonly class GuzzleOAuthHttpClient implements OAuthHttpClientInterface
             throw $this->upstreamError();
         }
 
+        $scope = Tracer::enter('http.client', Span::KIND_CLIENT, [
+            'http.request.method' => 'GET',
+            'server.address' => $host,
+            'url.scheme' => $scheme,
+        ]);
         try {
-            $response = $this->client->request('GET', $url, [
-                'query'           => $query,
-                'connect_timeout' => $this->connectTimeoutMs / 1000,
-                'timeout'         => $this->timeoutMs / 1000,
-                'http_errors'     => false,
-                'allow_redirects'  => false,
-                'headers'         => ['Accept' => 'application/json, text/plain;q=0.9'],
-            ]);
-        } catch (Throwable $e) {
-            throw new RuntimeException(
-                ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->message(),
-                ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->value,
-                $e
-            );
-        }
+            try {
+                $response = $this->client->request('GET', $url, [
+                    'query'           => $query,
+                    'connect_timeout' => $this->connectTimeoutMs / 1000,
+                    'timeout'         => $this->timeoutMs / 1000,
+                    'http_errors'     => false,
+                    'allow_redirects'  => false,
+                    'headers'         => ['Accept' => 'application/json, text/plain;q=0.9'],
+                ]);
+            } catch (Throwable $e) {
+                throw new RuntimeException(
+                    ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->message(),
+                    ErrorCode::AUTH_SOCIAL_UPSTREAM_ERROR->value,
+                    $e
+                );
+            }
 
-        $status = $response->getStatusCode();
-        $body = (string)$response->getBody();
-        if ($status < 200 || $status >= 300 || strlen($body) > $this->maxBodyBytes) {
-            throw $this->upstreamError();
-        }
+            $status = $response->getStatusCode();
+            $scope->span->setAttribute('http.response.status_code', $status);
+            $body = (string)$response->getBody();
+            if ($status < 200 || $status >= 300 || strlen($body) > $this->maxBodyBytes) {
+                throw $this->upstreamError();
+            }
 
-        return $body;
+            return $body;
+        } catch (Throwable $exception) {
+            $scope->fail($exception);
+            throw $exception;
+        } finally {
+            $scope->close();
+        }
     }
 
     private function upstreamError(): RuntimeException

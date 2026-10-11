@@ -1,0 +1,19 @@
+version: '3'
+
+server:
+  command: php /app/services/message-service/bin/server.php
+  relay: pipes
+
+grpc:
+  listen: tcp://0.0.0.0:50056
+  proto:
+    - /app/contracts/proto/message/v1/message.proto
+    - /app/contracts/proto/common/v1/identity.proto
+    - /app/contracts/proto/common/v1/pagination.proto
+    - /app/contracts/proto/common/v1/health.proto
+  pool:
+    num_workers: 2
+
+logs:
+  mode: production
+  level: info

@@ -109,10 +109,38 @@ message MarkReadResponse {
   bool success = 1;
 }
 
+// Internal service-to-service snapshot. It is intentionally separate from
+// PublicConversation: MessageService needs the immutable member identity that
+// was selected when the conversation was created, while callers outside the
+// trusted service boundary must never receive the account/persona columns.
+message ConversationMemberSnapshot {
+  uint64 user_id = 1;
+  uint64 persona_id = 2;
+  common.v1.IdentityMode identity_mode = 3;
+  string display_name = 4;
+  string avatar_key = 5;
+  string anonymous_ref = 6;
+  string scope_type = 7;
+  string scope_id = 8;
+  bool profile_accessible = 9;
+}
+
+message GetConversationMemberSnapshotRequest {
+  uint64 conversation_id = 1;
+}
+
+message GetConversationMemberSnapshotResponse {
+  ConversationMemberSnapshot member = 1;
+  bool allowed = 2;
+  string denial_reason = 3;
+}
+
 service ChatService {
   rpc GetOrCreatePrivateConversation(GetOrCreatePrivateConversationRequest) returns (GetOrCreatePrivateConversationResponse);
   rpc GetConversation(GetConversationRequest) returns (GetConversationResponse);
   rpc ListConversations(ListConversationsRequest) returns (ListConversationsResponse);
   rpc CheckCanMessage(CheckCanMessageRequest) returns (CheckCanMessageResponse);
   rpc MarkRead(MarkReadRequest) returns (MarkReadResponse);
+  // Internal MessageService -> ChatService authorization/snapshot hop.
+  rpc GetConversationMemberSnapshot(GetConversationMemberSnapshotRequest) returns (GetConversationMemberSnapshotResponse);
 }

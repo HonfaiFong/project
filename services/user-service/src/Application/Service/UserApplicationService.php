@@ -375,8 +375,16 @@ final class UserApplicationService
     public function getPersona(string $personaId): Persona
     {
         $persona = $this->personaRepo->findById($personaId);
-        if (!$persona || $persona->type !== PersonaType::MAIN->value) {
+        if (!$persona
+            || $persona->type !== PersonaType::MAIN->value
+            || $persona->status !== 1
+            || $persona->deletedAt !== null
+        ) {
             throw new RuntimeException('Persona not found', ErrorCode::PERSONA_NOT_FOUND->value);
+        }
+        $user = $this->userRepo->findById($persona->userId);
+        if (!$user || !$user->isActive()) {
+            throw new RuntimeException(ErrorCode::PERSONA_NOT_FOUND->message(), ErrorCode::PERSONA_NOT_FOUND->value);
         }
         return $persona;
     }

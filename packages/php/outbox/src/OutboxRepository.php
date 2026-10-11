@@ -125,6 +125,12 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
             ->where('claimed_at', '<', $cutoff)->update(['status' => 0, 'claimed_at' => null]);
     }
 
+    /** Number of unpublished events, including rows currently claimed by a relay. */
+    public function backlogDepth(): int
+    {
+        return (int)$this->model->newQuery()->whereIn('status', [0, 2])->count();
+    }
+
     public function markPublished(string $id): void
     {
         $now = gmdate('Y-m-d H:i:s.v');

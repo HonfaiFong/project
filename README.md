@@ -94,6 +94,24 @@ curl http://127.0.0.1:8787/health
 
 > **启动与迁移顺序说明**：`make up` 依次启动 MySQL、Redis、RabbitMQ，导入 broker 拓扑，执行数据库迁移，再启动业务服务。对象存储按需运行 `make storage-up`。
 
+Redis 在 Compose 中启用 AOF（`appendfsync everysec`）并使用持久化命名卷
+`redis_data:/data`。访问令牌和设备撤销键属于安全状态，不应按普通缓存处理；因此
+不要使用 `docker compose down -v`，除非明确接受丢弃本地撤销状态。AOF 的每秒 fsync
+策略允许最多约一秒的崩溃窗口，部署仍应使用受控关停和备份/监控。
+当前普通缓存与撤销状态仍共用 Redis 实例和命名卷；本次修复不改变缓存隔离拓扑，
+普通缓存必须继续设置 TTL，生产环境如需独立生命周期应另行拆分 Redis 实例/卷。
+
+可用下面的真实运行验证重启恢复语义：脚本写入 token/device 撤销键，调用 Redis
+7.2 的 `WAITAOF` 等待本地 AOF fsync，重启 Redis，再按撤销判定读取键并断言访问仍被拒绝：
+
+```bash
+COMPOSE_ENV_FILE=.env.example bash scripts/redis_revocation_persistence_test.sh
+```
+
+脚本会清理本次生成的唯一测试键；若 Docker/Redis 不可用则以非零状态报告未运行，不能
+替代静态契约测试。没有 Docker 时仍可运行 `vendor/bin/phpunit --testsuite Unit`
+验证 Compose 的 AOF、fsync 和命名卷契约；这项静态检查不声称完成重启恢复验证。
+
 AuthService 与 UserService 的 gRPC 端口只在 Compose 内部网络暴露，不发布到宿主机；Gateway→Auth、Gateway→User、Auth→User 分别使用独立的 `INTERNAL_RPC_*_TOKEN`，并通过 `SERVICE_NAME` 做调用方和方法授权。部署前必须把 `.env` 中的三个 token 替换为至少 32 字节的随机值。
 
 MySQL、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 服务之间继续使用内部 hostname 通信，需要外部访问时再显式设置对应的 `*_BIND_ADDRESS`。
@@ -156,15 +174,17 @@ php scripts/verify_token_latency_probe.php
 
 每个样本包含 HTTP、Gateway 的 VerifyToken 调用及接口后续 UserService 查询，报告 P50/P95/P99、失败数与超时率；这些值是整个受认证 HTTP 请求的耗时，不能当作单独 VerifyToken RPC 的耗时。HTTP、业务、传输、超时错误或 P95 达到或超过预算都会让探针失败；P95/P99 的稳定性仍取决于样本量、持续时间和负载。探针不自动执行生产压测或重启服务；部署前应在专用环境中分别采集冷启动/重启、Redis/MySQL 延迟扰动和不同并发度的结果，并结合连接池容量判断。
 
-内部 gRPC 当前明确使用明文传输：`UnaryGrpcClient` 使用 `ChannelCredentials::createInsecure()`，RoadRunner 未配置 TLS。请求、手机号、会话数据和 `x-service-token` 都可能被能够监听内部网络的主体读取。当前部署仅适用于单机、受控且隔离的 Compose 网络；不得发布 Auth/User RPC 端口，不得把不可信容器接入该网络。应用层 token 和方法白名单提供调用授权，不提供传输机密性。
+内部 gRPC 传输由 `GRPC_TLS_MODE` 控制。`.env.example` 明确选择 `plaintext` 供本地开发；当 `APP_ENV=production` 时，`GrpcTlsConfig` 和 `scripts/roadrunner-entrypoint.sh` 都拒绝明文或缺失证书。`tls` 模式从 `GRPC_TLS_CA_FILE` 读取 CA 并要求 `GRPC_TLS_SERVER_NAME`（或按目标服务命名的变量）进行服务名验证；`mtls` 另外读取 `GRPC_TLS_CERT_FILE`/`GRPC_TLS_KEY_FILE`。证书只从部署注入的文件加载，不写入 Git、镜像或日志。应用层 `x-service-token` 和方法白名单仍保留，负责调用授权而非传输加密。
 
-跨主机、共享集群或不可信网络部署前，必须同时配置服务端 TLS 与客户端 CA/服务名验证；采用 mTLS 时还应校验客户端证书身份，并保留现有调用方及方法授权。证书和三个独立 RPC 凭证应由密钥管理系统注入，禁止写入镜像、Git 或日志。建立定期轮换、到期告警和泄露后的紧急撤销流程。当前每个调用方只接受一个 token，尚不支持双凭证无缝轮换：应在维护窗口停止相关调用方流量，替换服务端与客户端凭证并重启 worker，运行 `scripts/test_internal_rpc.php` 验证新凭证成功、旧凭证失败后恢复流量。未来无停机轮换需要有时限的双凭证接受窗口，待调用方全部切换后撤销旧凭证；TLS/mTLS 与双凭证窗口均为后续能力，当前未实现。
+RoadRunner 的 gRPC 插件在六个服务配置上通过 `grpc.tls` 的官方覆盖选项接线：生产 `tls` 使用服务端证书，生产 `mtls` 使用 `root_ca` 与 `require_and_verify_client_cert`。客户端证书是否属于哪个调用方由 TLS 层验证；PHP worker 不假装自行验证证书身份，应用层 token 仍是授权边界。若部署在无法直接提供这些文件的托管平台，应在 gRPC sidecar/ingress 终止并重新建立 mTLS，且只允许受控的后端网络访问明文后端端口。
+
+证书轮换仍需要重启受影响的 RoadRunner worker（当前调用方只接受一个 token，尚不支持双凭证无缝轮换）。轮换后应运行 `scripts/test_internal_rpc.php` 验证新凭证成功、旧凭证失败，再恢复流量。
 
 已签发 JWT 的用户状态策略：AuthService 每次 `VerifyToken` 验签及撤销检查后，先校验设备仍属于 JWT 中的用户，再通过已授权的 `UserService.GetUser` 读取主库用户状态，不缓存 active 状态。封禁（非 active）或软/硬删除后，下一次受保护 HTTP 请求即拒绝旧 JWT，刷新与新登录同样拒绝；Redis、数据库或用户目录超时、不可用时拒绝访问并返回 HTTP 503（`SERVICE_UNAVAILABLE` / `RPC_TIMEOUT`），不会将基础设施故障报告为凭证失效的 401。因此每次认证新增一次 Auth DB 设备归属查询和一次内部 RPC/用户主库查询，部署时需要为数据库及 UserService 的容量和可用性留出预算。此策略是状态暂停：解封后，尚未到期且未被登出撤销的 JWT 可恢复访问；删除后的 ID 不得复用。已完成认证的在途请求不被回滚，已建立的 WebSocket 连接或先前签发的短期 WS ticket 不属于 JWT 校验路径，尚无封禁广播断连能力。
 
 设备隔离迁移 `0006_device_user_scope.sql` 必须在暂停所有 AuthService 会话写入、备份 `devices`/`refresh_tokens` 后执行，再部署本次 Repository 与 JWT 校验代码、重启全部 worker 后恢复流量。它保留现有设备 ID 和当前归属，先撤销设备缺失或用户归属错配的历史 refresh token，再建立 `(user_id, device_uuid)` 唯一索引并删除旧 UUID 全局唯一索引。历史设备行被覆盖前的归属无法可靠重建，因此不把错配 token 迁给新设备；受影响用户需重新登录。旧 JWT 的设备归属不符时同样被拒绝，正确归属的会话继续有效。MySQL DDL 隐式提交，迁移不能依赖事务回滚；迁移失败时保持暂停状态，修复并重跑后确认索引与错配 token 撤销结果。禁止在新索引上回滚运行旧 UUID 查询代码。
 
-Snowflake Worker ID 说明：MVP 阶段 `compose.yaml` 已为 auth-service 注入 `WORKER_ID=1`、user-service 注入 `WORKER_ID=2`；容器内多个 RoadRunner worker 进程由 `WorkerId::resolve()` 自动按 `pid % 32` 消散，在单容器小并发阶段可正常工作。注意：`pid % 32` 在数学上无法杜绝跨进程碰撞，在生产环境横向扩容（多 Pod × 多 RoadRunner Worker）前必须切换为基于 Redis `SET NX` 租约分发的动态 WorkerId Allocator（0-1023）并定时续期。
+Snowflake Worker ID 说明：`WORKER_ID` 仍表示服务槽位（0-31），每个 RoadRunner worker 通过 Redis `SET NX EX` 在该槽位的 32 个进程槽中取得带所有权 token 的租约；租约按单调时钟定期续期，并在生成 ID 前检查所有权。Redis 故障、租约续期失败或租约已被回收时，进程拒绝继续生成 ID；正常退出会用 token 比对后释放，异常退出由 TTL 回收。因此同一 Redis 租约命名空间内的副本不会因 PID 重用或 `pid % 32` 碰撞而同时使用同一个 worker ID。部署所有使用 Snowflake 的服务时必须提供 `REDIS_HOST`/`REDIS_PORT`（可选 `REDIS_PASSWORD`），并可用 `WORKER_ID_LEASE_NAMESPACE`、`WORKER_ID_LEASE_TTL_SECONDS` 配置共享命名空间与 TTL。
 
 ---
 
@@ -200,6 +220,34 @@ make proto
 - `chat_db`: 存储 `conversations`, `conversation_members`, `outbox_events`
 - `message_db`: 存储 `messages`, `outbox_events` (预置 ShardRouter 槽位)
 
+### MySQL 账号边界
+
+业务容器不使用 root。`infra/docker/mysql/init/02-runtime-accounts.sh` 创建并幂等重置以下账号；每个账号都使用独立的环境变量密码：
+
+| 账号 | 授权范围 | 用途 |
+| :--- | :--- | :--- |
+| `auth_runtime` | `auth_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | AuthService |
+| `user_runtime` | `user_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | UserService |
+| `content_runtime` | `content_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | ContentService |
+| `social_runtime` | `social_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | SocialService |
+| `chat_runtime` | `chat_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | ChatService |
+| `message_runtime` | `message_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | MessageService |
+| `user_outbox_relay` | 仅 `user_db.outbox_events` 的 `SELECT/UPDATE` | User outbox relay |
+| `migration_ddl` | 迁移所需的 DDL/DML（仅匹配名称以 `_db`/`meta` 结尾的逻辑库）；无 `GRANT OPTION`、无 `CREATE USER` | Phinx |
+
+运行时账号没有跨库访问、建表、删表或授权能力；Outbox relay 也不能读写 `users`/`personas`。`MYSQL_PASSWORD` 仅是 MySQL 管理员密码，不能注入 PHP 业务容器；`MYSQL_MIGRATION_PASSWORD` 只用于 `database-migrate`，不得与其它账号复用。建议用 `openssl rand -hex 32` 为每个 `MYSQL_*_PASSWORD` 生成独立值。
+
+初始化脚本只会由 MySQL 官方镜像在**空数据卷**首次启动时自动执行。已有环境升级或轮换凭据时，先在 `.env` 填好新值并重建 MySQL 容器（不要删除数据卷），再手工重跑同一个幂等脚本：
+
+```bash
+docker compose up -d --force-recreate mysql
+docker compose exec mysql sh /docker-entrypoint-initdb.d/02-runtime-accounts.sh
+# 轮换账号密码后重启使用该账号的业务容器；下一次 make migrate 会使用新迁移凭据
+docker compose up -d --force-recreate auth-service user-service user-outbox-relay content-service social-service chat-service message-service
+```
+
+脚本每次都会 `ALTER USER` 并重新收敛授权，因此可重复执行；执行后用 `SHOW GRANTS FOR 'auth_runtime'@'%';` 等只读命令核对权限。新部署不再授予 `root@'%'` 远程通配权限；若旧数据卷曾执行过旧基线，请由 DBA 在维护窗口审查并撤销遗留的 `root@'%'` 权限，不要把 root 凭据回填到任何 PHP 服务。
+
 安装 Composer 依赖后应用待执行迁移（使用现有 PHP runtime 镜像）：
 ```bash
 make migrate
@@ -215,7 +263,7 @@ bash scripts/run_migrations.sh create CreateExampleTable
 
 社交身份的应用 ID、命名空间和外部 subject/openid/unionid 使用 `utf8mb4_bin` 比较，区分大小写，保留字段长度、可空性和既有唯一键。部署时需要具备对应数据库 DDL 权限的迁移账号，迁移可能等待表元数据锁，应在合适的发布窗口执行。
 
-本机直接运行 Phinx 时，显式提供 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD` 环境变量（配置不自动读取 `.env`）。`MYSQL_SCHEMA_PREFIX` 可为隔离测试添加库名前缀，默认空；集成测试仅使用随机 `social_test_` 前缀的独立数据库。
+本机直接运行 Phinx 时，显式提供 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER=migration_ddl` 和 `MYSQL_MIGRATION_PASSWORD` 环境变量（配置不自动读取 `.env`）；兼容旧调用时也接受 `MYSQL_PASSWORD` 作为迁移密码。`MYSQL_SCHEMA_PREFIX` 可为隔离测试添加库名前缀，默认空；集成测试仅使用随机 `social_test_` 前缀的独立数据库。
 
 配置加载会连接数据库并初始化 `meta`，`status` 也可能初始化 Phinx 记录表。首次旧 Schema 接管需要查询实际表结构，尚不支持全新库上的完整 `--dry-run`；`--fake` 保留 Phinx 原有的只标记版本语义，不能用于实际部署变更。
 
@@ -265,7 +313,7 @@ make e2e
 make e2e-social
 ```
 
-MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TEST_REDIS_*` 和 `RABBITMQ_INTEGRATION=1` 等连接参数，MySQL 测试库名称必须以 `social_test_` 开头。`make test` 执行 Unit 套件（禁止 skipped）和 Go tests；准备好上述依赖后，使用 `make test-integration` 执行 Integration 套件（禁止 skipped）。也可使用 `vendor/bin/phpunit --fail-on-skipped` 验证全套实际执行；缺少基础设施产生的跳过不代表通过。CI 的 MySQL/Redis 和 RabbitMQ 测试在各自依赖就绪后分步执行，E2E 失败同样阻止 CI 通过。
+MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TEST_REDIS_*` 和 `RABBITMQ_INTEGRATION=1` 等连接参数，MySQL 测试库名称必须以 `social_test_` 开头。`tests/Integration/MySqlLeastPrivilegeTest.php` 是单独的真实权限黑盒测试：在一次性 MySQL 实例上设置 `MYSQL_PRIVILEGE_TEST=1`，并注入 `MYSQL_PASSWORD` 与各 `MYSQL_*_RUNTIME_PASSWORD`/`MYSQL_MIGRATION_PASSWORD` 后执行 `vendor/bin/phpunit --filter MySqlLeastPrivilegeTest`；它会创建临时 probe 表，验证运行时账号不能跨库或 DDL、relay 只能读写 outbox、迁移账号可 DDL 但不能建用户，结束时清理 probe。`make test` 执行 Unit 套件（禁止 skipped）和 Go tests；准备好上述依赖后，使用 `make test-integration` 执行 Integration 套件（禁止 skipped）。也可使用 `vendor/bin/phpunit --fail-on-skipped` 验证全套实际执行；缺少基础设施产生的跳过不代表通过。CI 的 MySQL/Redis 和 RabbitMQ 测试在各自依赖就绪后分步执行，E2E 失败同样阻止 CI 通过。
 
 ---
 
@@ -304,8 +352,8 @@ MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TE
 | `5672` | AMQP | RabbitMQ 任务与事件发布 |
 | `5552` | Stream | RabbitMQ Streams 原生协议 |
 | `15672` | HTTP | RabbitMQ Management |
-| `9000` | S3 API | RustFS 对象存储 API（需 `--profile storage`） |
-| `9001` | HTTP | RustFS 控制台（需 `--profile storage`） |
+| `9000` | S3 API | RustFS 对象存储 API（需 `--profile storage`，宿主默认仅绑定 `127.0.0.1`） |
+| `9001` | HTTP | RustFS 控制台（需 `--profile storage`，宿主默认仅绑定 `127.0.0.1`） |
 
 ---
 

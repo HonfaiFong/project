@@ -10,6 +10,7 @@ use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
+use Packages\Observability\MetricsHttpServer;
 use Packages\Outbox\Model\OutboxEvent;
 use Packages\Outbox\OutboxRepository;
 use Packages\Phone\PhoneNormalizer;
@@ -31,13 +32,15 @@ use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
 use Spiral\RoadRunner\Worker;
 
+MetricsHttpServer::startInBackground();
+
 $logger = new JsonLogger('user-service', getenv('SERVICE_INSTANCE_ID') ?: 'user-01');
 
 // 数据库连接
 $mysqlHost = getenv('MYSQL_HOST') ?: '127.0.0.1';
 $mysqlPort = getenv('MYSQL_PORT') ?: '3306';
-$mysqlUser = getenv('MYSQL_USER') ?: 'root';
-$mysqlPass = getenv('MYSQL_PASSWORD') ?: 'root_password';
+$mysqlUser = getenv('MYSQL_USER') ?: 'user_runtime';
+$mysqlPass = getenv('MYSQL_PASSWORD') ?: '';
 $mysqlDb   = getenv('USER_DB_NAME') ?: 'user_db';
 
 // 启动重试循环有意沿用其他服务的工作进程启动方式，使每个服务都能独立部署。
@@ -92,10 +95,16 @@ $phoneNormalizer = new PhoneNormalizer(trim((string)(getenv('PHONE_DEFAULT_REGIO
 $phoneNormalizer->normalize('+8613800000000');
 $gatewayRpcToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_USER_TOKEN') ?: ''));
 $authRpcToken = trim((string)(getenv('INTERNAL_RPC_AUTH_USER_TOKEN') ?: ''));
+$contentRpcToken = trim((string)(getenv('INTERNAL_RPC_CONTENT_USER_TOKEN') ?: ''));
+$socialRpcToken = trim((string)(getenv('INTERNAL_RPC_SOCIAL_USER_TOKEN') ?: ''));
+$chatRpcToken = trim((string)(getenv('INTERNAL_RPC_CHAT_USER_TOKEN') ?: ''));
 $internalRpcAuthorizer = new InternalRpcAuthorizer(
     callerTokens: [
         'api-gateway' => $gatewayRpcToken,
         'auth-service' => $authRpcToken,
+        'content-service' => $contentRpcToken,
+        'social-service' => $socialRpcToken,
+        'chat-service' => $chatRpcToken,
     ],
     allowedMethodsByCaller: [
         // Keep the gateway's public surface explicit so adding an internal
@@ -116,6 +125,9 @@ $internalRpcAuthorizer = new InternalRpcAuthorizer(
             'Check',
         ],
         'auth-service' => ['FindOrCreateByPhone', 'FindOrCreateBySocialIdentity', 'GetUser'],
+        'content-service' => ['GetPersona', 'ResolvePersonaMode', 'ValidatePersonaOwnership'],
+        'social-service' => ['GetUser', 'GetPersona', 'ResolvePersonaMode', 'ValidatePersonaOwnership'],
+        'chat-service' => ['GetPersona', 'ResolvePersonaMode', 'ValidatePersonaOwnership'],
     ],
 );
 

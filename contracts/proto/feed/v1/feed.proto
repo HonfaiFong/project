@@ -16,6 +16,10 @@ message FeedItem {
 }
 
 message GetFeedRequest {
+  // Read-only context for the authenticated account. Implementations must
+  // derive the account from trusted gateway metadata and resolve persona_id
+  // only as that account's active MAIN snapshot. This field is not an ALIAS
+  // selector and cannot change the caller's interaction identity.
   uint64 user_id = 1;
   uint64 persona_id = 2;
   common.v1.PaginationRequest pagination = 3;

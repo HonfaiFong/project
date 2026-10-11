@@ -12,6 +12,7 @@ use Packages\GrpcCommon\DeadlineEnv;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
+use Packages\Observability\MetricsHttpServer;
 use Packages\Phone\PhoneNormalizer;
 use Contracts\Gen\Auth\V1\AuthServiceInterface;
 use Contracts\Gen\Auth\V1\BindSocialIdentityRequest;
@@ -49,13 +50,15 @@ if ($socialHttpConnectTimeoutMs > $socialHttpTimeoutMs) {
     throw new InvalidArgumentException('SOCIAL_HTTP_CONNECT_TIMEOUT_MS must not exceed SOCIAL_HTTP_TIMEOUT_MS');
 }
 
+MetricsHttpServer::startInBackground();
+
 $logger = new JsonLogger('auth-service', getenv('SERVICE_INSTANCE_ID') ?: 'auth-01');
 
 // 数据库连接
 $mysqlHost = getenv('MYSQL_HOST') ?: '127.0.0.1';
 $mysqlPort = getenv('MYSQL_PORT') ?: '3306';
-$mysqlUser = getenv('MYSQL_USER') ?: 'root';
-$mysqlPass = getenv('MYSQL_PASSWORD') ?: 'root_password';
+$mysqlUser = getenv('MYSQL_USER') ?: 'auth_runtime';
+$mysqlPass = getenv('MYSQL_PASSWORD') ?: '';
 $mysqlDb   = getenv('AUTH_DB_NAME') ?: 'auth_db';
 
 // 下方两个启动重试循环有意保持独立，各依赖保留自身探测和日志；跨服务去重不在本启动脚本的范围内。
@@ -112,10 +115,10 @@ if (!$redis) {
     exit(1);
 }
 
-// WorkerId::resolve() 使用 CSPRNG，可能抛出 RandomException；工作进程不能在缺少稳定工作节点 ID 时启动，因此失败
-// 须终止启动，不能被吞掉。
+// WorkerId::resolve() 使用 Redis SET NX EX 租约（及 CSPRNG 所有权 token）；
+// 工作进程不能在缺少稳定工作节点 ID 或 Redis 租约时启动，因此失败须终止启动，不能被吞掉。
 /** @noinspection PhpUnhandledExceptionInspection */
-$snowflake = new Snowflake(WorkerId::resolve());
+$snowflake = new Snowflake(WorkerId::resolve($redis));
 $authRepo = new EloquentAuthRepository($pdo, $snowflake);
 $jwtSecret = trim((string)getenv('JWT_SECRET'));
 $wsSecret = trim((string)getenv('WS_TICKET_SECRET'));

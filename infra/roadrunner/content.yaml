@@ -1,0 +1,17 @@
+version: '3'
+
+server:
+  command: php /app/services/content-service/bin/server.php
+  relay: pipes
+
+grpc:
+  listen: tcp://0.0.0.0:50053
+  proto:
+    - /app/contracts/proto/content/v1/content.proto
+    - /app/contracts/proto/common/v1/health.proto
+  pool:
+    num_workers: 2
+
+logs:
+  mode: production
+  level: info

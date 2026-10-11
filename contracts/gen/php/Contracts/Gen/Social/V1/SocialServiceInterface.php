@@ -73,4 +73,13 @@ interface SocialServiceInterface extends GRPC\ServiceInterface
     * @throws GRPC\Exception\InvokeException
     */
     public function BatchGetInteractionState(GRPC\ContextInterface $ctx, BatchGetInteractionStateRequest $in): BatchGetInteractionStateResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param CheckBidirectionalBlockRequest $in
+    * @return CheckBidirectionalBlockResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function CheckBidirectionalBlock(GRPC\ContextInterface $ctx, CheckBidirectionalBlockRequest $in): CheckBidirectionalBlockResponse;
 }

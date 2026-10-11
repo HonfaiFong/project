@@ -16,12 +16,11 @@
   - `outbox_events`
 
 ## 3. gRPC API
-- `content.v1.ContentService/CreatePost`
-- `content.v1.ContentService/GetPost`
-- `content.v1.ContentService/BatchGetPosts`
-- `content.v1.ContentService/DeletePost`
-- `content.v1.ContentService/CreateComment`
-- `content.v1.ContentService/ListComments`
+- Public writes/reads: `CreatePost`, `GetPost`, `BatchGetPosts`, `DeletePost`,
+  `CreateComment`, `ListComments`, `DeleteComment`.
+- Internal authorization: `CanAccessResource` for Social/Chat/Message and
+  `ResolveAnonymousTarget` for Chat. `UpdatePostStatus` is restricted to the
+  moderation service and is not exposed by the HTTP gateway.
 
 ## 4. Consumed Events
 - `moderation.completed.v1` (Updates moderation status to PASS/REJECT)
@@ -34,6 +33,7 @@
 
 ## 6. Dependencies
 - MySQL (`content_db`)
+- SocialService block authorization RPC (`CheckBidirectionalBlock`)
 - Redis (`counter:post:{post_id}`)
 - RabbitMQ Streams (Transactional Outbox events)
 
@@ -50,7 +50,24 @@ authorization fields and are not public author identity fields.
 DeletePost uses a trusted authenticated user_id for account ownership checks,
 so removing anonymous content does not require the snapshot persona to be MAIN.
 
-This service is currently a contract and README skeleton. Post/comment
-business handlers, snapshot persistence, and public projections are not yet
-implemented here. Do not treat the existing internal Post/Comment models
-as the finished public API.
+The RoadRunner worker performs every write through authenticated `x-user-id`
+metadata and calls UserService with a separate service token to resolve and
+validate the requested MAIN or server-owned ALIAS operation. It stores
+immutable author snapshots and account-scoped request IDs, and public
+responses contain only `PublicPost`/`PublicComment` projections. Anonymous
+references are resolved with exact binary scope/ref comparison, active root
+visibility checks, and bidirectional block checks before Chat can use them.
+Block state is obtained through SocialService's internal RPC; ContentService
+does not open `social_db`. SocialService resource callers receive only the
+minimal owner IDs needed to enforce that check locally, avoiding a recursive
+Social-to-Content-to-Social authorization call.
+
+For an ALIAS write, `alias_display_name` is copied into that post or comment
+snapshot after the factory's UTF-8 and 64-character validation. An empty value
+uses the factory default `匿名用户`; the persona record is never changed, and
+each comment stores its own display snapshot even when it reuses its post's
+scope-bound anonymous reference.
+
+The service is deployable through `compose.yaml` on port 50053. It requires
+`ANONYMOUS_IDENTITY_KEY`, caller-specific internal RPC tokens, and the
+content-to-user token shown in `.env.example`.

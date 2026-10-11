@@ -29,6 +29,8 @@ use Contracts\Gen\Auth\V1\VerifyTokenResponse;
 use Packages\GrpcCommon\DeadlineContext;
 use Packages\GrpcCommon\ErrorStatusMapper;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\Observability\Span;
+use Packages\Observability\Tracer;
 use Psr\Log\LoggerInterface;
 use Packages\Tracing\TraceContext;
 use Random\RandomException;
@@ -250,15 +252,22 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
             traceparent: $this->metadataValue($ctx, 'traceparent'),
         );
         TraceContext::setCurrent($trace);
+        $scope = Tracer::enter('grpc.server', Span::KIND_SERVER, [
+            'rpc.system' => 'grpc',
+            'rpc.method' => $method,
+            'server.address' => getenv('SERVICE_NAME') ?: 'auth-service',
+        ]);
         $this->logger->info("Handling Auth gRPC call: $method", ['method' => $method]);
 
         try {
             return $operation();
         } catch (GRPCException $e) {
+            $scope->fail($e);
             // GRPCException::getCode() 是 gRPC 传输状态（如 INVALID_ARGUMENT = 3），不是业务 ErrorCode，因此不能作为
             // x-app-error-code 传递。网关客户端通过自己的回退映射表处理传输状态。
             throw $e;
         } catch (Throwable $e) {
+            $scope->fail($e);
             // 有意与其他服务的 RoadRunner 传输层保持重复实现：错误代码和尾部元数据映射由各服务自行管理。
             /** @noinspection DuplicatedCode */
             $this->logger->error("Error in $method: " . $e->getMessage(), [
@@ -277,6 +286,7 @@ final readonly class RoadRunnerAuthService implements AuthServiceInterface
                 $e,
             );
         } finally {
+            $scope->close();
             TraceContext::reset();
             DeadlineContext::reset();
         }
