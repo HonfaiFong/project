@@ -155,7 +155,7 @@ final class UserSocialRegistrationConcurrencyTest extends TestCase
 
         $this->assertSame(1, $this->userCount());
         $this->assertSame(
-            1,
+            2,
             $this->personas->newQuery()->count(),
             'A rejected re-registration must not leave a persona behind',
         );
@@ -178,20 +178,31 @@ final class UserSocialRegistrationConcurrencyTest extends TestCase
 
         $personas = $this->personas->newQuery()
             ->where('user_id', $userId)
-            ->get(['id', 'user_id', 'nickname']);
-        $this->assertCount(1, $personas, 'Registration must create exactly one default persona');
-        $persona = $personas->first()->getAttributes();
+            ->get(['id', 'user_id', 'nickname', 'type', 'is_internal_alias']);
+        $this->assertCount(2, $personas, 'Registration must create one main persona and one internal alias');
+        $mainPersonas = $personas->where('type', 1);
+        $aliases = $personas->where('type', 2)->where('is_internal_alias', true);
+        $this->assertCount(1, $mainPersonas);
+        $this->assertCount(1, $aliases);
+        $persona = $mainPersonas->first()->getAttributes();
         $this->assertSame($userId, (string)$persona['user_id']);
 
         $events = $this->outbox->newQuery()
             ->orderBy('aggregate_type')
             ->get(['aggregate_type', 'aggregate_id', 'event_key', 'trace_id', 'event_type', 'payload'])
             ->toArray();
-        $this->assertCount(2, $events, 'Registration must publish the user and persona events');
+        $this->assertCount(3, $events, 'Registration must publish the user, main persona and alias events');
 
         $eventsByType = array_column($events, null, 'event_type');
         $userEvent = $eventsByType[EventTypes::USER_REGISTERED];
-        $personaEvent = $eventsByType[EventTypes::PERSONA_UPDATED];
+        $personaEvents = array_values(array_filter($events, static fn (array $event): bool =>
+            $event['event_type'] === EventTypes::PERSONA_UPDATED));
+        $this->assertCount(2, $personaEvents);
+        $eventsByPersona = array_column($personaEvents, null, 'aggregate_id');
+        $personaEvent = $eventsByPersona[(string)$persona['id']];
+        $aliasEvent = $eventsByPersona[(string)$aliases->first()->getAttribute('id')];
+        $this->assertSame($userId, (string)$aliasEvent['event_key']);
+        $this->assertSame($userEvent['trace_id'], $aliasEvent['trace_id']);
         $this->assertSame('user', $userEvent['aggregate_type']);
         $this->assertSame($userId, (string)$userEvent['aggregate_id']);
         $this->assertSame($userId, (string)$userEvent['event_key']);
@@ -401,6 +412,7 @@ final class UserSocialRegistrationConcurrencyTest extends TestCase
             $table->unsignedBigInteger('id')->primary();
             $table->unsignedBigInteger('user_id');
             $table->smallInteger('type')->default(1);
+            $table->boolean('is_internal_alias')->default(false);
             $table->string('nickname', 64);
             $table->string('avatar_key', 255)->nullable();
             $table->string('bio', 500)->nullable();

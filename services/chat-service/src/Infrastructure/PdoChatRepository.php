@@ -39,6 +39,7 @@ final class PdoChatRepository
             . 'id ' . $big . ' NOT NULL PRIMARY KEY,'
             . 'type INTEGER NOT NULL DEFAULT 1,'
             . 'last_message_id ' . $big . ' NULL,'
+            . 'last_message_seq ' . $big . ' NOT NULL DEFAULT 0,'
             . 'last_message_at VARCHAR(40) NULL,'
             . 'created_at VARCHAR(40) NOT NULL,'
             . 'updated_at VARCHAR(40) NOT NULL,'
@@ -72,6 +73,7 @@ final class PdoChatRepository
             . ')' . $engine,
         );
         $this->ensureColumn('conversations', 'private_key', $text . ' NULL');
+        $this->ensureColumn('conversations', 'last_message_seq', $big . ' NOT NULL DEFAULT 0');
         $this->ensureColumn('conversations', 'creation_request_id', 'VARCHAR(128) NULL');
         $this->ensureColumn('conversations', 'requesting_user_id', $big . ' NULL');
         $this->ensureColumn('conversations', 'target_mode', 'INTEGER NOT NULL DEFAULT 1');
@@ -153,13 +155,26 @@ final class PdoChatRepository
             . 'WHERE m.user_id = :user_id AND m.left_at IS NULL';
         $params = ['user_id' => $userId];
         if ($afterId !== null && $afterId !== '') {
-            $sql .= ' AND c.id < :after_id';
-            $params['after_id'] = $afterId;
+            try {
+                $decoded = base64_decode($afterId, true);
+                $cursor = $decoded === false ? null : json_decode($decoded, true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException) {
+                $cursor = null;
+            }
+            if (!is_array($cursor) || !is_string($cursor['at'] ?? null)
+                || !is_string($cursor['id'] ?? null)
+                || preg_match('/\A[1-9][0-9]*\z/', $cursor['id']) !== 1
+                || preg_match('/\A\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\z/', $cursor['at']) !== 1
+            ) {
+                throw ChatException::invalid('invalid conversation cursor');
+            }
+            $sql .= ' AND (COALESCE(c.last_message_at, c.created_at) < :after_at '
+                . 'OR (COALESCE(c.last_message_at, c.created_at) = :equal_at AND c.id < :after_id))';
+            $params['after_at'] = $cursor['at'];
+            $params['equal_at'] = $cursor['at'];
+            $params['after_id'] = $cursor['id'];
         }
-        // The cursor is an id. Keep ordering and filtering on that same
-        // immutable key so edits to last_message_at cannot skip or repeat a
-        // page.
-        $sql .= ' ORDER BY c.id DESC LIMIT ' . (int)($limit + 1);
+        $sql .= ' ORDER BY COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC LIMIT ' . (int)($limit + 1);
         $statement = $this->pdo->prepare($sql);
         $statement->execute($params);
         $rows = [];
@@ -222,14 +237,45 @@ final class PdoChatRepository
 
     public function markRead(string $conversationId, string $userId, string $seq): bool
     {
+        $latest = $this->pdo->prepare('SELECT last_message_seq FROM conversations WHERE id = :id');
+        $latest->execute(['id' => $conversationId]);
+        $latestSeq = $latest->fetchColumn();
+        $seq = ltrim($seq, '0') ?: '0';
+        $maximum = (string)($latestSeq === false ? '0' : $latestSeq);
+        if (strlen($seq) > strlen($maximum) || (strlen($seq) === strlen($maximum) && strcmp($seq, $maximum) > 0)) {
+            throw ChatException::invalid('seq exceeds the latest confirmed message; retry after synchronization');
+        }
         $statement = $this->pdo->prepare(
             'UPDATE conversation_members SET last_read_seq = CASE '
-            . 'WHEN last_read_seq < :seq THEN :seq ELSE last_read_seq END '
+            . 'WHEN last_read_seq < :compare_seq THEN :seq ELSE last_read_seq END '
             . 'WHERE conversation_id = :conversation_id AND user_id = :user_id AND left_at IS NULL',
         );
-        $statement->execute(['seq' => $seq, 'conversation_id' => $conversationId, 'user_id' => $userId]);
+        $statement->execute(['compare_seq' => $seq, 'seq' => $seq, 'conversation_id' => $conversationId, 'user_id' => $userId]);
 
-        return $statement->rowCount() > 0;
+        return $this->findMember($conversationId, $userId) !== null;
+    }
+
+    /** Apply only newer sequences; duplicate and out-of-order events cannot regress the summary. */
+    public function applyMessageSummary(string $conversationId, string $messageId, string $seq, string $createdAt): void
+    {
+        $statement = $this->pdo->prepare(
+            'UPDATE conversations SET last_message_id = :message_id, last_message_seq = :seq, '
+            . 'last_message_at = :created_at, updated_at = :updated_at '
+            . 'WHERE id = :conversation_id AND last_message_seq < :new_seq',
+        );
+        $statement->execute([
+            'message_id' => $messageId, 'seq' => $seq, 'created_at' => $createdAt,
+            'updated_at' => $createdAt, 'conversation_id' => $conversationId, 'new_seq' => $seq,
+        ]);
+    }
+
+    /** @param array<string, mixed> $row */
+    public function listCursor(array $row): string
+    {
+        return base64_encode(json_encode([
+            'at' => (string)($row['last_message_at'] ?? $row['created_at']),
+            'id' => (string)$row['id'],
+        ], JSON_THROW_ON_ERROR));
     }
 
     /** @param array<string, mixed> $row @return array<string, mixed> */

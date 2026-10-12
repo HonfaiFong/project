@@ -48,6 +48,7 @@ final class MySqlLeastPrivilegeTest extends TestCase
             $this->requireEnvironment($account['password']);
         }
         $this->requireEnvironment('MYSQL_USER_OUTBOX_RELAY_PASSWORD');
+        $this->requireEnvironment('MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD');
         $this->requireEnvironment('MYSQL_MIGRATION_PASSWORD');
 
         try {
@@ -152,6 +153,16 @@ final class MySqlLeastPrivilegeTest extends TestCase
             'DROP TABLE `user_db`.`__mysql_privilege_relay_probe`',
             'outbox relay must not DROP tables',
         );
+    }
+
+    public function testMessageRelayCanOnlyReadAndUpdateItsOutbox(): void
+    {
+        $relay = $this->connect('message_outbox_relay', (string)getenv('MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD'));
+        $relay->query('SELECT id FROM message_db.outbox_events LIMIT 1');
+        self::assertSame(0, $relay->exec('UPDATE message_db.outbox_events SET status = 1 WHERE id = 0'));
+        $this->assertDenied($relay, 'SELECT message_id FROM message_db.messages LIMIT 1', 'relay must not read messages');
+        $this->assertDenied($relay, 'SELECT id FROM chat_db.conversations LIMIT 1', 'relay must not read chat data');
+        $this->assertDenied($relay, 'DELETE FROM message_db.outbox_events WHERE id = 0', 'relay must not delete events');
     }
 
     public function testMigrationAccountCanPerformDdlButCannotDelegatePrivileges(): void

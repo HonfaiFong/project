@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace Tests\Integration;
 
 use Contracts\Gen\Chat\V1\PublicChatTarget;
+use Contracts\Events\EventEnvelope;
+use Contracts\Events\EventTypes;
 use PDO;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousReferenceFactory;
 use Services\ChatService\Application\ChatApplicationService;
+use Services\ChatService\Application\MessageCreatedHandler;
+use Services\ChatService\Domain\RealtimeMessagePublisher;
 use Services\ChatService\Domain\IdGenerator as ChatIdGenerator;
 use Services\ChatService\Domain\Identity\UserIdentityClient;
 use Services\ChatService\Domain\Social\AllowAllBlockStatusResolver;
@@ -54,12 +58,16 @@ final class ChatMessagePersistenceTest extends TestCase
         ]]);
         $state = new class {
             public bool $active = true;
+            public bool $unavailable = false;
             public int $mode = 1;
         };
         $users->method('validatePersonaOwnership')->willReturnCallback(
             static function (string $userId, string $personaId, int $operation) use ($state): array {
+                if ($state->unavailable) {
+                    throw new \Packages\GrpcCommon\GrpcCallException(14, null, 'UserService unavailable');
+                }
                 if (!$state->active) {
-                    throw new \RuntimeException('persona was deactivated');
+                    throw new \RuntimeException('persona was deactivated', \Contracts\Errors\ErrorCode::PERSONA_FORBIDDEN->value);
                 }
 
                 return ['persona' => [
@@ -134,6 +142,69 @@ final class ChatMessagePersistenceTest extends TestCase
         self::assertCount(1, $synced['messages']);
         self::assertSame($written->getMessageId(), $synced['messages'][0]->getMessageId());
         self::assertSame('101', (string)$synced['messages'][0]->getAuthor()->getPersonaId());
+
+        $realtime = new class implements RealtimeMessagePublisher {
+            /** @var list<array{recipients:list<string>,message:array<string,mixed>}> */
+            public array $deliveries = [];
+            public bool $fail = true;
+
+            public function publish(string $eventId, array $recipients, array $message): void
+            {
+                if ($this->fail) {
+                    throw new \RuntimeException('realtime unavailable');
+                }
+                $this->deliveries[] = ['recipients' => $recipients, 'message' => $message];
+            }
+        };
+        $handler = new MessageCreatedHandler($chatRepository, $chat, $realtime);
+        $eventRow = $messagePdo->query('SELECT * FROM outbox_events')->fetch(PDO::FETCH_ASSOC);
+        $event = new EventEnvelope(
+            eventId: (string)$eventRow['event_id'], eventType: EventTypes::MESSAGE_CREATED,
+            eventVersion: 1, occurredAt: '2026-10-11T00:00:00Z', traceId: '',
+            producer: 'message-service', key: $conversationId,
+            payload: json_decode((string)$eventRow['payload'], true, 512, JSON_THROW_ON_ERROR),
+        );
+        try {
+            $handler->handle($event);
+            self::fail('A failed realtime publish must leave the delivery retryable');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('realtime unavailable', $exception->getMessage());
+        }
+        self::assertSame('1', (string)$chatRepository->findById($conversationId)['last_message_seq']);
+        $realtime->fail = false;
+        $handler->handle($event);
+        $handler->handle($event);
+        self::assertCount(2, $realtime->deliveries);
+        self::assertSame(['100', '200'], $realtime->deliveries[0]['recipients']);
+        self::assertArrayNotHasKey('sender_user_id', $realtime->deliveries[0]['message']);
+        self::assertArrayNotHasKey('sender_persona_id', $realtime->deliveries[0]['message']);
+        self::assertSame((string)$written->getMessageId(), (string)$chat->getConversation('100', $conversationId)->getLastMessageId());
+        try {
+            $chat->markRead('200', $conversationId, '999999');
+            self::fail('A future read cursor must be rejected');
+        } catch (\Services\ChatService\Domain\Exception\ChatException $exception) {
+            self::assertStringContainsString('latest confirmed message', $exception->getMessage());
+        }
+        self::assertSame('0', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
+        self::assertTrue($chat->markRead('200', $conversationId, '1'));
+        self::assertTrue($chat->markRead('200', $conversationId, '1'));
+
+        $state->unavailable = true;
+        try {
+            $handler->handle($event);
+            self::fail('A temporary identity dependency failure must keep the event retryable');
+        } catch (\Packages\GrpcCommon\GrpcCallException $exception) {
+            self::assertSame(14, $exception->grpcStatus);
+        }
+        self::assertCount(2, $realtime->deliveries);
+        $state->unavailable = false;
+        $handler->handle($event);
+        self::assertCount(3, $realtime->deliveries);
+
+        $state->active = false;
+        $handler->handle($event);
+        self::assertCount(3, $realtime->deliveries, 'Deactivated member identities must not receive pushes');
+        $state->active = true;
 
         $state->mode = 2;
         try {

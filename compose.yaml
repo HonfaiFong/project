@@ -14,6 +14,7 @@ services:
       MYSQL_CHAT_RUNTIME_PASSWORD: ${MYSQL_CHAT_RUNTIME_PASSWORD:?Set MYSQL_CHAT_RUNTIME_PASSWORD in .env}
       MYSQL_MESSAGE_RUNTIME_PASSWORD: ${MYSQL_MESSAGE_RUNTIME_PASSWORD:?Set MYSQL_MESSAGE_RUNTIME_PASSWORD in .env}
       MYSQL_USER_OUTBOX_RELAY_PASSWORD: ${MYSQL_USER_OUTBOX_RELAY_PASSWORD:?Set MYSQL_USER_OUTBOX_RELAY_PASSWORD in .env}
+      MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD: ${MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD:?Set MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD in .env}
       MYSQL_MIGRATION_PASSWORD: ${MYSQL_MIGRATION_PASSWORD:?Set MYSQL_MIGRATION_PASSWORD in .env}
     ports:
       - "${MYSQL_BIND_ADDRESS:-127.0.0.1}:${MYSQL_PORT:-3306}:3306"
@@ -572,6 +573,108 @@ services:
       rabbitmq-init:
         condition: service_completed_successfully
 
+  message-outbox-relay:
+    image: project-php-runtime:rabbitmq
+    container_name: social-message-outbox-relay
+    restart: unless-stopped
+    working_dir: /app
+    command: php services/user-service/bin/outbox-relay.php
+    expose:
+      - "9100"
+    environment:
+      SERVICE_NAME: message-outbox-relay
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      OTEL_SERVICE_NAME: message-outbox-relay
+      OTEL_SERVICE_INSTANCE_ID: ${OTEL_SERVICE_INSTANCE_ID_OUTBOX_RELAY:-message-outbox-relay}
+      OTEL_DEPLOYMENT_ENVIRONMENT: ${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: message_outbox_relay
+      MYSQL_PASSWORD: ${MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD:?Set MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD in .env}
+      OUTBOX_DB_NAME: message_db
+      OUTBOX_PRODUCER: message-service
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+    volumes:
+      - .:/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+
+  chat-message-consumer:
+    image: project-php-runtime:rabbitmq
+    container_name: social-chat-message-consumer
+    restart: unless-stopped
+    working_dir: /app
+    command: php services/chat-service/bin/message-consumer.php
+    expose:
+      - "9100"
+    environment:
+      - SERVICE_NAME=chat-service
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=chat-message-consumer
+      - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_CHAT_SERVICE:-chat-service}
+      - OTEL_DEPLOYMENT_ENVIRONMENT=${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
+      - APP_ENV=${APP_ENV:-production}
+      - GRPC_TLS_MODE=${GRPC_TLS_MODE:-plaintext}
+      - GRPC_TLS_CA_FILE=${GRPC_TLS_CA_FILE:-}
+      - GRPC_TLS_KEY_FILE=${GRPC_TLS_KEY_FILE:-}
+      - GRPC_TLS_CERT_FILE=${GRPC_TLS_CERT_FILE:-}
+      - GRPC_TLS_SERVER_CERT_FILE=${GRPC_TLS_SERVER_CERT_FILE:-}
+      - GRPC_TLS_SERVER_KEY_FILE=${GRPC_TLS_SERVER_KEY_FILE:-}
+      - GRPC_TLS_CLIENT_AUTH_TYPE=${GRPC_TLS_CLIENT_AUTH_TYPE:-no_client_certs}
+      - GRPC_TLS_SERVER_NAME=${GRPC_TLS_SERVER_NAME:-}
+      - GRPC_TLS_SERVER_NAME_USER_SERVICE=${GRPC_TLS_SERVER_NAME_USER_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CONTENT_SERVICE=${GRPC_TLS_SERVER_NAME_CONTENT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE=${GRPC_TLS_SERVER_NAME_SOCIAL_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_CHAT_SERVICE=${GRPC_TLS_SERVER_NAME_CHAT_SERVICE:-}
+      - GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE=${GRPC_TLS_SERVER_NAME_MESSAGE_SERVICE:-}
+      - GRPC_USER_SERVICE=user-service:50052
+      - GRPC_USER_SERVICE_TOKEN=${INTERNAL_RPC_CHAT_USER_TOKEN:?Set INTERNAL_RPC_CHAT_USER_TOKEN in .env}
+      - GRPC_CONTENT_SERVICE=content-service:50053
+      - GRPC_CONTENT_SERVICE_TOKEN=${INTERNAL_RPC_CHAT_CONTENT_TOKEN:?Set INTERNAL_RPC_CHAT_CONTENT_TOKEN in .env}
+      - GRPC_SOCIAL_SERVICE=social-service:50054
+      - GRPC_SOCIAL_SERVICE_TOKEN=${INTERNAL_RPC_CHAT_SOCIAL_TOKEN:?Set INTERNAL_RPC_CHAT_SOCIAL_TOKEN in .env}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=chat_runtime
+      - MYSQL_PASSWORD=${MYSQL_CHAT_RUNTIME_PASSWORD:?Set MYSQL_CHAT_RUNTIME_PASSWORD in .env}
+      - CHAT_DB_NAME=chat_db
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD in .env}
+      - REDIS_TLS=${REDIS_TLS:-false}
+      - REDIS_USERNAME=${REDIS_USERNAME:-}
+      - ANONYMOUS_IDENTITY_KEY=${ANONYMOUS_IDENTITY_KEY:?Set ANONYMOUS_IDENTITY_KEY in .env}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - WORKER_ID=7
+    volumes:
+      - .:/app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+      content-service:
+        condition: service_started
+      social-service:
+        condition: service_started
+
   api-gateway:
     image: project-php-runtime:rabbitmq
     container_name: social-api-gateway
@@ -630,6 +733,7 @@ services:
       - SOCIAL_BIND_USER_RATE_LIMIT=${SOCIAL_BIND_USER_RATE_LIMIT:-10}
       - SOCIAL_BIND_USER_RATE_WINDOW_SECONDS=${SOCIAL_BIND_USER_RATE_WINDOW_SECONDS:-3600}
       - SOCIAL_TRUSTED_PROXY_CIDRS=${SOCIAL_TRUSTED_PROXY_CIDRS:-}
+      - METRICS_ALLOWED_CIDRS=${METRICS_ALLOWED_CIDRS:-}
     volumes:
       - .:/app
     depends_on:

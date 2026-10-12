@@ -17,6 +17,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"social-backend/gateways/realtime-gateway/internal/auth"
 	"social-backend/gateways/realtime-gateway/internal/connection"
+	"social-backend/gateways/realtime-gateway/internal/realtime"
 	"social-backend/packages/go/logging"
 )
 
@@ -63,12 +64,23 @@ func run() error {
 
 	logger := logging.NewLogger("realtime-gateway", envDefault("SERVICE_INSTANCE_ID", envDefault("HOSTNAME", "unknown")))
 	hub := connection.NewHub()
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	// 实时投递依赖 Redis PubSub；掉线时退避重连，错过的消息由客户端调用同步接口补齐。
+	subscriber := realtime.NewSubscriber(redisClient, hub, logger)
+	subscriberDone := make(chan struct{})
+	go func() {
+		defer close(subscriberDone)
+		if err := subscriber.Run(signalCtx); err != nil {
+			logger.Error("", "", "", "Realtime subscriber stopped", map[string]any{"error": err.Error()})
+		}
+	}()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "SERVING", "service": "realtime-gateway"})
 	})
-	readiness := newReadinessHandler(redisClient, hub)
+	readiness := newReadinessHandler(redisClient, hub, subscriber)
 	mux.Handle("/ready", readiness)
 	mux.Handle("/health", readiness)
 	var nonces auth.NonceStore = auth.NewRedisNonceStore(redisClient)
@@ -83,8 +95,6 @@ func run() error {
 	go func() { serverErr <- server.ListenAndServe() }()
 	logger.Info("", "", "", fmt.Sprintf("Realtime Gateway listening on :%s", port), nil)
 
-	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	var serveErr error
 	select {
 	case <-signalCtx.Done():
@@ -103,6 +113,10 @@ func run() error {
 	}
 	if err := hub.Drain(shutdownCtx); err != nil {
 		serveErr = errors.Join(serveErr, fmt.Errorf("WebSocket drain: %w", err))
+	}
+	select {
+	case <-subscriberDone:
+	case <-time.After(2 * time.Second):
 	}
 	if serveErr != nil {
 		return fmt.Errorf("Gateway listen error: %w", serveErr)

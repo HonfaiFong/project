@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Services\SocialService\Infrastructure\Repository;
 
 use PDO;
+use PDOException;
 use Services\SocialService\Domain\Repository\SocialRepositoryInterface;
 
 final readonly class PdoSocialRepository implements SocialRepositoryInterface
@@ -36,20 +37,37 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
         }
     }
 
-    public function insertLike(string $id, string $personaId, int $targetType, string $targetId): void
+    public function insertLike(string $id, string $personaId, int $targetType, string $targetId): bool
     {
         $statement = $this->pdo->prepare(
             'INSERT INTO `likes` (`id`, `persona_id`, `target_type`, `target_id`, `created_at`) '
-            . 'VALUES (:id, :persona_id, :target_type, :target_id, :created_at) '
-            . 'ON DUPLICATE KEY UPDATE `id` = `id`',
+            . 'VALUES (:id, :persona_id, :target_type, :target_id, :created_at)',
         );
-        $statement->execute([
-            'id' => $id,
-            'persona_id' => $personaId,
-            'target_type' => $targetType,
-            'target_id' => $targetId,
-            'created_at' => $this->now(),
-        ]);
+
+        try {
+            $statement->execute([
+                'id' => $id,
+                'persona_id' => $personaId,
+                'target_type' => $targetType,
+                'target_id' => $targetId,
+                'created_at' => $this->now(),
+            ]);
+        } catch (PDOException $exception) {
+            // 1062 covers the business unique key and the primary key alike.
+            // Only a business-key duplicate is an idempotent replay: confirm
+            // the row with a current read (a plain read can return the stale
+            // REPEATABLE READ snapshot), otherwise the original error must
+            // propagate (for example, a primary key id collision).
+            if ($this->isDuplicateEntry($exception)
+                && $this->likeExistsForCurrentRead($personaId, $targetType, $targetId)
+            ) {
+                return false;
+            }
+
+            throw $exception;
+        }
+
+        return true;
     }
 
     public function deleteLike(string $personaId, int $targetType, string $targetId): void
@@ -194,5 +212,39 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     private function now(): string
     {
         return gmdate('Y-m-d H:i:s.v');
+    }
+
+    /**
+     * ER_DUP_ENTRY (1062) only. Matching SQLSTATE 23000 alone would also
+     * swallow CHECK/foreign-key violations, and rowCount() cannot be used
+     * instead because PDO::MYSQL_ATTR_FOUND_ROWS reports an existing,
+     * unchanged row as affected too.
+     */
+    private function isDuplicateEntry(PDOException $exception): bool
+    {
+        return (int)($exception->errorInfo[1] ?? 0) === 1062;
+    }
+
+    /**
+     * Current read of the business key. The duplicate error is raised by the
+     * latest committed row while a REPEATABLE READ snapshot can predate it,
+     * so the confirmation must be a locking read. FOR SHARE, not FOR UPDATE:
+     * a failed duplicate INSERT retains a shared lock on the row, so several
+     * concurrent losers upgrading S to X deadlock (observed 40001); FOR
+     * SHARE stays compatible with those shared locks.
+     */
+    private function likeExistsForCurrentRead(string $personaId, int $targetType, string $targetId): bool
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT 1 FROM `likes` WHERE `persona_id` = :persona_id '
+            . 'AND `target_type` = :target_type AND `target_id` = :target_id LIMIT 1 FOR SHARE',
+        );
+        $statement->execute([
+            'persona_id' => $personaId,
+            'target_type' => $targetType,
+            'target_id' => $targetId,
+        ]);
+
+        return $statement->fetchColumn() !== false;
     }
 }

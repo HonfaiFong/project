@@ -74,7 +74,7 @@ type SocialLoginState int32
 const (
 	SocialLoginState_SOCIAL_LOGIN_STATE_UNSPECIFIED   SocialLoginState = 0
 	SocialLoginState_SOCIAL_LOGIN_STATE_AUTHENTICATED SocialLoginState = 1
-	// Deprecated: registration no longer asks clients for a phone binding step.
+	// 已弃用：注册流程不再要求客户端绑定手机号。
 	SocialLoginState_SOCIAL_LOGIN_STATE_PHONE_BINDING_REQUIRED SocialLoginState = 2
 )
 
@@ -194,7 +194,7 @@ type LoginRequest struct {
 	unknownFields protoimpl.UnknownFields
 
 	Phone    string      `protobuf:"bytes,1,opt,name=phone,proto3" json:"phone,omitempty"`
-	Code     string      `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"` // dev verification code or sms
+	Code     string      `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"` // 开发环境验证码或短信验证码
 	Password string      `protobuf:"bytes,3,opt,name=password,proto3" json:"password,omitempty"`
 	Device   *DeviceInfo `protobuf:"bytes,4,opt,name=device,proto3" json:"device,omitempty"`
 }
@@ -692,9 +692,8 @@ func (x *BindSocialPhoneResponse) GetLogin() *LoginResponse {
 	return nil
 }
 
-// Binds the provider identity behind `code` to the user authenticated by
-// `access_token`. The Gateway never trusts a body user_id: the user identity
-// comes from the verified access token only.
+// 将 `code` 对应的第三方身份绑定到通过 `access_token` 认证的用户。网关不信任请求体中的 user_id；用户身份仅来自已
+// 验证的访问令牌。
 type BindSocialIdentityRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

@@ -22,7 +22,12 @@
   authenticated MessageService hop.
 
 ## 4. Consumed Events
-- None.
+- `message.created.v1`, via the durable quorum queue `chat.message.created`.
+  The separate `chat-message-consumer` updates summaries only for newer sequences and rechecks
+  current membership, identity and bilateral blocks before publishing public messages to Redis.
+  Temporary dependency failures keep the event retryable; explicit identity refusal skips delivery.
+  Failure exits the process so the container supervisor recreates every connection. Five failed
+  deliveries move an event to `jobs.failed`; operators must inspect and replay these events.
 
 ## 5. Produced Events
 - The current worker does not publish a conversation event; the outbox event
@@ -55,3 +60,16 @@ requesting user's access and SocialService's bidirectional block result.
 MessageService receives the snapshot over the internal Chat RPC. Conversation
 creation and reads use the per-service PDO repository; the worker does not run
 production DDL, and migration `20261011000300` must be applied before startup.
+
+Apply `20261012000000` with chat/message writes stopped before upgrading workers. It seeds
+`last_message_seq` and the summary from historical messages, and bounds legacy read cursors.
+`MarkRead` rejects sequences above the confirmed summary; while event consumption is delayed,
+clients should synchronize and retry. ListConversations sorts by recent message time (creation
+time for empty conversations) and returns an opaque time/ID cursor. Treat it as opaque; old ID-only
+cursors are invalid. Concurrent activity can move a conversation between pages, so clients should
+refresh the first page when a push arrives.
+
+Realtime publication is at least once. Clients must deduplicate by event ID/message ID and use
+`SyncMessages` after reconnecting; Redis PubSub does not retain offline deliveries. The WebSocket
+envelope retains its existing base64 `payload` representation. This does not implement device
+delivery ACKs, offline notification channels or exactly-once delivery.

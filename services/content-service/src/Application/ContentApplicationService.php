@@ -65,6 +65,10 @@ final class ContentApplicationService
         if ($requestKey !== null) {
             $existing = $this->findByRequest('posts', $actor->userId, $requestKey);
             if ($existing !== null) {
+                if (!$this->postRequestMatches($identity, $existing, $type, $content, $visibility, $this->nullableText($emotion, 32), $media, $aliasDisplayName)) {
+                    throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value);
+                }
+
                 return $this->getPost($actor, (string)$existing['id']);
             }
         }
@@ -80,60 +84,56 @@ final class ContentApplicationService
             );
         $now = $this->now();
 
-        $this->pdo->beginTransaction();
         try {
-            $statement = $this->pdo->prepare(
-                'INSERT INTO `posts` '
-                . '(`id`, `author_user_id`, `request_id`, `persona_id`, `identity_mode`, `author_display_name`, '
-                . '`author_avatar_key`, `author_anonymous_ref`, `author_scope_type`, `author_scope_id`, '
-                . '`type`, `content`, `visibility`, `emotion`, `status`, `moderation_status`, '
-                . '`published_at`, `created_at`, `updated_at`) '
-                . 'VALUES (:id, :user_id, :request_id, :persona_id, :identity_mode, :display_name, :avatar_key, '
-                . ':anonymous_ref, :scope_type, :scope_id, :type, :content, :visibility, :emotion, '
-                . '1, 1, :published_at, :created_at, :updated_at)',
-            );
-            $statement->execute([
-                'id' => $postId,
-                'user_id' => $actor->userId,
-                'persona_id' => $identity->personaId,
-                'request_id' => $requestKey,
-                'identity_mode' => $identity->mode->value,
-                'display_name' => $snapshot->displayName,
-                'avatar_key' => $snapshot->avatarKey,
-                'anonymous_ref' => $snapshot->anonymousRef,
-                'scope_type' => $snapshot->scopeType,
-                'scope_id' => $snapshot->scopeId,
-                'type' => $type,
-                'content' => $content,
-                'visibility' => $visibility,
-                'emotion' => $this->nullableText($emotion, 32),
-                'published_at' => $now,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-            $this->insertMedia($postId, $media, $now);
-            $this->recordEvent('post', $postId, 'post.created.v1', $requestKey ?? '', [
-                'post_id' => $postId,
-                'user_id' => $actor->userId,
-                'persona_id' => $identity->personaId,
-                'identity_mode' => $identity->mode->value,
-            ]);
-            $this->pdo->commit();
+            $this->transaction(function () use ($actor, $postId, $identity, $snapshot, $requestKey, $media, $now, $type, $content, $visibility, $emotion): void {
+                $statement = $this->pdo->prepare(
+                    'INSERT INTO `posts` '
+                    . '(`id`, `author_user_id`, `request_id`, `persona_id`, `identity_mode`, `author_display_name`, '
+                    . '`author_avatar_key`, `author_anonymous_ref`, `author_scope_type`, `author_scope_id`, '
+                    . '`type`, `content`, `visibility`, `emotion`, `status`, `moderation_status`, '
+                    . '`published_at`, `created_at`, `updated_at`) '
+                    . 'VALUES (:id, :user_id, :request_id, :persona_id, :identity_mode, :display_name, :avatar_key, '
+                    . ':anonymous_ref, :scope_type, :scope_id, :type, :content, :visibility, :emotion, '
+                    . '1, 1, :published_at, :created_at, :updated_at)',
+                );
+                $statement->execute([
+                    'id' => $postId,
+                    'user_id' => $actor->userId,
+                    'persona_id' => $identity->personaId,
+                    'request_id' => $requestKey,
+                    'identity_mode' => $identity->mode->value,
+                    'display_name' => $snapshot->displayName,
+                    'avatar_key' => $snapshot->avatarKey,
+                    'anonymous_ref' => $snapshot->anonymousRef,
+                    'scope_type' => $snapshot->scopeType,
+                    'scope_id' => $snapshot->scopeId,
+                    'type' => $type,
+                    'content' => $content,
+                    'visibility' => $visibility,
+                    'emotion' => $this->nullableText($emotion, 32),
+                    'published_at' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                $this->insertMedia($postId, $media, $now);
+                $this->recordEvent('post', $postId, 'post.created.v1', $requestKey ?? '', [
+                    'post_id' => $postId,
+                    'user_id' => $actor->userId,
+                    'persona_id' => $identity->personaId,
+                    'identity_mode' => $identity->mode->value,
+                ]);
+            });
         } catch (PDOException $e) {
-            if ($this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
-            }
-            if ($requestKey !== null && str_starts_with((string)$e->getCode(), '23')) {
+            if ($requestKey !== null && ((int)($e->errorInfo[1] ?? 0) === 1062 || ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' && (int)($e->errorInfo[1] ?? 0) === 19))) {
                 $existing = $this->findByRequest('posts', $actor->userId, $requestKey);
                 if ($existing !== null) {
+                    if (!$this->postRequestMatches($identity, $existing, $type, $content, $visibility, $this->nullableText($emotion, 32), $media, $aliasDisplayName)) {
+                        throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
+                    }
+
                     return $this->getPost($actor, (string)$existing['id']);
                 }
                 throw new RuntimeException('request_id is already in use', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
-            }
-            throw $e;
-        } catch (Throwable $e) {
-            if ($this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
             }
             throw $e;
         }
@@ -183,13 +183,19 @@ final class ContentApplicationService
             return;
         }
 
-        $statement = $this->pdo->prepare(
-            'UPDATE `posts` SET `status` = 0, `deleted_at` = :deleted_at, `updated_at` = :updated_at '
-            . 'WHERE `id` = :id AND `author_user_id` = :user_id AND `deleted_at` IS NULL',
-        );
         $now = $this->now();
-        $statement->execute(['deleted_at' => $now, 'updated_at' => $now, 'id' => $postId, 'user_id' => $actor->userId]);
-        $this->recordEvent('post', $postId, 'post.deleted.v1', $requestId, ['post_id' => $postId, 'user_id' => $actor->userId]);
+        $this->transaction(function () use ($actor, $postId, $requestId, $now): void {
+            $statement = $this->pdo->prepare(
+                'UPDATE `posts` SET `status` = 0, `deleted_at` = :deleted_at, `updated_at` = :updated_at '
+                . 'WHERE `id` = :id AND `author_user_id` = :user_id AND `deleted_at` IS NULL',
+            );
+            $statement->execute(['deleted_at' => $now, 'updated_at' => $now, 'id' => $postId, 'user_id' => $actor->userId]);
+            if ($statement->rowCount() === 0) {
+                // A concurrent delete already won the row; its transaction owns the event.
+                return;
+            }
+            $this->recordEvent('post', $postId, 'post.deleted.v1', $requestId, ['post_id' => $postId, 'user_id' => $actor->userId]);
+        });
     }
 
     public function updatePostStatus(string $postId, int $status, int $moderationStatus, string $requestId): void
@@ -197,24 +203,35 @@ final class ContentApplicationService
         if ($status < 0 || $status > 3 || $moderationStatus < 0 || $moderationStatus > 3) {
             throw new RuntimeException('content status is invalid', ErrorCode::INVALID_ARGUMENT->value);
         }
-        $statement = $this->pdo->prepare(
-            'UPDATE `posts` SET `status` = :status, `moderation_status` = :moderation_status, '
-            . '`updated_at` = :updated_at WHERE `id` = :id AND `deleted_at` IS NULL',
-        );
-        $statement->execute([
-            'status' => $status,
-            'moderation_status' => $moderationStatus,
-            'updated_at' => $this->now(),
-            'id' => $postId,
-        ]);
-        if ($statement->rowCount() === 0 && $this->findPost($postId) === null) {
-            throw new RuntimeException(ErrorCode::CONTENT_POST_NOT_FOUND->message(), ErrorCode::CONTENT_POST_NOT_FOUND->value);
-        }
-        $this->recordEvent('post', $postId, 'post.status.updated.v1', $requestId, [
-            'post_id' => $postId,
-            'status' => $status,
-            'moderation_status' => $moderationStatus,
-        ]);
+        $this->transaction(function () use ($postId, $status, $moderationStatus, $requestId): void {
+            $statement = $this->pdo->prepare(
+                'UPDATE `posts` SET `status` = :status, `moderation_status` = :moderation_status, '
+                . '`updated_at` = :updated_at WHERE `id` = :id AND `deleted_at` IS NULL '
+                . 'AND (`status` <> :current_status OR `moderation_status` <> :current_moderation_status)',
+            );
+            $statement->execute([
+                'status' => $status,
+                'moderation_status' => $moderationStatus,
+                'updated_at' => $this->now(),
+                'id' => $postId,
+                'current_status' => $status,
+                'current_moderation_status' => $moderationStatus,
+            ]);
+            $affected = $statement->rowCount();
+            if ($affected === 0) {
+                if ($this->findPost($postId) === null) {
+                    throw new RuntimeException(ErrorCode::CONTENT_POST_NOT_FOUND->message(), ErrorCode::CONTENT_POST_NOT_FOUND->value);
+                }
+
+                // The row already carries the requested status; a no-op replay must not duplicate the event.
+                return;
+            }
+            $this->recordEvent('post', $postId, 'post.status.updated.v1', $requestId, [
+                'post_id' => $postId,
+                'status' => $status,
+                'moderation_status' => $moderationStatus,
+            ]);
+        });
     }
 
     public function createComment(
@@ -240,6 +257,10 @@ final class ContentApplicationService
         if ($requestKey !== null) {
             $existing = $this->findByRequest('comments', $actor->userId, $requestKey);
             if ($existing !== null) {
+                if (!$this->commentRequestMatches($identity, $existing, $postId, $this->nullableId($parentId), $this->nullableId($replyToCommentId), $content, $aliasDisplayName)) {
+                    throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value);
+                }
+
                 return $this->getComment($actor, (string)$existing['id']);
             }
         }
@@ -263,59 +284,55 @@ final class ContentApplicationService
             );
         $now = $this->now();
 
-        $this->pdo->beginTransaction();
         try {
-            $statement = $this->pdo->prepare(
-                'INSERT INTO `comments` '
-                . '(`id`, `post_id`, `author_user_id`, `request_id`, `persona_id`, `identity_mode`, `author_display_name`, '
-                . '`author_avatar_key`, `author_anonymous_ref`, `author_scope_type`, `author_scope_id`, '
-                . '`parent_id`, `reply_to_comment_id`, `content`, `status`, `created_at`, `updated_at`) '
-                . 'VALUES (:id, :post_id, :user_id, :request_id, :persona_id, :identity_mode, :display_name, :avatar_key, '
-                . ':anonymous_ref, :scope_type, :scope_id, :parent_id, :reply_to_comment_id, :content, 1, :created_at, :updated_at)',
-            );
-            $statement->execute([
-                'id' => $commentId,
-                'post_id' => $postId,
-                'user_id' => $actor->userId,
-                'persona_id' => $identity->personaId,
-                'request_id' => $requestKey,
-                'identity_mode' => $identity->mode->value,
-                'display_name' => $snapshot->displayName,
-                'avatar_key' => $snapshot->avatarKey,
-                'anonymous_ref' => $snapshot->anonymousRef,
-                'scope_type' => $snapshot->scopeType,
-                'scope_id' => $snapshot->scopeId,
-                'parent_id' => $parentId,
-                'reply_to_comment_id' => $replyToCommentId,
-                'content' => $content,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-            $updatePost = $this->pdo->prepare('UPDATE `posts` SET `comment_count` = `comment_count` + 1 WHERE `id` = :id');
-            $updatePost->execute(['id' => $postId]);
-            $this->recordEvent('comment', $commentId, 'comment.created.v1', $requestKey ?? '', [
-                'comment_id' => $commentId,
-                'post_id' => $postId,
-                'user_id' => $actor->userId,
-                'persona_id' => $identity->personaId,
-                'identity_mode' => $identity->mode->value,
-            ]);
-            $this->pdo->commit();
+            $this->transaction(function () use ($actor, $commentId, $identity, $snapshot, $requestKey, $postId, $parentId, $replyToCommentId, $content, $now): void {
+                $statement = $this->pdo->prepare(
+                    'INSERT INTO `comments` '
+                    . '(`id`, `post_id`, `author_user_id`, `request_id`, `persona_id`, `identity_mode`, `author_display_name`, '
+                    . '`author_avatar_key`, `author_anonymous_ref`, `author_scope_type`, `author_scope_id`, '
+                    . '`parent_id`, `reply_to_comment_id`, `content`, `status`, `created_at`, `updated_at`) '
+                    . 'VALUES (:id, :post_id, :user_id, :request_id, :persona_id, :identity_mode, :display_name, :avatar_key, '
+                    . ':anonymous_ref, :scope_type, :scope_id, :parent_id, :reply_to_comment_id, :content, 1, :created_at, :updated_at)',
+                );
+                $statement->execute([
+                    'id' => $commentId,
+                    'post_id' => $postId,
+                    'user_id' => $actor->userId,
+                    'persona_id' => $identity->personaId,
+                    'request_id' => $requestKey,
+                    'identity_mode' => $identity->mode->value,
+                    'display_name' => $snapshot->displayName,
+                    'avatar_key' => $snapshot->avatarKey,
+                    'anonymous_ref' => $snapshot->anonymousRef,
+                    'scope_type' => $snapshot->scopeType,
+                    'scope_id' => $snapshot->scopeId,
+                    'parent_id' => $parentId,
+                    'reply_to_comment_id' => $replyToCommentId,
+                    'content' => $content,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
+                $updatePost = $this->pdo->prepare('UPDATE `posts` SET `comment_count` = `comment_count` + 1 WHERE `id` = :id');
+                $updatePost->execute(['id' => $postId]);
+                $this->recordEvent('comment', $commentId, 'comment.created.v1', $requestKey ?? '', [
+                    'comment_id' => $commentId,
+                    'post_id' => $postId,
+                    'user_id' => $actor->userId,
+                    'persona_id' => $identity->personaId,
+                    'identity_mode' => $identity->mode->value,
+                ]);
+            });
         } catch (PDOException $e) {
-            if ($this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
-            }
-            if ($requestKey !== null && str_starts_with((string)$e->getCode(), '23')) {
+            if ($requestKey !== null && ((int)($e->errorInfo[1] ?? 0) === 1062 || ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' && (int)($e->errorInfo[1] ?? 0) === 19))) {
                 $existing = $this->findByRequest('comments', $actor->userId, $requestKey);
                 if ($existing !== null) {
+                    if (!$this->commentRequestMatches($identity, $existing, $postId, $parentId, $replyToCommentId, $content, $aliasDisplayName)) {
+                        throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
+                    }
+
                     return $this->getComment($actor, (string)$existing['id']);
                 }
                 throw new RuntimeException('request_id is already in use', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
-            }
-            throw $e;
-        } catch (Throwable $e) {
-            if ($this->pdo->inTransaction()) {
-                $this->pdo->rollBack();
             }
             throw $e;
         }
@@ -337,6 +354,10 @@ final class ContentApplicationService
         $rows = [];
         $rawCursor = $cursor;
         $hasMore = false;
+        /** @var array<string, mixed> $chainCache */
+        $chainCache = [];
+        /** @var array<string, mixed> $blockedAuthors */
+        $blockedAuthors = [];
         while (true) {
             $sql = 'SELECT * FROM `comments` WHERE `post_id` = :post_id AND `status` = 1 AND `deleted_at` IS NULL';
             $params = ['post_id' => $postId];
@@ -357,12 +378,13 @@ final class ContentApplicationService
             if ($page === []) {
                 break;
             }
+            $this->loadChainContext($page, $chainCache);
             foreach ($page as $row) {
                 $rawCursor = (string)$row['id'];
-                if (!$this->isCommentChainReadable($row)) {
+                if (!$this->isCommentChainReadable($row, $chainCache)) {
                     continue;
                 }
-                if ($actor !== null && $this->isBlocked($actor->userId, (string)($row['author_user_id'] ?? ''))) {
+                if ($actor !== null && $this->cachedIsBlocked($actor->userId, (string)($row['author_user_id'] ?? ''), $blockedAuthors)) {
                     continue;
                 }
                 $rows[] = $row;
@@ -385,6 +407,58 @@ final class ContentApplicationService
                 'total' => $this->countComments($postId, $parentId),
             ]),
         ];
+    }
+
+    /**
+     * Loads every referenced parent/reply row for a page with one query instead of one lookup per comment,
+     * preserving the per-row visibility chain semantics.
+     *
+     * @param list<array<string, mixed>> $page
+     * @param array<string, mixed> $cache comment rows (or null) for parent/reply visibility checks
+     * @param-out array<string, mixed> $cache
+     */
+    private function loadChainContext(array $page, array &$cache): void
+    {
+        $ids = [];
+        foreach ($page as $row) {
+            foreach (['parent_id', 'reply_to_comment_id'] as $column) {
+                $id = trim((string)($row[$column] ?? ''));
+                if ($id !== '' && $id !== '0' && !array_key_exists($id, $cache)) {
+                    $ids[$id] = $id;
+                }
+            }
+        }
+        if ($ids === []) {
+            return;
+        }
+        $list = array_values($ids);
+        $placeholders = implode(', ', array_fill(0, count($list), '?'));
+        $statement = $this->pdo->prepare('SELECT * FROM `comments` WHERE `id` IN (' . $placeholders . ')');
+        $statement->execute($list);
+        $fetched = [];
+        foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $fetched[(string)$row['id']] = $row;
+        }
+        foreach ($list as $id) {
+            $cache[$id] = $fetched[$id] ?? null;
+        }
+    }
+
+    /**
+     * @param array<string, bool> $cache
+     * @param-out array<string, bool> $cache
+     */
+    private function cachedIsBlocked(string $actorUserId, string $targetUserId, array &$cache): bool
+    {
+        if ($targetUserId === '' || $targetUserId === $actorUserId) {
+            return false;
+        }
+        if (array_key_exists($targetUserId, $cache)) {
+            return $cache[$targetUserId];
+        }
+        $cache[$targetUserId] = $this->isBlocked($actorUserId, $targetUserId);
+
+        return $cache[$targetUserId];
     }
 
     public function getComment(?BusinessActor $actor, string $commentId): PublicComment
@@ -420,12 +494,143 @@ final class ContentApplicationService
             return;
         }
         $now = $this->now();
-        $update = $this->pdo->prepare(
-            'UPDATE `comments` SET `status` = 0, `deleted_at` = :deleted_at, `updated_at` = :updated_at '
-            . 'WHERE `id` = :id AND `author_user_id` = :user_id AND `deleted_at` IS NULL',
+        $postId = (string)$row['post_id'];
+        $this->transaction(function () use ($actor, $commentId, $postId, $requestId, $now): void {
+            $update = $this->pdo->prepare(
+                'UPDATE `comments` SET `status` = 0, `deleted_at` = :deleted_at, `updated_at` = :updated_at '
+                . 'WHERE `id` = :id AND `author_user_id` = :user_id AND `deleted_at` IS NULL',
+            );
+            $update->execute(['deleted_at' => $now, 'updated_at' => $now, 'id' => $commentId, 'user_id' => $actor->userId]);
+            if ($update->rowCount() === 0) {
+                // A concurrent delete already won the row; its transaction owns the event and the count.
+                return;
+            }
+            $this->decrementPostCommentCount($postId);
+            $this->recordEvent('comment', $commentId, 'comment.deleted.v1', $requestId, ['comment_id' => $commentId, 'user_id' => $actor->userId]);
+        });
+    }
+
+    /** Soft-deleted comments leave the projectable count, so the denormalized post counter follows one-for-one. */
+    private function decrementPostCommentCount(string $postId): void
+    {
+        if (!$this->isPositiveId($postId)) {
+            return;
+        }
+        $statement = $this->pdo->prepare(
+            'UPDATE `posts` SET `comment_count` = `comment_count` - 1 '
+            . 'WHERE `id` = :id AND `comment_count` > 0',
         );
-        $update->execute(['deleted_at' => $now, 'updated_at' => $now, 'id' => $commentId, 'user_id' => $actor->userId]);
-        $this->recordEvent('comment', $commentId, 'comment.deleted.v1', $requestId, ['comment_id' => $commentId, 'user_id' => $actor->userId]);
+        $statement->execute(['id' => $postId]);
+    }
+
+    /**
+     * Owns the business and Outbox transaction on the same PDO connection; nested writes are unsupported.
+     */
+    private function transaction(callable $callback): mixed
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $result = $callback();
+            $this->pdo->commit();
+
+            return $result;
+        } catch (Throwable $e) {
+            try {
+                if ($this->pdo->inTransaction()) {
+                    $this->pdo->rollBack();
+                }
+            } catch (Throwable) {
+                // Preserve the operation failure if MySQL has already rolled back or disconnected.
+            }
+            throw $e;
+        }
+    }
+
+    /**
+     * The stored row is only a valid retry when the same business identity and parameters produced it;
+     * switching identity mode or persona under one request_id is an explicit conflict.
+     *
+     * @param array<string, mixed> $existing
+     */
+    private function postRequestMatches(
+        UserIdentity $identity,
+        array $existing,
+        int $type,
+        string $content,
+        int $visibility,
+        ?string $emotion,
+        array $media,
+        string $aliasDisplayName,
+    ): bool {
+        return (string)$existing['persona_id'] === $identity->personaId
+            && (int)$existing['identity_mode'] === $identity->mode->value
+            && ($identity->mode !== PersonaMode::ALIAS || (string)$existing['author_display_name'] === $this->aliasDisplayName($aliasDisplayName))
+            && (int)$existing['type'] === $type
+            && (string)$existing['content'] === $content
+            && (int)$existing['visibility'] === $visibility
+            && (string)($existing['emotion'] ?? '') === (string)($emotion ?? '')
+            && $this->postMediaMatches((string)$existing['id'], $media);
+    }
+
+    /** @param array<string, mixed> $existing */
+    private function commentRequestMatches(
+        UserIdentity $identity,
+        array $existing,
+        string $postId,
+        ?string $parentId,
+        ?string $replyToCommentId,
+        string $content,
+        string $aliasDisplayName,
+    ): bool {
+        return (string)$existing['persona_id'] === $identity->personaId
+            && (int)$existing['identity_mode'] === $identity->mode->value
+            && ($identity->mode !== PersonaMode::ALIAS || (string)$existing['author_display_name'] === $this->aliasDisplayName($aliasDisplayName))
+            && (string)$existing['post_id'] === $postId
+            && (string)($existing['parent_id'] ?? '') === (string)($parentId ?? '')
+            && (string)($existing['reply_to_comment_id'] ?? '') === (string)($replyToCommentId ?? '')
+            && (string)$existing['content'] === $content;
+    }
+
+    /**
+     * @param array<mixed> $expectedMedia
+     */
+    private function postMediaMatches(string $postId, array $expectedMedia): bool
+    {
+        $expected = [];
+        foreach (array_values($expectedMedia) as $index => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $expected[] = [
+                'type' => (int)($item['type'] ?? 1),
+                'object_key' => trim((string)($item['object_key'] ?? '')),
+                'mime_type' => trim((string)($item['mime_type'] ?? 'application/octet-stream')),
+                'width' => (int)($item['width'] ?? 0),
+                'height' => (int)($item['height'] ?? 0),
+                'duration_ms' => (int)($item['duration_ms'] ?? 0),
+                'sort_order' => (int)($item['sort_order'] ?? $index),
+            ];
+        }
+        usort($expected, static fn (array $a, array $b): int => $a['sort_order'] <=> $b['sort_order']);
+        $statement = $this->pdo->prepare(
+            'SELECT `type`, `object_key`, `mime_type`, `width`, `height`, `duration_ms`, `sort_order` '
+            . 'FROM `post_media` WHERE `post_id` = :post_id ORDER BY `sort_order`, `id`',
+        );
+        $statement->execute(['post_id' => $postId]);
+        $stored = array_map(
+            static fn (array $row): array => [
+                'type' => (int)$row['type'],
+                'object_key' => (string)$row['object_key'],
+                'mime_type' => (string)$row['mime_type'],
+                'width' => (int)($row['width'] ?? 0),
+                'height' => (int)($row['height'] ?? 0),
+                'duration_ms' => (int)($row['duration_ms'] ?? 0),
+                'sort_order' => (int)($row['sort_order'] ?? 0),
+            ],
+            $statement->fetchAll(PDO::FETCH_ASSOC),
+        );
+
+        return $stored === $expected;
     }
 
     /** @return array{user_id:string,persona_id:string,identity_mode:int,author:PublicAuthor} */
@@ -709,15 +914,23 @@ final class ContentApplicationService
         }
     }
 
-    /** A deleted parent/reply must not keep a child comment addressable. */
-    private function isCommentChainReadable(array $row): bool
+    /**
+     * A deleted parent/reply must not keep a child comment addressable.
+     *
+     * @param array<string, mixed> $cache comment rows (or null) keyed by comment id
+     * @param-out array<string, mixed> $cache
+     */
+    private function isCommentChainReadable(array $row, array &$cache = []): bool
     {
         foreach (['parent_id', 'reply_to_comment_id'] as $column) {
             $id = trim((string)($row[$column] ?? ''));
             if ($id === '' || $id === '0') {
                 continue;
             }
-            $parent = $this->findCommentRow($id);
+            if (!array_key_exists($id, $cache)) {
+                $cache[$id] = $this->findCommentRow($id);
+            }
+            $parent = $cache[$id];
             if ($parent === null || (int)($parent['status'] ?? 0) !== 1 || ($parent['deleted_at'] ?? null) !== null) {
                 return false;
             }
@@ -799,7 +1012,9 @@ final class ContentApplicationService
         return (int)$statement->fetchColumn();
     }
 
-    /** @return array<string, mixed>|null */
+    /**
+     * @return array<string, mixed>|null
+     */
     private function findByRequest(string $table, string $userId, string $requestId): ?array
     {
         if (!in_array($table, ['posts', 'comments'], true)) {

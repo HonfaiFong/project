@@ -7,9 +7,14 @@ namespace Services\MessageService\Application;
 use Contracts\Gen\Common\V1\IdentityMode;
 use Contracts\Gen\Common\V1\PublicAuthor;
 use Contracts\Gen\Message\V1\PublicMessage;
+use Contracts\Events\EventTypes;
+use Google\Protobuf\PrintOptions;
 use JsonException;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousReferenceFactory;
+use Packages\Outbox\EventOutboxInterface;
+use Packages\Outbox\OutboxRepository;
+use Packages\Tracing\TraceContext;
 use Services\MessageService\Domain\ChatMemberSnapshotClient;
 use Services\MessageService\Domain\Exception\MessageException;
 use Services\MessageService\Domain\IdGenerator;
@@ -28,7 +33,9 @@ final class MessageApplicationService
         ?IdGenerator $ids = null,
         ?\Closure $clock = null,
         ?AnonymousAuthorProjector $projector = null,
+        ?EventOutboxInterface $outbox = null,
     ) {
+        $this->outbox = $outbox ?? new OutboxRepository($repository->pdo());
         $this->ids = $ids ?? new RandomIdGenerator();
         $this->clock = $clock ?? static fn (): string => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s.v');
         if ($projector !== null) {
@@ -43,6 +50,7 @@ final class MessageApplicationService
     }
 
     private readonly IdGenerator $ids;
+    private readonly EventOutboxInterface $outbox;
     private readonly AnonymousAuthorProjector $projector;
     /** @var \Closure():string */
     private readonly \Closure $clock;
@@ -122,9 +130,24 @@ final class MessageApplicationService
                     'created_at' => $now,
                 ];
                 $this->repository->insert($row);
+                $publicMessage = $this->publicMessage($row);
+                $this->outbox->recordEvent(
+                    eventId: TraceContext::generateUuidV7(),
+                    aggregateType: 'conversation',
+                    aggregateId: $conversationId,
+                    eventType: EventTypes::MESSAGE_CREATED,
+                    eventVersion: 1,
+                    payload: [
+                        'message' => json_decode($publicMessage->serializeToJsonString(
+                            PrintOptions::PRESERVE_PROTO_FIELD_NAMES | PrintOptions::ALWAYS_PRINT_ENUMS_AS_INTS,
+                        ), true, 512, JSON_THROW_ON_ERROR),
+                    ],
+                    eventKey: $conversationId,
+                    traceId: TraceContext::current()->traceId,
+                );
                 $pdo->commit();
 
-                return $this->publicMessage($row);
+                return $publicMessage;
             } catch (MessageException $e) {
                 if ($pdo->inTransaction()) {
                     $pdo->rollBack();

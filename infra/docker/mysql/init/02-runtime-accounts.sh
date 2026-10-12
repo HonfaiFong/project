@@ -13,6 +13,7 @@ set -eu
 : "${MYSQL_CHAT_RUNTIME_PASSWORD:?MYSQL_CHAT_RUNTIME_PASSWORD is required}"
 : "${MYSQL_MESSAGE_RUNTIME_PASSWORD:?MYSQL_MESSAGE_RUNTIME_PASSWORD is required}"
 : "${MYSQL_USER_OUTBOX_RELAY_PASSWORD:?MYSQL_USER_OUTBOX_RELAY_PASSWORD is required}"
+: "${MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD:?MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD is required}"
 : "${MYSQL_MIGRATION_PASSWORD:?MYSQL_MIGRATION_PASSWORD is required}"
 
 # MySQL string literals use backslash escaping by default. Escape both
@@ -40,13 +41,15 @@ SQL
 }
 
 create_relay_user() {
-    password=$(escape_mysql_literal "$1")
+    user="$1"
+    database="$2"
+    password=$(escape_mysql_literal "$3")
 
     mysql_root <<SQL
-CREATE USER IF NOT EXISTS 'user_outbox_relay'@'%';
-ALTER USER 'user_outbox_relay'@'%' IDENTIFIED BY '${password}';
-REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'user_outbox_relay'@'%';
-GRANT SELECT, UPDATE ON \`user_db\`.\`outbox_events\` TO 'user_outbox_relay'@'%';
+CREATE USER IF NOT EXISTS '${user}'@'%';
+ALTER USER '${user}'@'%' IDENTIFIED BY '${password}';
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM '${user}'@'%';
+GRANT SELECT, UPDATE ON \`${database}\`.\`outbox_events\` TO '${user}'@'%';
 SQL
 }
 
@@ -78,7 +81,8 @@ create_runtime_user content_runtime content_db "${MYSQL_CONTENT_RUNTIME_PASSWORD
 create_runtime_user social_runtime social_db "${MYSQL_SOCIAL_RUNTIME_PASSWORD}"
 create_runtime_user chat_runtime chat_db "${MYSQL_CHAT_RUNTIME_PASSWORD}"
 create_runtime_user message_runtime message_db "${MYSQL_MESSAGE_RUNTIME_PASSWORD}"
-create_relay_user "${MYSQL_USER_OUTBOX_RELAY_PASSWORD}"
+create_relay_user user_outbox_relay user_db "${MYSQL_USER_OUTBOX_RELAY_PASSWORD}"
+create_relay_user message_outbox_relay message_db "${MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD}"
 create_migration_user "${MYSQL_MIGRATION_PASSWORD}"
 
 echo "MySQL runtime, outbox relay, and migration accounts are present and reconciled."

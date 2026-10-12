@@ -22,6 +22,8 @@ scrape_configs:
           - "chat-service:9100"
           - "message-service:9100"
           - "user-outbox-relay:9100"
+          - "message-outbox-relay:9100"
+          - "chat-message-consumer:9100"
 
   # The RabbitMQ Prometheus plugin is not enabled by the current compose
   # stack. Add rabbitmq_prometheus and port 15692 before enabling this job.

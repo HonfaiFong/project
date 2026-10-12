@@ -80,7 +80,7 @@ type SubmitContentRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	ContentType int32    `protobuf:"varint,1,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"` // 1 = post, 2 = comment, 3 = persona profile
+	ContentType int32    `protobuf:"varint,1,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"` // 1 = 帖子，2 = 评论，3 = 人格资料
 	ContentId   uint64   `protobuf:"varint,2,opt,name=content_id,json=contentId,proto3" json:"content_id,omitempty"`
 	UserId      uint64   `protobuf:"varint,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
 	PersonaId   uint64   `protobuf:"varint,4,opt,name=persona_id,json=personaId,proto3" json:"persona_id,omitempty"`

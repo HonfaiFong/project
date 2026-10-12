@@ -14,12 +14,32 @@ PROBE_RPC_DEADLINE_MS="${AUTH_PROBE_RPC_DEADLINE_MS:-30000}"
 # 按本轮运行隔离，避免并发运行删除彼此的容器。
 READY_CONTAINER="social-auth-config-readiness-${RANDOM}-$$"
 READY_LOG=''
+TLS_DIR="$(mktemp -d)"
+
+# Temporary test CA/server credentials exercise the actual production TLS guard.
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=CI test CA' \
+  -keyout "$TLS_DIR/ca.key" -out "$TLS_DIR/ca.crt" >/dev/null 2>&1
+openssl req -newkey rsa:2048 -nodes -subj '/CN=auth-service' \
+  -keyout "$TLS_DIR/server.key" -out "$TLS_DIR/server.csr" >/dev/null 2>&1
+printf '%s\n' 'subjectAltName=DNS:auth-service,IP:127.0.0.1' 'extendedKeyUsage=serverAuth' > "$TLS_DIR/server.ext"
+openssl x509 -req -in "$TLS_DIR/server.csr" -CA "$TLS_DIR/ca.crt" -CAkey "$TLS_DIR/ca.key" \
+  -CAcreateserial -days 1 -extfile "$TLS_DIR/server.ext" -out "$TLS_DIR/server.crt" >/dev/null 2>&1
+TLS_OPTIONS=(
+  -v "$TLS_DIR:/run/secrets/grpc:ro"
+  -e GRPC_TLS_MODE=tls
+  -e GRPC_TLS_CLIENT_AUTH_TYPE=no_client_certs
+  -e GRPC_TLS_CA_FILE=/run/secrets/grpc/ca.crt
+  -e GRPC_TLS_SERVER_CERT_FILE=/run/secrets/grpc/server.crt
+  -e GRPC_TLS_SERVER_KEY_FILE=/run/secrets/grpc/server.key
+  -e GRPC_TLS_SERVER_NAME=auth-service
+)
 
 cleanup() {
   if [[ -n "$READY_LOG" ]]; then
     rm -f "$READY_LOG"
   fi
   docker rm -f "$READY_CONTAINER" >/dev/null 2>&1 || true
+  rm -rf "$TLS_DIR"
 }
 trap cleanup EXIT
 
@@ -31,7 +51,7 @@ run_rejection_case() {
   local log_file
   log_file="$(mktemp)"
 
-  if docker compose run --rm --no-deps "$@" auth-service php /app/services/auth-service/bin/server.php >"$log_file" 2>&1; then
+  if docker compose run --rm --no-deps "${TLS_OPTIONS[@]}" "$@" auth-service php /app/services/auth-service/bin/server.php >"$log_file" 2>&1; then
     echo "FAIL case=${name} expected_auth_startup_rejection"
     rm -f "$log_file"
     return 1
@@ -57,7 +77,7 @@ run_ready_case() {
   READY_LOG="$log_file"
 
   # 容器运行真实生产命令，由 RoadRunner 监管 AuthService 工作进程；下方探测因此访问实际提供服务的 gRPC 端口。
-  docker compose run --rm --no-deps --name "$READY_CONTAINER" "$@" auth-service >"$log_file" 2>&1 &
+  docker compose run --rm --no-deps --name "$READY_CONTAINER" "${TLS_OPTIONS[@]}" "$@" auth-service >"$log_file" 2>&1 &
   pid=$!
 
   for ((attempt = 0; attempt < READY_TIMEOUT_SECONDS * 4; attempt++)); do

@@ -23,6 +23,7 @@ use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
 use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
+use Apps\ApiGateway\Middleware\MetricsAccessMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindUserRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
@@ -133,6 +134,9 @@ $container->singleton(HealthController::class, static fn (Container $container):
 ]));
 $container->singleton(AppEnvironmentMiddleware::class, static fn (): AppEnvironmentMiddleware => new AppEnvironmentMiddleware(
     environment: $settings['environment'],
+));
+$container->singleton(MetricsAccessMiddleware::class, static fn (): MetricsAccessMiddleware => new MetricsAccessMiddleware(
+    allowedCidrs: $settings['metrics_allowed_cidrs'],
 ));
 $container->singleton(SocialLoginRateLimitMiddleware::class, static fn (): SocialLoginRateLimitMiddleware => new SocialLoginRateLimitMiddleware(
     counter: $socialLoginRateLimitCounter,

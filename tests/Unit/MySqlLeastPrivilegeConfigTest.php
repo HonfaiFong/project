@@ -115,7 +115,9 @@ final class MySqlLeastPrivilegeConfigTest extends TestCase
                 $accounts,
             );
         }
-        self::assertStringContainsString("GRANT SELECT, UPDATE ON \\`user_db\\`.\\`outbox_events\\` TO 'user_outbox_relay'", $accounts);
+        self::assertStringContainsString("GRANT SELECT, UPDATE ON \\`\${database}\\`.\\`outbox_events\\` TO '\${user}'", $accounts);
+        self::assertStringContainsString('create_relay_user user_outbox_relay user_db', $accounts);
+        self::assertStringContainsString('create_relay_user message_outbox_relay message_db', $accounts);
         self::assertStringContainsString("ON \\`%_db\\`.* TO 'migration_ddl'", $accounts);
         self::assertStringContainsString("ON \\`%meta\\`.* TO 'migration_ddl'", $accounts);
         self::assertStringNotContainsString("'migration_ddl'@'%' WITH GRANT OPTION", $accounts);

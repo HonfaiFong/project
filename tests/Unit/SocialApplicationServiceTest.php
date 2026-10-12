@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use Contracts\Errors\ErrorCode;
+use Contracts\Events\EventTypes;
 use Packages\Identity\PersonaOperation;
+use Packages\Outbox\EventOutboxInterface;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Services\SocialService\Application\Service\SocialApplicationService;
@@ -13,6 +15,7 @@ use Services\SocialService\Domain\Entity\MainPersona;
 use Services\SocialService\Domain\Repository\SocialRepositoryInterface;
 use Services\SocialService\Domain\Service\PersonaDirectoryInterface;
 use Services\SocialService\Domain\Service\ResourceAccessInterface;
+use Tests\Support\RecordingEventOutbox;
 
 final class SocialApplicationServiceTest extends TestCase
 {
@@ -62,6 +65,31 @@ final class SocialApplicationServiceTest extends TestCase
 
         $this->expectExceptionCode(ErrorCode::SOCIAL_USER_BLOCKED->value);
         $service->like('10', '100', 1, '900');
+    }
+
+    public function testRepeatedLikeEmitsLikeCreatedOnlyForTheInsertThatCreatedTheRow(): void
+    {
+        $personas = new FakePersonaDirectory();
+        $repository = new FakeSocialRepository();
+        $resources = new FakeResourceAccess();
+        $outbox = new RecordingEventOutbox();
+        $service = $this->service($repository, $personas, $resources, $outbox);
+
+        $this->assertTrue($service->like('10', '100', 1, '900'));
+        $this->assertTrue($service->like('10', '100', 1, '900'));
+        $this->assertCount(1, $outbox->findByEventType(EventTypes::LIKE_CREATED));
+
+        $this->assertTrue($service->unlike('10', '100', 1, '900'));
+        $this->assertTrue($service->like('10', '100', 1, '900'));
+
+        $events = $outbox->findByEventType(EventTypes::LIKE_CREATED);
+        $this->assertCount(2, $events);
+        $this->assertSame('10', $events[1]['event_key']);
+        $this->assertSame('900', $events[1]['aggregate_id']);
+        $this->assertSame(
+            ['persona_id' => '100', 'target_type' => 1, 'target_id' => '900', 'user_id' => '10'],
+            $events[1]['payload'],
+        );
     }
 
     public function testFollowRejectsEitherDirectionOfBlockAndSupportsReverseOperation(): void
@@ -128,8 +156,9 @@ final class SocialApplicationServiceTest extends TestCase
         FakeSocialRepository $repository,
         FakePersonaDirectory $personas,
         FakeResourceAccess $resources,
+        ?EventOutboxInterface $outbox = null,
     ): SocialApplicationService {
-        return new SocialApplicationService($repository, $personas, $resources);
+        return new SocialApplicationService($repository, $personas, $resources, outbox: $outbox);
     }
 }
 
@@ -195,6 +224,8 @@ final class FakeSocialRepository implements SocialRepositoryInterface
 {
     /** @var array<string, bool> */
     public array $likes = [];
+    /** @var array<string, string> */
+    public array $likeIds = [];
     /** @var array<string, bool> */
     public array $follows = [];
     /** @var array<string, bool> */
@@ -205,14 +236,31 @@ final class FakeSocialRepository implements SocialRepositoryInterface
         return $operation();
     }
 
-    public function insertLike(string $id, string $personaId, int $targetType, string $targetId): void
+    public function insertLike(string $id, string $personaId, int $targetType, string $targetId): bool
     {
-        $this->likes[$personaId . '|' . $targetType . '|' . $targetId] = true;
+        $key = $personaId . '|' . $targetType . '|' . $targetId;
+        if (isset($this->likes[$key])) {
+            return false;
+        }
+        if (isset($this->likeIds[$id])) {
+            // 与真实仓储一致：只有业务唯一键重复可以幂等返回 false，主键冲突必须抛出。
+            throw new RuntimeException('like id already exists for another target');
+        }
+
+        $this->likes[$key] = true;
+        $this->likeIds[$id] = $key;
+
+        return true;
     }
 
     public function deleteLike(string $personaId, int $targetType, string $targetId): void
     {
-        unset($this->likes[$personaId . '|' . $targetType . '|' . $targetId]);
+        $key = $personaId . '|' . $targetType . '|' . $targetId;
+        unset($this->likes[$key]);
+        $id = array_search($key, $this->likeIds, true);
+        if ($id !== false) {
+            unset($this->likeIds[$id]);
+        }
     }
 
     public function hasLike(string $personaId, int $targetType, string $targetId): bool

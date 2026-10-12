@@ -138,15 +138,22 @@ SQL);
             PersonaMode::ALIAS->value,
             '0',
             1,
-            'must be idempotent',
+            'anonymous post',
             1,
             '',
             [],
             'post-request-1',
-            'changed alias',
+            'post alias',
         );
         $this->assertSame($post->getPostId(), $samePost->getPostId());
         $this->assertSame('anonymous post', $samePost->getContent());
+
+        try {
+            $this->content->createPost($actor, PersonaMode::ALIAS->value, '0', 1, 'must be idempotent', 1, '', [], 'post-request-1');
+            $this->fail('A reused request_id with different parameters must conflict.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame(ErrorCode::IDEMPOTENCY_CONFLICT->value, $exception->getCode());
+        }
 
         $comment = $this->content->createComment(
             $actor,

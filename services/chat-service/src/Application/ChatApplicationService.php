@@ -179,7 +179,7 @@ final class ChatApplicationService
     {
         $trustedUserId = $this->id($trustedUserId, 'user_id');
         $limit = max(1, min($limit > 0 ? $limit : 20, 100));
-        $cursor = $cursor !== null && $cursor !== '' ? $this->id($cursor, 'cursor') : null;
+        $cursor = $cursor !== null && $cursor !== '' ? $cursor : null;
         $rows = $this->repository->listForUser($trustedUserId, $limit, $cursor);
         $hasMore = count($rows) > $limit;
         if ($hasMore) {
@@ -189,7 +189,7 @@ final class ChatApplicationService
         return [
             'conversations' => array_map(fn (array $row): PublicConversation => $this->publicConversation($row), $rows),
             'has_more' => $hasMore,
-            'next_cursor' => $hasMore ? (string)$rows[array_key_last($rows)]['id'] : '',
+            'next_cursor' => $hasMore ? $this->repository->listCursor($rows[array_key_last($rows)]) : '',
         ];
     }
 
@@ -257,7 +257,15 @@ final class ChatApplicationService
                 (string)$member['persona_id'],
                 self::SEND_MESSAGE_OPERATION,
             );
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            if (!in_array($exception->getCode(), [
+                \Contracts\Errors\ErrorCode::USER_NOT_FOUND->value,
+                \Contracts\Errors\ErrorCode::USER_BANNED->value,
+                \Contracts\Errors\ErrorCode::PERSONA_NOT_FOUND->value,
+                \Contracts\Errors\ErrorCode::PERSONA_FORBIDDEN->value,
+            ], true)) {
+                throw $exception;
+            }
             return ['allowed' => false, 'denial_reason' => 'conversation identity is unavailable'];
         }
         $validatedProfile = $validated['persona'] ?? $validated;

@@ -17,6 +17,7 @@ use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousReferenceFactory;
 use Packages\Logging\JsonLogger;
 use Packages\Observability\MetricsHttpServer;
+use Packages\Outbox\OutboxRepository;
 use Services\MessageService\Application\MessageApplicationService;
 use Services\MessageService\Infrastructure\GrpcChatMemberSnapshotClient;
 use Services\MessageService\Infrastructure\PdoMessageRepository;
@@ -63,7 +64,8 @@ $anonymousKey = trim((string)getenv('ANONYMOUS_IDENTITY_KEY'));
 if ($anonymousKey === '') {
     throw new RuntimeException('ANONYMOUS_IDENTITY_KEY is required');
 }
-$worker = new SnowflakeIdGenerator(new Snowflake(WorkerId::resolve()));
+$snowflake = new Snowflake(WorkerId::resolve());
+$worker = new SnowflakeIdGenerator($snowflake);
 $application = new MessageApplicationService(
     repository: new PdoMessageRepository($pdo),
     chat: new GrpcChatMemberSnapshotClient(
@@ -73,6 +75,7 @@ $application = new MessageApplicationService(
     ),
     ids: $worker,
     projector: new AnonymousAuthorProjector(new AnonymousReferenceFactory($anonymousKey)),
+    outbox: new OutboxRepository($pdo, $snowflake),
 );
 
 $gatewayToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_MESSAGE_TOKEN') ?: ''));

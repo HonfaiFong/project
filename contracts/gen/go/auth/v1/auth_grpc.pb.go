@@ -37,8 +37,7 @@ type AuthServiceClient interface {
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
 	SocialLogin(ctx context.Context, in *SocialLoginRequest, opts ...grpc.CallOption) (*SocialLoginResponse, error)
 	// Deprecated: Do not use.
-	// Deprecated phone-binding flow: retained for wire compatibility. The
-	// transport rejects both RPCs with AUTH_UNAUTHORIZED.
+	// 已弃用的手机号绑定流程：为保持协议兼容而保留；传输层以 AUTH_UNAUTHORIZED 拒绝这两个 RPC。
 	SendSocialPhoneCode(ctx context.Context, in *SendSocialPhoneCodeRequest, opts ...grpc.CallOption) (*SendSocialPhoneCodeResponse, error)
 	// Deprecated: Do not use.
 	BindSocialPhone(ctx context.Context, in *BindSocialPhoneRequest, opts ...grpc.CallOption) (*BindSocialPhoneResponse, error)
@@ -156,8 +155,7 @@ type AuthServiceServer interface {
 	Login(context.Context, *LoginRequest) (*LoginResponse, error)
 	SocialLogin(context.Context, *SocialLoginRequest) (*SocialLoginResponse, error)
 	// Deprecated: Do not use.
-	// Deprecated phone-binding flow: retained for wire compatibility. The
-	// transport rejects both RPCs with AUTH_UNAUTHORIZED.
+	// 已弃用的手机号绑定流程：为保持协议兼容而保留；传输层以 AUTH_UNAUTHORIZED 拒绝这两个 RPC。
 	SendSocialPhoneCode(context.Context, *SendSocialPhoneCodeRequest) (*SendSocialPhoneCodeResponse, error)
 	// Deprecated: Do not use.
 	BindSocialPhone(context.Context, *BindSocialPhoneRequest) (*BindSocialPhoneResponse, error)

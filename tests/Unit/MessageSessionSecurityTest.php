@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use PDO;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousReferenceFactory;
+use Packages\Outbox\EventOutboxInterface;
 use Services\MessageService\Application\MessageApplicationService;
 use Services\MessageService\Domain\ChatMemberSnapshotClient;
 use Services\MessageService\Domain\Exception\MessageException;
@@ -32,7 +33,7 @@ final class MessageSessionSecurityTest extends TestCase
                 'anonymous_ref' => '',
             ],
         ]);
-        [$app] = $this->app($chat);
+        [$app, $repository] = $this->app($chat);
 
         $first = $app->sendMessage('100', [
             'client_message_id' => 'client-1',
@@ -60,6 +61,29 @@ final class MessageSessionSecurityTest extends TestCase
         self::assertSame('101', (string)$first->getAuthor()->getPersonaId());
         self::assertSame('Frozen main', $first->getAuthor()->getDisplayName());
         self::assertTrue($first->getAuthor()->getProfileAccessible());
+        self::assertSame(1, (int)$repository->pdo()->query('SELECT COUNT(*) FROM outbox_events')->fetchColumn());
+    }
+
+    public function testOutboxFailureRollsBackMessageAndSequenceAllocation(): void
+    {
+        $chat = $this->chatClient([
+            'allowed' => true,
+            'member' => ['user_id' => '100', 'persona_id' => '101', 'identity_mode' => 1],
+        ]);
+        $outbox = $this->createMock(EventOutboxInterface::class);
+        $outbox->method('recordEvent')->willThrowException(new \RuntimeException('outbox unavailable'));
+        [$app, $repository] = $this->app($chat, $outbox);
+        try {
+            $app->sendMessage('100', [
+                'client_message_id' => 'failed-event', 'conversation_id' => '900',
+                'type' => 1, 'content' => '{"body":"must roll back"}',
+            ]);
+            self::fail('Expected the outbox failure');
+        } catch (\RuntimeException $exception) {
+            self::assertSame('outbox unavailable', $exception->getMessage());
+        }
+        self::assertSame(0, (int)$repository->pdo()->query('SELECT COUNT(*) FROM messages')->fetchColumn());
+        self::assertSame(0, (int)$repository->pdo()->query('SELECT COUNT(*) FROM conversation_sequences')->fetchColumn());
     }
 
     public function testJsonObjectAndArrayRemainDifferentForIdempotency(): void
@@ -158,7 +182,7 @@ final class MessageSessionSecurityTest extends TestCase
     }
 
     /** @return array{0:MessageApplicationService,1:PdoMessageRepository} */
-    private function app(ChatMemberSnapshotClient $chat): array
+    private function app(ChatMemberSnapshotClient $chat, ?EventOutboxInterface $outbox = null): array
     {
         if (!extension_loaded('pdo_sqlite')) {
             self::markTestSkipped('pdo_sqlite is required; run PHP with -d extension=pdo_sqlite');
@@ -183,6 +207,7 @@ final class MessageSessionSecurityTest extends TestCase
                 ids: $ids,
                 clock: static fn (): string => '2026-10-11 00:00:00.000',
                 projector: $projector,
+                outbox: $outbox,
             ),
             $repository,
         ];

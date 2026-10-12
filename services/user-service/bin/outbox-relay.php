@@ -19,7 +19,7 @@ for (;;) {
             'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
             getenv('MYSQL_HOST') ?: 'mysql',
             getenv('MYSQL_PORT') ?: '3306',
-            getenv('USER_DB_NAME') ?: 'user_db',
+            getenv('OUTBOX_DB_NAME') ?: (getenv('USER_DB_NAME') ?: 'user_db'),
         ), getenv('MYSQL_USER') ?: 'user_outbox_relay', getenv('MYSQL_PASSWORD') ?: '', [
             PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         ]);
@@ -30,7 +30,7 @@ for (;;) {
             getenv('RABBITMQ_PASSWORD') ?: '',
         );
         $channel = $connection->channel();
-        $relay = new OutboxRelay(new OutboxRepository($pdo), new RabbitMqEventPublisher($channel, 'user-service'));
+        $relay = new OutboxRelay(new OutboxRepository($pdo), new RabbitMqEventPublisher($channel, getenv('OUTBOX_PRODUCER') ?: 'user-service'));
         for (;;) {
             if ($relay->runOnce() === 0) {
                 usleep(500_000);

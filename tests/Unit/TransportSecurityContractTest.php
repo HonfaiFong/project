@@ -5,9 +5,35 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Packages\GrpcCommon\GrpcClientContext;
 
 final class TransportSecurityContractTest extends TestCase
 {
+    public function testMessageConsumerUsesChatRpcIdentityAndSeparateTelemetryName(): void
+    {
+        $compose = (string)file_get_contents(dirname(__DIR__, 2) . '/compose.yaml');
+        $start = strpos($compose, "  chat-message-consumer:\n");
+        $end = strpos($compose, "  api-gateway:\n", (int)$start);
+        $this->assertNotFalse($start);
+        $this->assertNotFalse($end);
+        $consumer = substr($compose, $start, $end - $start);
+        $this->assertStringContainsString('- SERVICE_NAME=chat-service', $consumer);
+        $this->assertStringContainsString('- OTEL_SERVICE_NAME=chat-message-consumer', $consumer);
+        $this->assertStringContainsString('INTERNAL_RPC_CHAT_USER_TOKEN', $consumer);
+        $this->assertStringContainsString('INTERNAL_RPC_CHAT_SOCIAL_TOKEN', $consumer);
+
+        $previous = getenv('SERVICE_NAME');
+        putenv('SERVICE_NAME=chat-service');
+        try {
+            $options = GrpcClientContext::createCallOptions(200, ['x-service-name' => 'chat-message-consumer'], 'test-chat-token');
+            $this->assertSame(['chat-service'], $options['metadata']['x-service-name']);
+            $this->assertSame(['test-chat-token'], $options['metadata']['x-service-token']);
+        } finally {
+            putenv($previous === false ? 'SERVICE_NAME' : 'SERVICE_NAME=' . $previous);
+        }
+    }
+
     public function testUnaryClientDelegatesCredentialsToTheTlsPolicy(): void
     {
         $source = (string)file_get_contents(dirname(__DIR__, 2) . '/packages/php/grpc-common/src/UnaryGrpcClient.php');
@@ -28,7 +54,7 @@ final class TransportSecurityContractTest extends TestCase
         $this->assertStringContainsString('require_and_verify_client_cert', $source);
     }
 
-    /** @dataProvider roadrunnerConfigProvider */
+    #[DataProvider('roadrunnerConfigProvider')]
     public function testEveryRoadRunnerGrpcServiceUsesTheSharedTlsEntrypoint(string $service): void
     {
         $compose = (string)file_get_contents(dirname(__DIR__, 2) . '/compose.yaml');

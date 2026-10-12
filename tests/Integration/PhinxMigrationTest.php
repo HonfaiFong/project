@@ -114,6 +114,52 @@ final class PhinxMigrationTest extends TestCase
             ->whereKey('100000000000000001')->value('openid'));
     }
 
+    public function testChatSummaryMigrationSeedsHistoryAndRepairsFutureReadCursors(): void
+    {
+        $this->assertMigrationSucceeds();
+        $chatTable = $this->prefix . 'chat_db.conversations';
+        $members = $this->prefix . 'chat_db.conversation_members';
+        $messages = $this->prefix . 'message_db.messages';
+        $now = '2026-10-12 00:00:00.000';
+        $this->connection()->table($chatTable)->insert([
+            'id' => 100, 'type' => 1, 'created_at' => $now, 'updated_at' => $now,
+        ]);
+        $this->connection()->table($members)->insert([
+            'id' => 101, 'conversation_id' => 100, 'user_id' => 10, 'persona_id' => 11,
+            'last_read_seq' => 999999, 'joined_at' => $now,
+        ]);
+        $row = [
+            'conversation_id' => 100, 'sender_user_id' => 10, 'sender_persona_id' => 11,
+            'type' => 1, 'content' => '{"body":"history"}', 'created_at' => $now,
+        ];
+        $this->connection()->table($messages)->insert([
+            $row + ['message_id' => 201, 'seq' => 1, 'client_message_id' => 'history-1'],
+            $row + ['message_id' => 202, 'seq' => 2, 'client_message_id' => 'history-2'],
+        ]);
+        $this->schema()->table($chatTable, static function (Blueprint $table): void {
+            $table->dropColumn('last_message_seq');
+        });
+        require_once dirname(__DIR__, 2) . '/database/migrations/20261012000000_add_chat_message_summary_sequence.php';
+        $migrationClass = 'AddChatMessageSummarySequence';
+        $migration = new $migrationClass('test', 20261012000000);
+        $migration->setAdapter(new MysqlAdapter([
+            'connection' => $this->pdo, 'name' => $this->prefix . 'meta',
+            'migration_table' => $this->prefix . 'meta.phinxlog', 'schema_prefix' => $this->prefix,
+        ]));
+        $migration->up();
+        $conversation = $this->connection()->table($chatTable)->where('id', 100)->first();
+        self::assertSame('2', (string)$conversation->last_message_seq);
+        self::assertSame('202', (string)$conversation->last_message_id);
+        self::assertSame($now, $conversation->last_message_at);
+        self::assertSame('2', (string)$this->connection()->table($members)->where('id', 101)->value('last_read_seq'));
+        // Re-running after an ALTER committed independently must still repair the backfill.
+        $this->connection()->table($chatTable)->where('id', 100)->update(['last_message_seq' => 0]);
+        $migration->up();
+        self::assertSame('2', (string)$this->connection()->table($chatTable)->where('id', 100)->value('last_message_seq'));
+        $migration->up();
+        self::assertSame('2', (string)$this->connection()->table($members)->where('id', 101)->value('last_read_seq'));
+    }
+
     public function testFreshSocialSchemaMatchesFinalMigrationContract(): void
     {
         $this->assertMigrationSucceeds();

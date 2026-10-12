@@ -60,6 +60,10 @@ return [
         array_map('trim', explode(',', (string)(getenv('SOCIAL_TRUSTED_PROXY_CIDRS') ?: ''))),
         static fn (string $cidr): bool => $cidr !== '',
     )),
+    'metrics_allowed_cidrs' => array_values(array_filter(
+        array_map('trim', explode(',', (string)(getenv('METRICS_ALLOWED_CIDRS') ?: ''))),
+        static fn (string $cidr): bool => $cidr !== '',
+    )),
     'redis' => [
         'host' => trim((string)(getenv('REDIS_HOST') ?: '')),
         'port' => (int)(getenv('REDIS_PORT') ?: 6379),

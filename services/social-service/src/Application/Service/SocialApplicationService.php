@@ -41,25 +41,25 @@ final readonly class SocialApplicationService
         $this->target($actorUserId, $targetType, $targetId);
 
         $this->repository->transaction(function () use ($actor, $targetType, $targetId): void {
-            // A repeated like is idempotent. The unique key is the final
-            // concurrency guard; no duplicate event is emitted for a row
-            // that was already present.
-            $wasLiked = $this->repository->hasLike($actor->id, $targetType, $targetId);
-            $this->repository->insertLike($this->nextId(), $actor->id, $targetType, $targetId);
-            if (!$wasLiked) {
-                $this->recordEvent(
-                    EventTypes::LIKE_CREATED,
-                    aggregateType: 'like',
-                    aggregateId: $targetId,
-                    eventKey: $actor->userId,
-                    payload: [
-                        'persona_id' => $actor->id,
-                        'target_type' => $targetType,
-                        'target_id' => $targetId,
-                        'user_id' => $actor->userId,
-                    ],
-                );
+            // A repeated like is idempotent. insertLike reports whether this
+            // call actually created the row: the unique key rejects a
+            // replayed or racing like, which must not emit a second event.
+            if (!$this->repository->insertLike($this->nextId(), $actor->id, $targetType, $targetId)) {
+                return;
             }
+
+            $this->recordEvent(
+                EventTypes::LIKE_CREATED,
+                aggregateType: 'like',
+                aggregateId: $targetId,
+                eventKey: $actor->userId,
+                payload: [
+                    'persona_id' => $actor->id,
+                    'target_type' => $targetType,
+                    'target_id' => $targetId,
+                    'user_id' => $actor->userId,
+                ],
+            );
         });
 
         return true;

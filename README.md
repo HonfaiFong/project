@@ -49,13 +49,13 @@
 | `gateways/realtime-gateway` | Realtime Gateway | Go 1.27 / WebSocket | 实时长连接维持、心跳、多端连接管理、下行 Push (**Skeleton**：连接/心跳/票据校验已实现，当前使用 JSON Envelope，Phase 3 切换 Protobuf Binary Envelope；消息协议与 Presence 见其 README) |
 | `services/auth-service` | AuthService | RoadRunner / PHP 8.4 | 账号认证、Token 签发 / 轮转、设备管理、WS Ticket (**Phase 1 已实现**) |
 | `services/user-service` | UserService | RoadRunner / PHP 8.4 | 用户主体、Persona 分身管理 (**User != Persona**) (**Phase 1 已实现**) |
-| `services/content-service` | ContentService | RoadRunner / PHP 8.4 | 帖子、图文媒体元数据、一级与回复评论 (**骨架，未实现**) |
-| services/social-service | SocialService | RoadRunner / PHP 8.4 | MAIN 点赞/关注、账号级双向拉黑 (**骨架，未实现**) |
+| `services/content-service` | ContentService | RoadRunner / PHP 8.4 | 已实现帖子、图文媒体元数据、一级与回复评论及访问授权 |
+| services/social-service | SocialService | RoadRunner / PHP 8.4 | 已实现 MAIN 点赞/关注、账号级双向拉黑及交互状态查询 |
 | `services/discovery-service` | DiscoveryService | RoadRunner / PHP 8.4 | 漂流罐头、情绪池、随机发现、曝光过滤 (**骨架，未实现**) |
 | `services/feed-service` | FeedService | RoadRunner / PHP 8.4 | 首页 Feed 规则召回、ZSET Timeline 聚合 (**骨架，未实现**) |
 | `services/recommend-service` | RecommendService | RoadRunner / PHP 8.4 | 用户兴趣画像、候选打分排序 (**骨架，未实现**) |
-| `services/chat-service` | ChatService | RoadRunner / PHP 8.4 | 私聊会话、会话成员、已读点、权限校验 (**骨架，未实现**) |
-| `services/message-service` | MessageService | RoadRunner / PHP 8.4 | 消息持久化、递增 seq、幂等去重、分片路由 (**骨架，未实现**) |
+| `services/chat-service` | ChatService | RoadRunner / PHP 8.4 | 已实现私聊会话、固定成员身份快照、已读点及权限校验 |
+| `services/message-service` | MessageService | RoadRunner / PHP 8.4 | 已实现消息持久化、递增 seq、幂等去重及历史同步；当前运行库尚未接入分片路由 |
 | `services/risk-service` | RiskService | RoadRunner / PHP 8.4 | 同步风险决策 (ALLOW/DENY/CHALLENGE) (**骨架，未实现**) |
 | `services/moderation-service` | ModerationService | RoadRunner / PHP 8.4 | 内容敏感词与多媒体审核流转 (**骨架，未实现**) |
 | `services/notification-service` | NotificationService | RoadRunner / PHP 8.4 | 站内通知与离线推送通道 (**骨架，未实现**) |
@@ -186,7 +186,11 @@ RoadRunner 的 gRPC 插件在六个服务配置上通过 `grpc.tls` 的官方覆
 
 Snowflake Worker ID 说明：`WORKER_ID` 仍表示服务槽位（0-31），每个 RoadRunner worker 通过 Redis `SET NX EX` 在该槽位的 32 个进程槽中取得带所有权 token 的租约；租约按单调时钟定期续期，并在生成 ID 前检查所有权。Redis 故障、租约续期失败或租约已被回收时，进程拒绝继续生成 ID；正常退出会用 token 比对后释放，异常退出由 TTL 回收。因此同一 Redis 租约命名空间内的副本不会因 PID 重用或 `pid % 32` 碰撞而同时使用同一个 worker ID。部署所有使用 Snowflake 的服务时必须提供 `REDIS_HOST`/`REDIS_PORT`（可选 `REDIS_PASSWORD`），并可用 `WORKER_ID_LEASE_NAMESPACE`、`WORKER_ID_LEASE_TTL_SECONDS` 配置共享命名空间与 TTL。
 
+当前续约由生成 ID 的调用触发，没有独立后台心跳。进程空闲超过 TTL 后，下一次写请求会因租约丢失被拒绝；RoadRunner 进程仍存活时不会自动取得新租约。本地生产配置实测已复现该行为。上线前需要补齐空闲续约或安全的进程回收及重试机制，并验证空闲超过 TTL 后的恢复；单纯增大 TTL 不能消除该限制。
+
 ---
+
+API Gateway 的 `/metrics` 使用 `METRICS_ALLOWED_CIDRS` 作为监控 socket 对端白名单（逗号分隔 IP 或 CIDR，空值拒绝全部）。部署 Prometheus 时应填写专用监控网络的实际网段；不得把公众反向代理所在网段加入白名单。`X-Forwarded-For` 不参与授权。其余 PHP 服务的 9100 端口只应在内部监控网络开放。
 
 ## 5. Proto 与协议维护
 
@@ -208,9 +212,13 @@ contracts/proto/
 make proto
 ```
 
+权威生成入口使用 `infra/docker/proto/Dockerfile`：protoc 3.21.12、protoc-gen-go v1.35.1、protoc-gen-go-grpc v1.5.1、protoc-gen-php-grpc 2025.1.15。下载的 protoc 与 PHP gRPC 插件有架构对应的 SHA256 校验。不要手改 `contracts/gen`；修改源协议或升级工具后运行两次 `make proto`，第二次不得改变生成文件，再将工具链和产物一起提交。生成入口会清理旧产物，已删除协议不会留下过期文件。
+
 ---
 
 ## 6. 数据库设计与迁移
+
+本次消息链路升级：暂停 Chat/Message 写入并备份相关库，应用 `20261012000000` 后再启动新 worker。已有 MySQL 数据卷需要填写新的 `MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD` 并重跑账号初始化脚本以创建 `message_outbox_relay`。先执行 `docker compose build realtime-gateway`，再重建 realtime-gateway、message-service、chat-service、message-outbox-relay 和 chat-message-consumer 容器；已有 Go 镜像不会因 `make up` 自动刷新。验证网关 `/ready`（含 Redis 订阅就绪）和真实消息同步/推送，关注 `jobs.failed` 中超过五次投递失败的消息事件。
 
 数据库初始化基线位于 `infra/docker/mysql/init/01-databases.sql`，容器首次启动时自动挂载执行。后续结构变更使用 Phinx，迁移文件放在 `database/migrations/`，由 `meta.phinxlog` 追踪。历史 `infra/docker/mysql/migrations/0001` 至 `0006` SQL 和 `meta.schema_migrations` 保留，由首次 Phinx 迁移接管；未完成的旧迁移按实际字段/索引补齐，已完成记录不重放。
 - `auth_db`: 存储 `devices`, `refresh_tokens`, `outbox_events`
@@ -232,6 +240,7 @@ make proto
 | `social_runtime` | `social_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | SocialService |
 | `chat_runtime` | `chat_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | ChatService |
 | `message_runtime` | `message_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | MessageService |
+| `message_outbox_relay` | `message_db.outbox_events` 的 `SELECT/UPDATE` | Message Outbox relay |
 | `user_outbox_relay` | 仅 `user_db.outbox_events` 的 `SELECT/UPDATE` | User outbox relay |
 | `migration_ddl` | 迁移所需的 DDL/DML（仅匹配名称以 `_db`/`meta` 结尾的逻辑库）；无 `GRANT OPTION`、无 `CREATE USER` | Phinx |
 
@@ -359,7 +368,7 @@ MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TE
 
 ## 11. RabbitMQ 事件与任务规范
 
-`domain.events` topic exchange 按事件类型路由到独立 stream：`user.events`、`feed.events`、`search.events`、`notification.events`、`chat.events`。每个 stream 保留 7 天；新消费者可从指定 offset 重放。当前每个 stream 为单分区，消费端需串行处理才能维持其中事件顺序。扩容为 Super Stream 时，publisher 必须用 aggregate ID 一致性分区，同一 aggregate 始终进入同一 partition；topic pattern 不负责 hash 分区。UserService 的 Outbox relay 已实现：publisher confirm 和 mandatory routing 成功后标记已发布，失败重试，事件 ID 用于消费端去重。其他服务的 relay 和消费端尚未实现。
+`domain.events` topic exchange 按事件类型路由到独立 stream：`user.events`、`feed.events`、`search.events`、`notification.events`、`chat.events`。每个 stream 保留 7 天；新消费者可从指定 offset 重放。当前每个 stream 为单分区，消费端需串行处理才能维持其中事件顺序。扩容为 Super Stream 时，publisher 必须用 aggregate ID 一致性分区，同一 aggregate 始终进入同一 partition；topic pattern 不负责 hash 分区。UserService 的 Outbox relay 已实现：publisher confirm 和 mandatory routing 成功后标记已发布，失败重试，事件 ID 用于消费端去重。MessageService 同样在事务中记录 `message.created.v1`，`message-outbox-relay` 使用独立只读/更新 Outbox 账号发布；`chat-message-consumer` 通过独立 quorum 队列维护会话摘要并向 Redis 发布公共消息，Go 网关订阅后定向推送。其他服务的 relay 和消费端尚未实现。
 
 `jobs` topic exchange 将 `image.resize`、`video.transcode`、`push.send`、`moderation.image.scan` 路由到同名 Quorum Queue；超过 delivery limit 的任务进入 `jobs.failed`。publisher 应使用 confirms，consumer 应使用手动 ack 与幂等处理。
 

@@ -4,8 +4,7 @@
 - Message persistence with `client_message_id` idempotency.
 - Strictly monotonic conversation sequence (`seq`) generation.
 - Incremental message synchronization (`SyncMessages` via `after_seq`).
-- Transactional outbox schema is retained for the event relay integration;
-  this worker does not publish events yet.
+- Records `message.created.v1` in the same transaction as message and sequence allocation.
 
 ## 2. Owned Data
 - Logical Database: `message_db`
@@ -23,12 +22,14 @@
 - None.
 
 ## 5. Produced Events
-- The current worker does not publish message events; the outbox event
-  contract remains reserved for the event relay wiring.
+- `message.created.v1`: conversation-keyed event containing only the public message projection.
+  `message-outbox-relay` publishes through the shared Outbox relay with confirm/mandatory routing.
+  Idempotent retries return the stored message without creating another event.
 
 ## 6. Dependencies
 - MySQL (`message_db`)
 - ChatService (internal membership, block, and identity snapshot RPC)
+- RabbitMQ (Outbox relay); ChatService consumes events to update summaries and fan out online pushes.
 
 ## 7. Identity and implementation status
 

@@ -68,6 +68,14 @@ final class PdoMessageRepository
         $this->createIndex('CREATE UNIQUE INDEX IF NOT EXISTS uniq_message_conv_seq ON messages(conversation_id, seq)');
         $this->createIndex('CREATE UNIQUE INDEX IF NOT EXISTS uniq_message_sender_client ON messages(sender_user_id, client_message_id)');
         $this->createIndex('CREATE INDEX IF NOT EXISTS idx_message_conv_id ON messages(conversation_id, message_id)');
+        $this->pdo->exec(
+            'CREATE TABLE IF NOT EXISTS outbox_events ('
+            . 'id INTEGER PRIMARY KEY, event_id VARCHAR(36) NOT NULL UNIQUE, aggregate_type VARCHAR(64) NOT NULL, '
+            . 'aggregate_id VARCHAR(64) NOT NULL, event_key VARCHAR(64) NOT NULL, trace_id VARCHAR(64) NOT NULL, '
+            . 'event_type VARCHAR(128) NOT NULL, event_version INTEGER NOT NULL, payload TEXT NOT NULL, '
+            . 'status INTEGER NOT NULL DEFAULT 0, available_at VARCHAR(40) NOT NULL, '
+            . 'claimed_at VARCHAR(40) NULL, published_at VARCHAR(40) NULL, created_at VARCHAR(40) NOT NULL)',
+        );
     }
 
     /** @return array<string,mixed>|null */

@@ -13,7 +13,12 @@ interface SocialRepositoryInterface
      */
     public function transaction(callable $operation): mixed;
 
-    public function insertLike(string $id, string $personaId, int $targetType, string $targetId): void;
+    /**
+     * Insert a like row. Returns true only when this call created the row;
+     * when (persona_id, target_type, target_id) already exists the unique
+     * key rejects the write and this returns false.
+     */
+    public function insertLike(string $id, string $personaId, int $targetType, string $targetId): bool;
 
     public function deleteLike(string $personaId, int $targetType, string $targetId): void;
 

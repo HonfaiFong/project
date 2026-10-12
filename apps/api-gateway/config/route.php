@@ -13,6 +13,7 @@ use Apps\ApiGateway\Controller\PersonaController;
 use Apps\ApiGateway\Controller\UserController;
 use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
+use Apps\ApiGateway\Middleware\MetricsAccessMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindUserRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\SocialLoginRateLimitMiddleware;
@@ -25,7 +26,8 @@ Route::disableDefaultRoute();
 
 Route::get('/health', [HealthController::class, 'check']);
 Route::get('/api/v1/health', [HealthController::class, 'check']);
-Route::get('/metrics', [MetricsController::class, 'metrics']);
+Route::get('/metrics', [MetricsController::class, 'metrics'])
+    ->middleware([MetricsAccessMiddleware::class]);
 // 手机短信登录仅在 local、development 和 testing 环境可用。
 Route::post('/api/v1/auth/login', [AuthController::class, 'login'])
     ->middleware([AppEnvironmentMiddleware::class]);

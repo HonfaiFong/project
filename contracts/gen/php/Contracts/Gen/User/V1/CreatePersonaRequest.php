@@ -18,8 +18,8 @@ class CreatePersonaRequest extends \Google\Protobuf\Internal\Message
      */
     protected $user_id = 0;
     /**
-     * Deprecated compatibility field. The create endpoint always creates an
-     * ALIAS; zero (omitted) and 2 are accepted, while MAIN is rejected.
+     * Deprecated compatibility field. Persona creation is disabled; callers
+     * must not use this field. It is retained only for wire compatibility.
      *
      * Generated from protobuf field <code>int32 type = 2 [deprecated = true];</code>
      * @deprecated
@@ -46,8 +46,8 @@ class CreatePersonaRequest extends \Google\Protobuf\Internal\Message
      *
      *     @type int|string $user_id
      *     @type int $type
-     *           Deprecated compatibility field. The create endpoint always creates an
-     *           ALIAS; zero (omitted) and 2 are accepted, while MAIN is rejected.
+     *           Deprecated compatibility field. Persona creation is disabled; callers
+     *           must not use this field. It is retained only for wire compatibility.
      *     @type string $nickname
      *     @type string $avatar_key
      *     @type string $bio
@@ -81,8 +81,8 @@ class CreatePersonaRequest extends \Google\Protobuf\Internal\Message
     }
 
     /**
-     * Deprecated compatibility field. The create endpoint always creates an
-     * ALIAS; zero (omitted) and 2 are accepted, while MAIN is rejected.
+     * Deprecated compatibility field. Persona creation is disabled; callers
+     * must not use this field. It is retained only for wire compatibility.
      *
      * Generated from protobuf field <code>int32 type = 2 [deprecated = true];</code>
      * @return int
@@ -95,8 +95,8 @@ class CreatePersonaRequest extends \Google\Protobuf\Internal\Message
     }
 
     /**
-     * Deprecated compatibility field. The create endpoint always creates an
-     * ALIAS; zero (omitted) and 2 are accepted, while MAIN is rejected.
+     * Deprecated compatibility field. Persona creation is disabled; callers
+     * must not use this field. It is retained only for wire compatibility.
      *
      * Generated from protobuf field <code>int32 type = 2 [deprecated = true];</code>
      * @param int $var
