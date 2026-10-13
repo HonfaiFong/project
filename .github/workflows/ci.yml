@@ -91,6 +91,9 @@ jobs:
       - name: Run Lint
         run: make lint
 
+      - name: Verify deployment lifecycle isolation
+        run: bash scripts/test_deployment_lifecycle.sh
+
       - name: Run Static Analysis
         run: make analyse
 

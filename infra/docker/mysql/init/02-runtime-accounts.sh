@@ -3,6 +3,7 @@
 # The MySQL image executes this file after 01-databases.sql on a new volume.
 # It is intentionally idempotent so operators can run it again after rotating
 # credentials or when upgrading an existing volume.
+(
 set -eu
 
 : "${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}"
@@ -86,3 +87,4 @@ create_relay_user message_outbox_relay message_db "${MYSQL_MESSAGE_OUTBOX_RELAY_
 create_migration_user "${MYSQL_MIGRATION_PASSWORD}"
 
 echo "MySQL runtime, outbox relay, and migration accounts are present and reconciled."
+)

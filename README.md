@@ -262,6 +262,8 @@ docker compose up -d --force-recreate auth-service user-service user-outbox-rela
 make migrate
 ```
 
+常规迁移、启动和 CI 不依赖历史手机号预检查。仅在维护已有手机号数据时，单独执行 `make preflight-phone`；规范化或修复数据应使用独立维护流程及相应数据库权限，不能提升业务运行时账号权限。
+
 查看状态、新建迁移：
 ```bash
 bash scripts/run_migrations.sh status

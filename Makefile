@@ -83,7 +83,6 @@ rebuild-runtime:
 migrate:
 	@echo "Applying database migrations with Phinx..."
 	bash scripts/run_migrations.sh
-	@$(MAKE) preflight-phone
 
 mysql-ready:
 	@echo ">>> 等待 MySQL SQL readiness..."
@@ -116,7 +115,7 @@ redis-ready:
 	fi
 
 preflight-phone:
-	@echo "Checking historical user phones before starting services..."
+	@echo "Checking historical user phones (optional legacy data maintenance)..."
 	docker compose run --rm --no-deps user-service php /app/scripts/normalize_user_phones.php --require-clean
 
 seed:

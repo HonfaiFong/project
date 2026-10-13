@@ -2,7 +2,6 @@
 set -euo pipefail
 
 BASE_URL="${API_BASE_URL:-http://127.0.0.1:8787}"
-LOGIN_CODE="${E2E_LOGIN_CODE:-123456}"
 BODY_FILE="$(mktemp)"
 trap 'rm -f "$BODY_FILE"' EXIT
 
@@ -46,17 +45,14 @@ expect_code() {
   fi
 }
 
-stamp="$(date +%s)"
-phone_suffix="$(printf '%08d' "$((stamp % 100000000))")"
-phone_a="+86138${phone_suffix}"
-phone_b="+86139${phone_suffix}"
+stamp="$(date +%s)-${RANDOM}"
 
 request 200 GET /health
 expect_code 0
 
-request 401 POST /api/v1/auth/login "{\"phone\":\"${phone_a}\",\"code\":\"invalid\"}"
+request 401 POST /api/v1/auth/social/login '{"provider":"wechat","code":"invalid","device":{"device_uuid":"e2e-invalid","platform":"ios"}}'
 
-request 201 POST /api/v1/auth/login "{\"phone\":\"${phone_a}\",\"code\":\"${LOGIN_CODE}\",\"device\":{\"device_uuid\":\"e2e-a-${stamp}\",\"platform\":\"ios\"}}"
+request 201 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"wechat-primary-${stamp}a\",\"device\":{\"device_uuid\":\"e2e-a-${stamp}\",\"platform\":\"ios\"}}"
 expect_code 0
 access_a="$(field data.access_token)"
 refresh_a="$(field data.refresh_token)"
@@ -80,7 +76,7 @@ request 200 GET "/api/v1/personas/${persona_a}" '' "$access_a"
 expect_code 0
 php -r '$body=json_decode(file_get_contents($argv[1]), true); exit(isset($body["data"]["user_id"]) ? 1 : 0);' "$BODY_FILE"
 
-request 201 POST /api/v1/auth/login "{\"phone\":\"${phone_b}\",\"code\":\"${LOGIN_CODE}\",\"device\":{\"device_uuid\":\"e2e-b-${stamp}\",\"platform\":\"ios\"}}"
+request 201 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"wechat-primary-${stamp}b\",\"device\":{\"device_uuid\":\"e2e-b-${stamp}\",\"platform\":\"ios\"}}"
 expect_code 0
 access_b="$(field data.access_token)"
 
