@@ -10,6 +10,7 @@ use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Common\V1\HealthStatus;
 use Packages\Observability\MetricsRegistry;
+use Psr\Log\LoggerInterface;
 use Throwable;
 use Webman\Http\Response;
 
@@ -19,7 +20,8 @@ final readonly class HealthController
      * @param array<string, HealthCheckClient> $upstreamClients
      */
     public function __construct(
-        private array $upstreamClients = []
+        private array $upstreamClients = [],
+        private ?LoggerInterface $logger = null
     ) {
     }
 
@@ -30,7 +32,6 @@ final readonly class HealthController
             'api_gateway' => 'SERVING',
         ];
         $healthy = true;
-        $failures = [];
 
         foreach ($this->upstreamClients as $name => $client) {
             try {
@@ -39,11 +40,20 @@ final readonly class HealthController
                     ? 'SERVING'
                     : 'NOT_SERVING';
                 if ($status !== 'SERVING') {
-                    $failures[$name] = $res['message'];
+                    $this->logger?->warning('Health probe reported NOT_SERVING', [
+                        'service' => $name,
+                        'reason'  => $res['message'],
+                    ]);
                 }
             } catch (Throwable $e) {
-                $status = 'DOWN: ' . $e->getMessage();
-                $failures[$name] = $e->getMessage();
+                $status = 'NOT_SERVING';
+                // 该端点无需认证，异常文本可能包含内部地址、连接错误或网络拓扑，
+                // 因此只记录在服务端日志，公开响应仅保留状态。
+                $this->logger?->error('Health probe failed', [
+                    'service'   => $name,
+                    'exception' => $e::class,
+                    'reason'    => $e->getMessage(),
+                ]);
             }
 
             if ($status !== 'SERVING') {
@@ -58,7 +68,7 @@ final readonly class HealthController
             return ApiResponse::error(
                 ErrorCode::SERVICE_UNAVAILABLE->value,
                 'one or more upstream services are unhealthy',
-                ['services' => $services, 'failures' => $failures]
+                ['services' => $services]
             );
         }
 

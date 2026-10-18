@@ -143,7 +143,8 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_mysql, pdo_sqlite, redis, bcmath, sockets, grpc
+          # posix/pcntl 供隔离进程回归测试使用：MetricsHttpServer 依赖 posix_getppid 探测父进程存活。
+          extensions: pdo, pdo_mysql, pdo_sqlite, redis, bcmath, sockets, grpc, posix, pcntl
           coverage: none
 
       - name: Install Composer dependencies for E2E
@@ -218,6 +219,15 @@ jobs:
           SOCIAL_TEST_MYSQL_PORT: '3306'
           SOCIAL_TEST_MYSQL_USER: root
           SOCIAL_TEST_MYSQL_PASSWORD: ${{ env.MYSQL_PASSWORD }}
+          SOCIAL_TEST_REDIS_HOST: 127.0.0.1
+          SOCIAL_TEST_REDIS_PORT: '6379'
+
+      - name: Run process isolation and lease maintenance tests
+        # 这三项验证本轮新增的常驻进程机制：指标子进程随父进程退出、OTLP 导出不阻塞业务、
+        # 空闲 Worker 仍续租。它们需要真实的 Redis 与可用的 proc_open/posix，禁止跳过。
+        timeout-minutes: 5
+        run: vendor/bin/phpunit tests/Integration/MetricsLifecycleTest.php tests/Integration/OtlpIsolationTest.php tests/Integration/WorkerLeaseIdleTest.php --fail-on-skipped
+        env:
           SOCIAL_TEST_REDIS_HOST: 127.0.0.1
           SOCIAL_TEST_REDIS_PORT: '6379'
 

@@ -23,6 +23,7 @@ use RedisException;
 use RuntimeException;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Services\AuthService\Domain\Client\UserDirectoryInterface;
+use Services\AuthService\Domain\Entity\RefreshToken;
 use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
 use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
@@ -90,6 +91,71 @@ final class VerifyTokenAvailabilityTest extends TestCase
             $this->matchesRegularExpression('/^\d+\.\d{6}$/'),
         )->willReturn(true);
         (new RedisAccessTokenRevocationStore($redis))->revokeDevice('device', 60);
+    }
+
+    /**
+     * 撤销写入失败必须失败关闭：注销不能报告成功，否则旧访问令牌会继续被接受。
+     */
+    public function testRevocationWriteFailureIsNotSilentlyIgnored(): void
+    {
+        foreach (['revokeToken', 'revokeDevice'] as $method) {
+            $redis = $this->createMock(Redis::class);
+            $redis->expects($this->once())->method('setex')->willReturn(false);
+
+            try {
+                (new RedisAccessTokenRevocationStore($redis))->{$method}('value', 60);
+                $this->fail($method . ' must not report success when Redis rejects the write');
+            } catch (RuntimeException $e) {
+                $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, $e->getCode());
+                $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->message(), $e->getMessage());
+            }
+        }
+    }
+
+    /** Redis 抛出的传输异常同样不能退化成功。 */
+    public function testRevocationTransportFailurePropagatesAsServiceUnavailable(): void
+    {
+        $redis = $this->createMock(Redis::class);
+        $redis->method('setex')->willThrowException(new RedisException('connection lost'));
+
+        try {
+            (new RedisAccessTokenRevocationStore($redis))->revokeDevice('device', 60);
+            $this->fail('A Redis transport error must not be swallowed');
+        } catch (RuntimeException $e) {
+            $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, $e->getCode());
+            $this->assertInstanceOf(RedisException::class, $e->getPrevious());
+        }
+    }
+
+    /** 端点 logout() 不得在撤销写入失败后仍返回成功。 */
+    public function testLogoutFailsWhenTheDeviceRevocationWriteFails(): void
+    {
+        $redis = $this->createMock(Redis::class);
+        $redis->method('setex')->willReturn(false);
+        $repository = $this->createMock(AuthRepositoryInterface::class);
+        $repository->method('findRefreshToken')->willReturn(new RefreshToken(
+            id: 'rt-1',
+            userId: '1001',
+            deviceId: '2001',
+            tokenHash: hash('sha256', 'refresh'),
+            expiresAt: gmdate('Y-m-d H:i:s', time() + 300),
+        ));
+        $repository->method('revokeRefreshToken')->willReturn(true);
+        $application = new AuthApplicationService(
+            authRepo: $repository,
+            jwtCodec: new JwtTokenCodec('test-secret-at-least-32-chars-long-12345'),
+            wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
+            credentialVerifier: new LoginCredentialVerifier('local', 'test-code', null, true),
+            userDirectory: $this->createMock(UserDirectoryInterface::class),
+            accessTokenRevocationStore: new RedisAccessTokenRevocationStore($redis),
+        );
+
+        try {
+            $application->logout('refresh');
+            $this->fail('logout() must not report success when the revocation marker was not stored');
+        } catch (RuntimeException $e) {
+            $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, $e->getCode());
+        }
     }
 
     #[DataProvider('failures')]

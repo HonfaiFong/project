@@ -34,11 +34,8 @@ final class OtlpIsolationTest extends TestCase
             self::assertStringContainsString('POST /v1/traces', $headers);
             self::assertStringContainsString('X-Test: isolation', $headers);
             self::assertSame(1, preg_match('/Content-Length: (\d+)/i', $headers, $match));
-            $body = '';
             $length = (int)$match[1];
-            while (strlen($body) < $length) {
-                $body .= (string)fread($connection, $length - strlen($body));
-            }
+            $body = $this->readBody($connection, $length);
             $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
             self::assertSame('isolated-span', $payload['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['name']);
             // Deliberately never respond. Fill the queue while HTTP is blocked.
@@ -68,5 +65,31 @@ final class OtlpIsolationTest extends TestCase
             Tracer::resetExporter();
         }
         self::assertLessThan(0.5, (hrtime(true) - $start) / 1e9);
+    }
+
+    /**
+     * 读取必须同时受 EOF、流超时和总截止时间约束：导出进程若发送部分数据后异常退出，
+     * fread() 会持续返回空串，无退出条件的循环会让测试挂起而不是失败。
+     *
+     * @param resource $connection
+     */
+    private function readBody($connection, int $length): string
+    {
+        $body = '';
+        $deadline = microtime(true) + 2.0;
+        while (strlen($body) < $length) {
+            $chunk = fread($connection, $length - strlen($body));
+            if ($chunk === false || $chunk === '') {
+                $info = stream_get_meta_data($connection);
+                self::assertFalse($info['timed_out'], 'Timed out waiting for the OTLP request body');
+                self::assertFalse(feof($connection), 'OTLP exporter closed the connection before sending the full body');
+                self::assertLessThan($deadline, microtime(true), 'OTLP request body did not arrive before the deadline');
+                usleep(20_000);
+                continue;
+            }
+            $body .= $chunk;
+        }
+
+        return $body;
     }
 }

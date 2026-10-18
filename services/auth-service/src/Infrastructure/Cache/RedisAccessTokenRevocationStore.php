@@ -8,6 +8,7 @@ use Contracts\Errors\ErrorCode;
 use Redis;
 use RuntimeException;
 use Services\AuthService\Domain\Repository\AccessTokenRevocationStoreInterface;
+use Throwable;
 
 final class RedisAccessTokenRevocationStore implements AccessTokenRevocationStoreInterface
 {
@@ -21,14 +22,14 @@ final class RedisAccessTokenRevocationStore implements AccessTokenRevocationStor
     public function revokeToken(string $tokenHash, int $ttl): void
     {
         if ($ttl > 0) {
-            $this->redis->setex(self::TOKEN_KEY_PREFIX . $tokenHash, $ttl, '1');
+            $this->write(self::TOKEN_KEY_PREFIX . $tokenHash, $ttl, '1');
         }
     }
 
     public function revokeDevice(string $deviceId, int $ttl): void
     {
         if ($ttl > 0) {
-            $this->redis->setex(self::DEVICE_KEY_PREFIX . $deviceId, $ttl, sprintf('%.6F', microtime(true)));
+            $this->write(self::DEVICE_KEY_PREFIX . $deviceId, $ttl, sprintf('%.6F', microtime(true)));
         }
     }
 
@@ -50,5 +51,29 @@ final class RedisAccessTokenRevocationStore implements AccessTokenRevocationStor
 
         return $tokenRevoked !== false
             || ($deviceId !== '' && $deviceRevokedAt !== false && $issuedAt <= (float)$deviceRevokedAt);
+    }
+
+    /**
+     * 撤销标记是安全状态，写入失败必须向上传播，否则注销会错误地报告成功。
+     * phpredis 在部分传输失败时会返回 false 而不抛异常，因此两种失败都要覆盖。
+     */
+    private function write(string $key, int $ttl, string $value): void
+    {
+        try {
+            $written = $this->redis->setex($key, $ttl, $value);
+        } catch (Throwable $e) {
+            throw new RuntimeException(
+                ErrorCode::SERVICE_UNAVAILABLE->message(),
+                ErrorCode::SERVICE_UNAVAILABLE->value,
+                $e,
+            );
+        }
+
+        if ($written !== true) {
+            throw new RuntimeException(
+                ErrorCode::SERVICE_UNAVAILABLE->message(),
+                ErrorCode::SERVICE_UNAVAILABLE->value,
+            );
+        }
     }
 }

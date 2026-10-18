@@ -33,6 +33,7 @@ use Illuminate\Contracts\Validation\Factory;
 use Illuminate\Translation\ArrayLoader;
 use Illuminate\Translation\Translator;
 use Illuminate\Validation\Factory as ValidationFactory;
+use support\Log;
 
 // Webman 配置键（apps/api-gateway/config/gateway.php），Laravel Idea 不识别该配置源，局部抑制误报。
 /** @noinspection LaravelUnknownConfigKeyInspection */
@@ -131,7 +132,7 @@ foreach ([CreateWsTicketAction::class, AuthController::class, UserController::cl
 $container->singleton(HealthController::class, static fn (Container $container): HealthController => new HealthController([
     'auth_service' => $container->get(AuthServiceClient::class),
     'user_service' => $container->get(UserServiceClient::class),
-]));
+], Log::channel()));
 $container->singleton(AppEnvironmentMiddleware::class, static fn (): AppEnvironmentMiddleware => new AppEnvironmentMiddleware(
     environment: $settings['environment'],
 ));

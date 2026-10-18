@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use Apps\ApiGateway\Controller\HealthController;
 use Apps\ApiGateway\Grpc\AuthServiceClient;
 use Contracts\Errors\ErrorCode;
+use Tests\Support\RecordingLogger;
 use Tests\TestCase;
 
 final class HealthControllerTest extends TestCase
@@ -56,18 +57,43 @@ final class HealthControllerTest extends TestCase
         $this->assertSame('SERVING', $body['data']['services']['custom_service']);
     }
 
-    public function testUnhealthyReasonIsReportedAndNextProbeCanRecover(): void
+    public function testUnhealthyReasonIsLoggedButNotDisclosedAndNextProbeCanRecover(): void
     {
         $client = $this->createMock(\Apps\ApiGateway\Grpc\HealthCheckClient::class);
         $client->method('checkHealth')->willReturnOnConsecutiveCalls(
             ['status' => \Contracts\Gen\Common\V1\HealthStatus::HEALTH_STATUS_NOT_SERVING, 'message' => 'worker ID lease unavailable'],
             ['status' => \Contracts\Gen\Common\V1\HealthStatus::HEALTH_STATUS_SERVING, 'message' => 'ok'],
         );
-        $controller = new HealthController(['auth_service' => $client]);
+        $logger = new RecordingLogger();
+        $controller = new HealthController(['auth_service' => $client], $logger);
         $failed = $controller->check();
         $body = json_decode($failed->rawBody(), true);
         $this->assertSame(503, $failed->getStatusCode());
-        $this->assertSame('worker ID lease unavailable', $body['details']['failures']['auth_service']);
+        $this->assertSame(\Contracts\Errors\ErrorCode::SERVICE_UNAVAILABLE->value, $body['code']);
+        $this->assertSame('NOT_SERVING', $body['details']['services']['auth_service']);
+        // 公开的无认证端点不得回显上游失败原因。
+        $this->assertArrayNotHasKey('failures', $body['details']);
+        $this->assertStringNotContainsString('worker ID lease unavailable', $failed->rawBody());
+        $this->assertSame('worker ID lease unavailable', $logger->records[0]['context']['reason']);
         $this->assertSame(200, $controller->check()->getStatusCode());
+    }
+
+    public function testUpstreamExceptionTextStaysOutOfThePublicResponse(): void
+    {
+        $client = $this->createMock(\Apps\ApiGateway\Grpc\HealthCheckClient::class);
+        $client->method('checkHealth')->willThrowException(
+            new \RuntimeException('failed to connect to 172.19.0.6:50052: Connection reset by peer')
+        );
+        $logger = new RecordingLogger();
+        $controller = new HealthController(['auth_service' => $client], $logger);
+
+        $response = $controller->check();
+
+        $this->assertSame(503, $response->getStatusCode());
+        $this->assertStringNotContainsString('172.19.0.6', $response->rawBody());
+        $this->assertStringNotContainsString('Connection reset', $response->rawBody());
+        $this->assertSame('NOT_SERVING', json_decode($response->rawBody(), true)['details']['services']['auth_service']);
+        $this->assertSame('failed to connect to 172.19.0.6:50052: Connection reset by peer', $logger->records[0]['context']['reason']);
+        $this->assertSame(\RuntimeException::class, $logger->records[0]['context']['exception']);
     }
 }
