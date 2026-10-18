@@ -203,7 +203,7 @@ final class GrpcDeadlineConfigContractTest extends TestCase
         $envExample = (string)file_get_contents(dirname(__DIR__, 2) . '/.env.example');
         $settings = [];
         foreach (array_unique([...self::GATEWAY_DEADLINE_SETTINGS, 'GRPC_USER_DIRECTORY_TIMEOUT_MS']) as $name) {
-            if (!preg_match('/^' . $name . '=(\d+)$/m', $envExample, $matches)) {
+            if (!preg_match('/^' . $name . '=(\d+)\r?$/m', $envExample, $matches)) {
                 throw new RuntimeException($name . ' not found in .env.example');
             }
             $settings[$name] = (int)$matches[1];

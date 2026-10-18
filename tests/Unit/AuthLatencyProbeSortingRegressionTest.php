@@ -25,7 +25,7 @@ final class AuthLatencyProbeSortingRegressionTest extends TestCase
     {
         parent::setUp();
 
-        $this->dir = sys_get_temp_dir() . '/auth-latency-probe-test-' . bin2hex(random_bytes(6));
+        $this->dir = str_replace('\\', '/', sys_get_temp_dir()) . '/auth-latency-probe-test-' . bin2hex(random_bytes(6));
         $this->curlStubDir = $this->dir . '/bin';
         $this->timingsFile = $this->dir . '/timings';
         $this->counterFile = $this->dir . '/curl-calls';
@@ -34,7 +34,7 @@ final class AuthLatencyProbeSortingRegressionTest extends TestCase
             throw new RuntimeException('Cannot create probe test fixture dir: ' . $this->curlStubDir);
         }
 
-        file_put_contents($this->curlStubDir . '/curl', $this->curlStub());
+        file_put_contents($this->curlStubDir . '/curl', str_replace("\r\n", "\n", $this->curlStub()));
         chmod($this->curlStubDir . '/curl', 0755);
     }
 
@@ -133,12 +133,23 @@ final class AuthLatencyProbeSortingRegressionTest extends TestCase
         file_put_contents($this->timingsFile, implode("\n", $timingsSeconds) . "\n");
         @unlink($this->counterFile);
 
+        $bash = $this->bashExecutable();
         $environment = getenv();
-        $path = $this->curlStubDir . PATH_SEPARATOR . dirname(PHP_BINARY);
-        if (($environment['PATH'] ?? '') !== '') {
-            $path .= PATH_SEPARATOR . $environment['PATH'];
+        $pathEntries = [$this->curlStubDir, dirname(PHP_BINARY)];
+        if (PHP_OS_FAMILY === 'Windows') {
+            $pathEntries[] = dirname($bash, 2) . '/usr/bin';
         }
-        $environment['PATH'] = $path;
+        $originalPath = getenv('PATH');
+        if ($originalPath !== false && $originalPath !== '') {
+            $pathEntries[] = $originalPath;
+        }
+        // Windows environment keys are case-insensitive; keep only one PATH entry.
+        foreach (array_keys($environment) as $name) {
+            if (strcasecmp($name, 'PATH') === 0) {
+                unset($environment[$name]);
+            }
+        }
+        $environment['PATH'] = implode(PATH_SEPARATOR, $pathEntries);
         $environment['LC_ALL'] = 'C';
         $environment['AUTH_LATENCY_REQUESTS'] = (string) count($timingsSeconds);
         $environment['AUTH_LATENCY_BUDGET_MS'] = '5000';
@@ -147,8 +158,16 @@ final class AuthLatencyProbeSortingRegressionTest extends TestCase
         $environment['FAKE_CURL_HTTP_CODE'] = $httpCode;
         $environment['FAKE_CURL_BODY'] = $body;
 
+        $script = str_replace('\\', '/', dirname(__DIR__, 2)) . '/scripts/auth_latency_probe.sh';
+        $command = [$bash, $script];
+        if (PHP_OS_FAMILY === 'Windows') {
+            // Bash PATH entries need /c/... paths: a C: drive prefix is also a POSIX separator.
+            $command = [$bash, '-c',
+                'export PATH="$(/usr/bin/cygpath -u "$1"):$(/usr/bin/cygpath -u "$2"):/usr/bin:/bin:$PATH"; exec /bin/bash "$3"',
+                'auth-latency-test', $this->curlStubDir, dirname(PHP_BINARY), $script];
+        }
         $process = proc_open(
-            ['/bin/bash', dirname(__DIR__, 2) . '/scripts/auth_latency_probe.sh'],
+            $command,
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
             null,
@@ -168,6 +187,30 @@ final class AuthLatencyProbeSortingRegressionTest extends TestCase
             'stdout' => $stdout,
             'stderr' => $stderr,
         ];
+    }
+
+    private function bashExecutable(): string
+    {
+        if (PHP_OS_FAMILY !== 'Windows') {
+            return '/bin/bash';
+        }
+
+        // Use Git for Windows' Bash, rather than a WSL launcher named bash.exe.
+        $process = proc_open(['git', '--exec-path'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (!is_resource($process)) {
+            throw new RuntimeException('Cannot locate Git for Windows Bash');
+        }
+        $execPath = trim((string)stream_get_contents($pipes[1]));
+        $stderr = (string)stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($process);
+        $bash = dirname($execPath, 3) . '/bin/bash.exe';
+        if ($exit !== 0 || !is_file($bash)) {
+            throw new RuntimeException('Git for Windows Bash is required to run the probe test: ' . $stderr);
+        }
+
+        return $bash;
     }
 
     private function curlStub(): string

@@ -22,7 +22,9 @@ final class AuthOAuthTimeoutConfigurationTest extends TestCase
         $environment['SOCIAL_HTTP_TIMEOUT_MS'] = '3000';
         $environment[$name] = $value;
         $process = proc_open(
-            [PHP_BINARY, dirname(__DIR__, 2) . '/services/auth-service/bin/server.php'],
+            // Assert the bootstrap error independently of the host php.ini output settings.
+            [PHP_BINARY, '-d', 'display_errors=stderr', '-d', 'log_errors=0', '-d', 'html_errors=0',
+                '-d', 'error_reporting=-1', dirname(__DIR__, 2) . '/services/auth-service/bin/server.php'],
             [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
             null,

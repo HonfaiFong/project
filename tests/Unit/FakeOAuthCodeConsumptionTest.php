@@ -18,8 +18,19 @@ final class FakeOAuthCodeConsumptionTest extends TestCase
 {
     private string $stateDir = '';
 
+    /** @var list<resource> */
+    private array $processes = [];
+
     protected function tearDown(): void
     {
+        foreach ($this->processes as $process) {
+            if (is_resource($process)) {
+                proc_terminate($process, 9);
+                proc_close($process);
+            }
+        }
+        $this->processes = [];
+
         if ($this->stateDir !== '') {
             foreach (glob($this->stateDir . '/*') ?: [] as $file) {
                 @unlink($file);
@@ -54,12 +65,8 @@ final class FakeOAuthCodeConsumptionTest extends TestCase
         }
 
         $wins = 0;
-        foreach ($processes as [$process, $stdout]) {
-            $output = (string)stream_get_contents($stdout);
-            fclose($stdout);
-            $exit = proc_close($process);
-            $this->assertSame(0, $exit, 'fake OAuth worker failed: ' . $output);
-            $this->assertContains($output, ['won', 'lost'], 'worker printed unexpected output: ' . $output);
+        foreach ($processes as $worker) {
+            $output = $this->waitForWorker($worker);
             $wins += $output === 'won' ? 1 : 0;
         }
 
@@ -73,43 +80,72 @@ final class FakeOAuthCodeConsumptionTest extends TestCase
             throw new RuntimeException('Cannot create isolated fake OAuth state dir: ' . $dir);
         }
 
-        return $dir;
-    }
-
-    /** @return array{0: resource, 1: resource} */
-    private function spawnWorker(string $code): array
-    {
-        $runner = $this->stateDir . '/worker.php';
-        file_put_contents($runner, <<<PHP
+        // Finish writing the immutable runner before any child can execute it.
+        $script = <<<PHP
             <?php
             putenv('FAKE_OAUTH_STATE_DIR=' . \$argv[1]);
             require \$argv[2];
             echo consumeCode('qq', \$argv[3]) ? 'won' : 'lost';
-            PHP);
+            PHP;
+        if (file_put_contents($dir . '/worker.php', $script) !== strlen($script)) {
+            throw new RuntimeException('Cannot write fake OAuth worker script');
+        }
 
-        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($runner) . ' '
-            . escapeshellarg($this->stateDir) . ' '
-            . escapeshellarg(dirname(__DIR__, 2) . '/scripts/fake_oauth_server.php') . ' '
-            . escapeshellarg($code) . ' 2>&1';
+        return $dir;
+    }
 
-        $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    /** @return array{process: resource, stdout: string, stderr: string, deadline: float} */
+    private function spawnWorker(string $code): array
+    {
+        $prefix = $this->stateDir . '/worker-' . count($this->processes);
+        $stdout = $prefix . '.stdout';
+        $stderr = $prefix . '.stderr';
+        // Files avoid pipe-buffer deadlocks and support bounded waits on Windows too.
+        $process = proc_open([
+            PHP_BINARY,
+            $this->stateDir . '/worker.php',
+            $this->stateDir,
+            dirname(__DIR__, 2) . '/scripts/fake_oauth_server.php',
+            $code,
+        ], [1 => ['file', $stdout, 'w'], 2 => ['file', $stderr, 'w']], $pipes);
         if (!is_resource($process)) {
             throw new RuntimeException('Cannot spawn fake OAuth worker process');
         }
-        stream_set_blocking($pipes[2], false);
+        $this->processes[] = $process;
 
-        return [$process, $pipes[1]];
+        return ['process' => $process, 'stdout' => $stdout, 'stderr' => $stderr, 'deadline' => hrtime(true) / 1e9 + 10.0];
+    }
+
+    /** @param array{process: resource, stdout: string, stderr: string, deadline: float} $worker */
+    private function waitForWorker(array $worker): string
+    {
+        do {
+            $status = proc_get_status($worker['process']);
+            if (!$status['running']) {
+                break;
+            }
+            if (hrtime(true) / 1e9 >= $worker['deadline']) {
+                $this->fail('fake OAuth worker timed out; stdout: ' . file_get_contents($worker['stdout'])
+                    . '; stderr: ' . file_get_contents($worker['stderr']));
+            }
+            usleep(10_000);
+        } while (true);
+
+        // Before PHP 8.3 proc_close() can lose the exit code after proc_get_status().
+        $exit = $status['exitcode'];
+        proc_close($worker['process']);
+        $output = (string)file_get_contents($worker['stdout']);
+        $stderr = (string)file_get_contents($worker['stderr']);
+        $this->assertSame(0, $exit, 'fake OAuth worker failed; stdout: ' . $output . '; stderr: ' . $stderr);
+        $this->assertSame('', $stderr, 'fake OAuth worker printed errors: ' . $stderr);
+        $this->assertContains($output, ['won', 'lost'], 'worker printed unexpected output: ' . $output);
+
+        return $output;
     }
 
     private function consumeInChildWorker(string $code): bool
     {
-        [$process, $stdout] = $this->spawnWorker($code);
-        $output = (string)stream_get_contents($stdout);
-        fclose($stdout);
-        $exit = proc_close($process);
-        if ($exit !== 0) {
-            throw new RuntimeException('fake OAuth worker failed: ' . $output);
-        }
+        $output = $this->waitForWorker($this->spawnWorker($code));
 
         return $output === 'won';
     }

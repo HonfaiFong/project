@@ -101,7 +101,7 @@ jobs:
         run: make test
 
       - name: Run SQLite-backed integration tests
-        run: vendor/bin/phpunit tests/Integration/ChatMessagePersistenceTest.php tests/Integration/ContentAuthorizationTest.php tests/Integration/EloquentPersistenceTest.php tests/Integration/GatewayWebmanWiringTest.php tests/Integration/UserOutboxTransactionTest.php --fail-on-skipped
+        run: vendor/bin/phpunit tests/Integration/ChatMessagePersistenceTest.php tests/Integration/ContentAuthorizationTest.php tests/Integration/EloquentPersistenceTest.php tests/Integration/GatewayWebmanWiringTest.php tests/Integration/UserOutboxTransactionTest.php tests/Integration/AuthLogoutRecoveryTest.php --fail-on-skipped
 
       - name: Run Go Race Detector
         run: go test -mod=mod -race ./gateways/realtime-gateway/...

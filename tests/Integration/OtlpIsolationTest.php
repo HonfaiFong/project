@@ -6,10 +6,60 @@ namespace Tests\Integration;
 
 use Packages\Observability\OtlpHttpExporter;
 use Packages\Observability\Tracer;
+use PHPUnit\Framework\AssertionFailedError;
 use PHPUnit\Framework\TestCase;
 
 final class OtlpIsolationTest extends TestCase
 {
+    public function testBodyDeadlineRejectsACollectorSendingContinuousSmallChunks(): void
+    {
+        $listener = stream_socket_server('tcp://127.0.0.1:0');
+        self::assertIsResource($listener);
+        $process = null;
+        $connection = null;
+        $pipes = [];
+        try {
+            $script = <<<'PHP'
+                $connection = stream_socket_client('tcp://' . $argv[1]);
+                for ($i = 0; $i < 40; $i++) {
+                    fwrite($connection, 'x');
+                    usleep(100_000);
+                }
+                fclose($connection);
+                PHP;
+            $process = proc_open([PHP_BINARY, '-r', $script, stream_socket_get_name($listener, false)], [
+                1 => ['pipe', 'w'], 2 => ['pipe', 'w'],
+            ], $pipes);
+            self::assertIsResource($process);
+            $connection = stream_socket_accept($listener, 3);
+            self::assertIsResource($connection);
+            stream_set_timeout($connection, 2);
+            $start = hrtime(true);
+            $failure = null;
+            try {
+                $this->readBody($connection, 40);
+            } catch (AssertionFailedError $e) {
+                $failure = $e;
+            }
+            self::assertNotNull($failure, 'A continuous slow drip must not bypass the total body deadline');
+            // The stream timeout may fire just before the monotonic deadline check.
+            self::assertMatchesRegularExpression('/deadline|Timed out waiting for the OTLP request body/', $failure->getMessage());
+            self::assertLessThan(2.75, (hrtime(true) - $start) / 1e9);
+        } finally {
+            if (is_resource($connection)) {
+                fclose($connection);
+            }
+            if (is_resource($process)) {
+                proc_terminate($process, 9);
+                foreach ($pipes as $pipe) {
+                    fclose($pipe);
+                }
+                proc_close($process);
+            }
+            fclose($listener);
+        }
+    }
+
     public function testHungCollectorReceivesOtlpButCannotBlockRequestsOrShutdown(): void
     {
         if (PHP_OS_FAMILY === 'Windows' || !function_exists('proc_open')) {
@@ -76,14 +126,19 @@ final class OtlpIsolationTest extends TestCase
     private function readBody($connection, int $length): string
     {
         $body = '';
-        $deadline = microtime(true) + 2.0;
+        $deadline = hrtime(true) / 1e9 + 2.0;
         while (strlen($body) < $length) {
+            $remaining = $deadline - hrtime(true) / 1e9;
+            self::assertGreaterThan(0.0, $remaining, 'OTLP request body did not arrive before the deadline');
+            // Bound each blocking read by the remaining total budget, even for a slow drip.
+            $timeoutMicros = max(1, (int)ceil($remaining * 1e6));
+            stream_set_timeout($connection, intdiv($timeoutMicros, 1_000_000), $timeoutMicros % 1_000_000);
             $chunk = fread($connection, $length - strlen($body));
+            self::assertLessThan($deadline, hrtime(true) / 1e9, 'OTLP request body did not arrive before the deadline');
             if ($chunk === false || $chunk === '') {
                 $info = stream_get_meta_data($connection);
                 self::assertFalse($info['timed_out'], 'Timed out waiting for the OTLP request body');
                 self::assertFalse(feof($connection), 'OTLP exporter closed the connection before sending the full body');
-                self::assertLessThan($deadline, microtime(true), 'OTLP request body did not arrive before the deadline');
                 usleep(20_000);
                 continue;
             }
