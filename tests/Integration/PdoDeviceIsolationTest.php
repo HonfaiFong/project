@@ -230,6 +230,78 @@ final class PdoDeviceIsolationTest extends TestCase
         }
     }
 
+    public function testRefreshAndLogoutSerializeOnTheDeviceForBothCommitOrders(): void
+    {
+        $this->applyDeviceMigration();
+        foreach ([true, false] as $sameToken) {
+            foreach (['refresh', 'logout'] as $firstOperation) {
+                $device = $this->repository()->findOrCreateDevice('2001', uniqid('session-', true), 'ios', '1', null, null);
+                $firstHash = hash('sha256', $device->id . ':first');
+                $refreshHash = $sameToken ? $firstHash : hash('sha256', $device->id . ':sibling');
+                $replacementHash = hash('sha256', $device->id . ':replacement');
+                $repository = $this->repository();
+                $repository->createRefreshToken('2001', $device->id, $firstHash, '2099-01-01 00:00:00');
+                if (!$sameToken) {
+                    $repository->createRefreshToken('2001', $device->id, $refreshHash, '2099-01-01 00:00:00');
+                }
+                $prefix = tempnam(sys_get_temp_dir(), 'session-lock-');
+                $this->assertNotFalse($prefix);
+                $ready = $prefix . '-ready';
+                $result = $prefix . '-result';
+                $workers = [];
+                $barrier = new \ArrayObject(['started' => false]);
+                $connection = EloquentConnection::fromPdo($this->pdo);
+                $connection->beforeExecuting(function (string $query) use ($barrier, &$workers, $firstOperation, $firstHash, $refreshHash, $replacementHash, $ready, $result): void {
+                    if ($barrier['started'] || !str_starts_with($query, 'update `refresh_tokens`')) {
+                        return;
+                    }
+                    $barrier['started'] = true;
+                    // The parent holds the device lock. A separate connection attempts the competing operation.
+                    $secondOperation = $firstOperation === 'refresh' ? 'logout' : 'refresh';
+                    $pipes = [];
+                    $process = proc_open([PHP_BINARY, __DIR__ . '/fixtures/PdoSessionMutationWorker.php',
+                        $ready, $result, $secondOperation,
+                        $secondOperation === 'logout' ? $firstHash : $refreshHash, $replacementHash],
+                        [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes,
+                        dirname(__DIR__, 2), null, ['bypass_shell' => true]);
+                    if (!is_resource($process)) {
+                        throw new RuntimeException('Unable to start session worker');
+                    }
+                    fclose($pipes[0]);
+                    stream_set_blocking($pipes[1], false);
+                    stream_set_blocking($pipes[2], false);
+                    $workers[] = ['process' => $process, 'pipes' => $pipes];
+                    $this->waitForPaths([$ready]);
+                    $this->assertFileDoesNotExist($result, 'Competing operation must wait for the device lock');
+                });
+                try {
+                    $parentSuccess = $firstOperation === 'logout'
+                        ? $repository->revokeRefreshToken($firstHash)
+                        : $repository->rotateRefreshToken($refreshHash, $replacementHash, '2099-01-01 00:00:00') !== null;
+                    $this->assertTrue($parentSuccess);
+                    $this->assertTrue($barrier['started']);
+                    $this->waitForWorkers($workers);
+                    $workerResult = trim((string)file_get_contents($result));
+                    $expected = $firstOperation === 'refresh' && !$sameToken ? 'ok|1' : 'ok|0';
+                    $this->assertSame($expected, $workerResult);
+                    $logoutSucceeded = $firstOperation === 'logout' || $workerResult === 'ok|1';
+                    if ($logoutSucceeded) {
+                        $this->assertSame(0, $this->refreshTokens->newQuery()->where('device_id', $device->id)->whereNull('revoked_at')->count());
+                        $this->assertNull($repository->rotateRefreshToken($replacementHash, hash('sha256', $replacementHash), '2099-01-01 00:00:00'));
+                    } else {
+                        $this->assertNull($repository->findRefreshToken($firstHash)?->loggedOutAt);
+                        $this->assertTrue($repository->findRefreshToken($replacementHash)->isValid());
+                    }
+                } finally {
+                    $this->stopWorkers($workers);
+                    foreach ([$prefix, $ready, $result] as $path) {
+                        @unlink($path);
+                    }
+                }
+            }
+        }
+    }
+
     /** @throws RandomException */
     private function repository(): EloquentAuthRepository
     {
@@ -269,6 +341,7 @@ final class PdoDeviceIsolationTest extends TestCase
             $table->char('token_hash', 64);
             $table->dateTime('expires_at', 3);
             $table->dateTime('revoked_at', 3)->nullable();
+            $table->dateTime('logged_out_at', 6)->nullable();
             $table->dateTime('created_at', 3);
             $table->unique('token_hash', 'uniq_token_hash');
             $table->index(['user_id', 'device_id'], 'idx_user_device');

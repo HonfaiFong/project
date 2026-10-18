@@ -117,4 +117,9 @@ return [
         'user_limit' => $rateLimitSetting('SOCIAL_BIND_USER_RATE_LIMIT', 10),
         'user_window_seconds' => $rateLimitSetting('SOCIAL_BIND_USER_RATE_WINDOW_SECONDS', 3600),
     ],
+    'logout_rate_limit' => [
+        'limit' => $rateLimitSetting('AUTH_LOGOUT_RATE_LIMIT', 60),
+        'window_seconds' => $rateLimitSetting('AUTH_LOGOUT_RATE_WINDOW_SECONDS', 60),
+        'device_limit' => $rateLimitSetting('AUTH_LOGOUT_RATE_DEVICE_LIMIT', 20),
+    ],
 ];

@@ -110,18 +110,19 @@ final class InMemoryAuthRepository implements AuthRepositoryInterface
     public function revokeRefreshToken(string $tokenHash): bool
     {
         $record = $this->tokens[$tokenHash] ?? null;
-        if ($record !== null && $record->revokedAt === null) {
-            $this->tokens[$tokenHash] = new RefreshToken(
-                id: $record->id,
-                userId: $record->userId,
-                deviceId: $record->deviceId,
-                tokenHash: $record->tokenHash,
-                expiresAt: $record->expiresAt,
-                revokedAt: (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s.u'),
-            );
-            return true;
+        if ($record === null || !$record->isValid()) {
+            return false;
         }
-        return false;
+        $now = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
+        foreach ($this->tokens as $hash => $token) {
+            if ($token->userId === $record->userId && $token->deviceId === $record->deviceId && $token->revokedAt === null) {
+                $properties = get_object_vars($token);
+                $properties['revokedAt'] = $now;
+                $properties['loggedOutAt'] = $now;
+                $this->tokens[$hash] = new RefreshToken(...$properties);
+            }
+        }
+        return true;
     }
 }
 

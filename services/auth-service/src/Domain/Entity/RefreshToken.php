@@ -14,6 +14,7 @@ final readonly class RefreshToken
         public string $expiresAt,
         public ?string $revokedAt = null,
         public ?string $createdAt = null,
+        public ?string $loggedOutAt = null,
     ) {
     }
 

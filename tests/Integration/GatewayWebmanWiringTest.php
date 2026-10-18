@@ -167,6 +167,45 @@ final class GatewayWebmanWiringTest extends TestCase
     }
 
     #[RunInSeparateProcess]
+    public function testLogoutRateLimitRunsBeforeInvalidBearerRecovery(): void
+    {
+        putenv('APP_ENV=testing');
+        putenv('REDIS_HOST');
+        putenv('AUTH_LOGOUT_RATE_LIMIT=1');
+        $gatewayPath = dirname(__DIR__, 2) . '/apps/api-gateway';
+        Config::load($gatewayPath . '/config', ['route']);
+        Middleware::load(config('middleware'));
+        Route::load([$gatewayPath . '/config']);
+        $grpc = $this->createMock(UnaryGrpcClient::class);
+        $grpc->expects($this->exactly(2))->method('call')->willReturnCallback(static function (string $method): Message {
+            if ($method === '/auth.v1.AuthService/VerifyToken') {
+                return new VerifyTokenResponse(['valid' => false]);
+            }
+            self::assertSame('/auth.v1.AuthService/Logout', $method);
+            return new \Contracts\Gen\Auth\V1\LogoutResponse(['success' => true]);
+        });
+        $container = config('container');
+        $container->instance(AuthServiceClient::class, new AuthServiceClient(client: $grpc));
+        $keys = [];
+        $counter = static function (string $key) use (&$keys): int {
+            return $keys[$key] = ($keys[$key] ?? 0) + 1;
+        };
+        (new \ReflectionProperty(SocialLoginRateLimitMiddleware::class, 'counter'))->setValue(
+            $container->get(\Apps\ApiGateway\Middleware\LogoutRateLimitMiddleware::class), $counter);
+        new Http(GatewayRequest::class, new Logger('test'), $gatewayPath . '/app', $gatewayPath . '/public');
+        [, $route] = Route::dispatch('POST', '/api/v1/auth/logout');
+        $callback = Http::getCallback('', 'ApiGateway', $route['callback'], [], true, $route['route']);
+        foreach ([200, 429] as $expectedStatus) {
+            $request = new GatewayRequest("POST /api/v1/auth/logout HTTP/1.1\r\nHost: localhost\r\n"
+                . "Authorization: Bearer revoked-token\r\nContent-Type: application/json\r\n\r\n"
+                . json_encode(['refresh_token' => 'refresh']));
+            $this->assertSame($expectedStatus, $callback($request)->getStatusCode());
+        }
+        $this->assertMatchesRegularExpression('/auth_logout_recovery_total\{[^}\n]*status="200"[^}\n]*\} 1/',
+            \Packages\Observability\MetricsRegistry::instance()->render(false));
+    }
+
+    #[RunInSeparateProcess]
     public function testBindRateLimitsUseTheConfiguredContainerAndWebmanPipeline(): void
     {
         putenv('APP_ENV=testing');

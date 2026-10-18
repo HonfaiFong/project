@@ -15,6 +15,22 @@ use Webman\Http\Response;
 
 final class SocialLoginRateLimitMiddlewareTest extends TestCase
 {
+    public function testLogoutHasIndependentIpBucketsAndADeviceCeiling(): void
+    {
+        $keys = [];
+        $counter = $this->recordingCounter($keys);
+        $request = $this->request('192.0.2.10', ['x-device-id' => 'same-device']);
+        $handler = static fn (Request $request): Response => new Response(200);
+        $login = new SocialLoginRateLimitMiddleware(counter: $counter, limit: 1, environment: 'development');
+        $logout = new \Apps\ApiGateway\Middleware\LogoutRateLimitMiddleware(
+            counter: $counter, limit: 10, deviceLimit: 1, environment: 'development');
+        $login->process($request, $handler);
+        $this->assertSame(200, $logout->process($request, $handler)->getStatusCode());
+        $this->assertArrayHasKey('auth:gateway:logout:device:' . hash('sha256', '192.0.2.10|same-device'), $keys);
+        $this->expectExceptionCode(ErrorCode::RATE_LIMIT_EXCEEDED->value);
+        $logout->process($request, $handler);
+    }
+
     public function testSocialLoginRequestsAreLimitedPerClientIp(): void
     {
         $keys = [];

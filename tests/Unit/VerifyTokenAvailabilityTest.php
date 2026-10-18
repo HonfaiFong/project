@@ -143,6 +143,7 @@ final class VerifyTokenAvailabilityTest extends TestCase
             tokenHash: hash('sha256', 'refresh'),
             expiresAt: gmdate('Y-m-d H:i:s', time() + 300),
             revokedAt: gmdate('Y-m-d H:i:s', time() - 1),
+            loggedOutAt: gmdate('Y-m-d H:i:s', time() - 1),
         ));
         $repository->method('revokeRefreshToken')->willReturn(true);
         $application = new AuthApplicationService(

@@ -229,6 +229,7 @@ $appService = new AuthApplicationService(
     socialIdentityRepository: $socialIdentityRepository,
     phoneNormalizer: $phoneNormalizer,
     phoneLoginEnabled: $isDevelopment,
+    accessTokenRevocationTtl: max(7200, (int)(getenv('AUTH_ACCESS_TOKEN_REVOCATION_TTL') ?: 7200)),
 );
 $grpcService = new RoadRunnerAuthService($appService, $logger, $internalRpcAuthorizer);
 $server = new Server(new Invoker());

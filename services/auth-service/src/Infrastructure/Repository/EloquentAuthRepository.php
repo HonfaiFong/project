@@ -148,26 +148,29 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
         string $tokenHash,
         string $expiresAt
     ): RefreshToken {
-        $id = $this->snowflake->nextId();
-        $now = gmdate('Y-m-d H:i:s.v');
+        return $this->refreshToken->getConnection()->transaction(function () use ($userId, $deviceId, $tokenHash, $expiresAt): RefreshToken {
+            $this->device->newQuery()->whereKey($deviceId)->lockForUpdate()->first();
+            $id = $this->snowflake->nextId();
+            $now = gmdate('Y-m-d H:i:s.v');
 
-        $this->refreshToken->newQuery()->create([
-            'id' => $id,
-            'user_id' => $userId,
-            'device_id' => $deviceId,
-            'token_hash' => $tokenHash,
-            'expires_at' => $expiresAt,
-            'created_at' => $now,
-        ]);
+            $this->refreshToken->newQuery()->create([
+                'id' => $id,
+                'user_id' => $userId,
+                'device_id' => $deviceId,
+                'token_hash' => $tokenHash,
+                'expires_at' => $expiresAt,
+                'created_at' => $now,
+            ]);
 
-        return new RefreshToken(
-            id: $id,
-            userId: $userId,
-            deviceId: $deviceId,
-            tokenHash: $tokenHash,
-            expiresAt: $expiresAt,
-            createdAt: $now,
-        );
+            return new RefreshToken(
+                id: $id,
+                userId: $userId,
+                deviceId: $deviceId,
+                tokenHash: $tokenHash,
+                expiresAt: $expiresAt,
+                createdAt: $now,
+            );
+        });
     }
 
     /** @throws Throwable 令牌轮换事务失败时抛出。 */
@@ -176,9 +179,11 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
         string $newTokenHash,
         string $newExpiresAt
     ): ?RefreshToken {
-        $now = gmdate('Y-m-d H:i:s.v');
-
-        return $this->refreshToken->getConnection()->transaction(function () use ($tokenHash, $newTokenHash, $newExpiresAt, $now): ?RefreshToken {
+        return $this->refreshToken->getConnection()->transaction(function () use ($tokenHash, $newTokenHash, $newExpiresAt): ?RefreshToken {
+            if (!$this->lockTokenDevice($tokenHash)) {
+                return null;
+            }
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
             $query = $this->refreshToken->newQuery();
             $query->from('refresh_tokens as rt')
                 ->select('rt.*')
@@ -203,6 +208,7 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
                 expiresAt: (string)$attributes['expires_at'],
                 revokedAt: $attributes['revoked_at'] !== null ? (string)$attributes['revoked_at'] : null,
                 createdAt: (string)$attributes['created_at'],
+                loggedOutAt: $attributes['logged_out_at'] !== null ? (string)$attributes['logged_out_at'] : null,
             );
 
             if (!$record->isValid()) {
@@ -257,17 +263,42 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
             expiresAt: (string)$attributes['expires_at'],
             revokedAt: $attributes['revoked_at'] !== null ? (string)$attributes['revoked_at'] : null,
             createdAt: (string)$attributes['created_at'],
+            loggedOutAt: $attributes['logged_out_at'] !== null ? (string)$attributes['logged_out_at'] : null,
         );
     }
 
     public function revokeRefreshToken(string $tokenHash): bool
     {
-        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
+        return $this->refreshToken->getConnection()->transaction(function () use ($tokenHash): bool {
+            if (!$this->lockTokenDevice($tokenHash)) {
+                return false;
+            }
+            // A locking read sees a rotation/logout that committed while we waited for the device.
+            $row = $this->refreshToken->getConnection()->table('refresh_tokens')
+                ->where('token_hash', $tokenHash)->lockForUpdate()->first();
+            if ($row === null || $row->revoked_at !== null || strtotime($row->expires_at) <= time()) {
+                return false;
+            }
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
 
-        return $this->refreshToken->newQuery()
-            ->where('token_hash', $tokenHash)
-            ->whereNull('revoked_at')
-            ->update(['revoked_at' => $now]) > 0;
+            return $this->refreshToken->newQuery()
+                ->where('user_id', $row->user_id)
+                ->where('device_id', $row->device_id)
+                ->whereNull('revoked_at')
+                ->update(['revoked_at' => $now, 'logged_out_at' => $now]) > 0;
+        });
+    }
+
+    /** Every token mutation takes the device lock first, including different tokens on one device. */
+    private function lockTokenDevice(string $tokenHash): bool
+    {
+        $token = $this->refreshToken->newQuery()->where('token_hash', $tokenHash)->first();
+        if ($token === null) {
+            return false;
+        }
+
+        return $this->device->newQuery()->whereKey($token->getAttribute('device_id'))
+            ->where('user_id', $token->getAttribute('user_id'))->lockForUpdate()->first() !== null;
     }
 
     /**

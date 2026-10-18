@@ -137,6 +137,16 @@ final class PhinxMigrationTest extends TestCase
         $migration->up();
         $this->assertSame('2026-10-18 12:34:56.123456', $this->connection()->table($tokens)->where('id', '900001')->value('revoked_at'));
 
+        require_once dirname(__DIR__, 2) . '/database/migrations/20261018000100_separate_refresh_logout_state.php';
+        $logoutMigration = new \SeparateRefreshLogoutState('test', 20261018000100);
+        $logoutMigration->setAdapter($adapter);
+        $logoutMigration->up();
+        $logoutMigration->up();
+        $this->assertNull($this->connection()->table($tokens)->where('id', '900001')->value('logged_out_at'));
+        $this->assertSame(6, (int)$this->connection()->table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $schema)->where('TABLE_NAME', 'refresh_tokens')
+            ->where('COLUMN_NAME', 'logged_out_at')->value('DATETIME_PRECISION'));
+
         $this->pdo->exec('USE `' . $schema . '`');
         $repository = new \Services\AuthService\Infrastructure\Repository\EloquentAuthRepository($this->pdo, new \Packages\IdGenerator\Snowflake());
         $device = $repository->findOrCreateDevice('1001', 'precision-device', 'test', '1.0', null, null);

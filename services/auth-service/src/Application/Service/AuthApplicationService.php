@@ -38,6 +38,8 @@ final readonly class AuthApplicationService
         private ?SocialIdentityRepositoryInterface $socialIdentityRepository = null,
         private ?PhoneNormalizer $phoneNormalizer = null,
         private bool $phoneLoginEnabled = false,
+        // Keep at least the maximum historical access-token TTL during configuration rollouts.
+        private int $accessTokenRevocationTtl = 7200,
     ) {
     }
 
@@ -263,6 +265,8 @@ final readonly class AuthApplicationService
         $newRawRefreshToken = bin2hex(random_bytes(32));
         $newTokenHash = hash('sha256', $newRawRefreshToken);
 
+        // Capture before the locked rotation: a logout that commits next must also revoke this access token.
+        $issuedAt = microtime(true);
         $record = $this->authRepo->rotateRefreshToken(
             tokenHash: $tokenHash,
             newTokenHash: $newTokenHash,
@@ -277,7 +281,7 @@ final readonly class AuthApplicationService
             'jti'       => bin2hex(random_bytes(16)),
             'sub'       => $record->userId,
             'device_id' => $record->deviceId,
-            'iat'       => microtime(true),
+            'iat'       => $issuedAt,
             'exp'       => $accessExpiresAt,
         ]);
 
@@ -321,19 +325,20 @@ final readonly class AuthApplicationService
             }
         }
 
-        if ($record->revokedAt === null) {
+        if ($record->loggedOutAt === null) {
             $this->authRepo->revokeRefreshToken($tokenHash);
             // The conditional UPDATE may have lost to another logout. Always use the persisted winner.
             $record = $this->authRepo->findRefreshToken($tokenHash);
         }
 
-        if ($record === null || $record->revokedAt === null) {
-            throw new RuntimeException(ErrorCode::SERVICE_UNAVAILABLE->message(), ErrorCode::SERVICE_UNAVAILABLE->value);
+        if ($record === null || $record->loggedOutAt === null) {
+            // Rotation is not logout. The client must use its current refresh credential.
+            return false;
         }
 
         $utc = new DateTimeZone('UTC');
-        $revokedAt = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s.u', $record->revokedAt, $utc)
-            ?: DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $record->revokedAt, $utc);
+        $revokedAt = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s.u', $record->loggedOutAt, $utc)
+            ?: DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $record->loggedOutAt, $utc);
         if ($revokedAt === false) {
             throw new RuntimeException(ErrorCode::SERVICE_UNAVAILABLE->message(), ErrorCode::SERVICE_UNAVAILABLE->value);
         }
@@ -344,7 +349,7 @@ final readonly class AuthApplicationService
             throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
 
-        $remainingTtl = (int)ceil($revocationTimestamp + $this->accessTokenTtl - microtime(true));
+        $remainingTtl = (int)ceil($revocationTimestamp + max($this->accessTokenTtl, $this->accessTokenRevocationTtl) - microtime(true));
         if ($remainingTtl <= 0) {
             return true;
         }

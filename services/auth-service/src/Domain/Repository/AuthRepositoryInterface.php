@@ -38,6 +38,10 @@ interface AuthRepositoryInterface
 
     public function findRefreshToken(string $tokenHash): ?RefreshToken;
 
-    /** Atomically persist the first revocation time; retain the row for idempotent recovery. */
+    /**
+     * An active credential logs out every active refresh token on its device atomically.
+     * Serialize with rotation on the device row. Rotated/expired credentials return false;
+     * logged-out credentials retain their original loggedOutAt for recovery.
+     */
     public function revokeRefreshToken(string $tokenHash): bool;
 }

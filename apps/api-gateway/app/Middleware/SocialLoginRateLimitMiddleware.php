@@ -40,8 +40,8 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
         protected int $identityLimit = 0,
         protected int $identityWindowSeconds = 3600,
     ) {
-        if (!in_array($this->scenario, ['login', 'bind'], true)) {
-            throw new InvalidArgumentException('Social rate limit scenario must be login or bind');
+        if (!in_array($this->scenario, ['login', 'bind', 'logout'], true)) {
+            throw new InvalidArgumentException('Auth rate limit scenario must be login, bind or logout');
         }
         foreach ([
             'SOCIAL_LOGIN_RATE_LIMIT' => $this->limit,
@@ -125,15 +125,16 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
     protected function buckets(Request $request): array
     {
         $ipBucketId = $this->ipBucketId($this->clientIpResolver->resolve($request));
+        $prefix = $this->scenario === 'logout' ? 'auth:gateway:logout:' : 'auth:gateway:social-login:';
 
         $buckets = [
             [
-                'key'            => 'auth:gateway:social-login:' . hash('sha256', $ipBucketId),
+                'key'            => $prefix . hash('sha256', $ipBucketId),
                 'limit'          => $this->limit,
                 'window_seconds' => $this->windowSeconds,
             ],
             [
-                'key'            => 'auth:gateway:social-login:' . $this->scenario . ':' . hash('sha256', $ipBucketId),
+                'key'            => $prefix . $this->scenario . ':' . hash('sha256', $ipBucketId),
                 'limit'          => $this->scenarioLimit,
                 'window_seconds' => $this->windowSeconds,
             ],
@@ -142,7 +143,7 @@ class SocialLoginRateLimitMiddleware implements MiddlewareInterface
         $deviceId = $this->deviceId($request);
         if (filled($deviceId)) {
             $buckets[] = [
-                'key'            => 'auth:gateway:social-login:device:' . hash('sha256', $ipBucketId . '|' . $deviceId),
+                'key'            => $prefix . 'device:' . hash('sha256', $ipBucketId . '|' . $deviceId),
                 'limit'          => $this->deviceLimit,
                 'window_seconds' => $this->windowSeconds,
             ];

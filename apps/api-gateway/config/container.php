@@ -22,6 +22,7 @@ use Apps\ApiGateway\Grpc\MessageServiceClient;
 use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\TrustedProxyClientIpResolver;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
+use Apps\ApiGateway\Middleware\LogoutRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
 use Apps\ApiGateway\Middleware\MetricsAccessMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindRateLimitMiddleware;
@@ -138,6 +139,14 @@ $container->singleton(AppEnvironmentMiddleware::class, static fn (): AppEnvironm
 ));
 $container->singleton(MetricsAccessMiddleware::class, static fn (): MetricsAccessMiddleware => new MetricsAccessMiddleware(
     allowedCidrs: $settings['metrics_allowed_cidrs'],
+));
+$container->singleton(LogoutRateLimitMiddleware::class, static fn (): LogoutRateLimitMiddleware => new LogoutRateLimitMiddleware(
+    counter: $socialLoginRateLimitCounter,
+    limit: $settings['logout_rate_limit']['limit'],
+    windowSeconds: $settings['logout_rate_limit']['window_seconds'],
+    deviceLimit: $settings['logout_rate_limit']['device_limit'],
+    clientIpResolver: $trustedProxyClientIpResolver,
+    environment: $settings['environment'],
 ));
 $container->singleton(SocialLoginRateLimitMiddleware::class, static fn (): SocialLoginRateLimitMiddleware => new SocialLoginRateLimitMiddleware(
     counter: $socialLoginRateLimitCounter,

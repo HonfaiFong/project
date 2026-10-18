@@ -62,6 +62,7 @@ final class AuthLogoutRecoveryTest extends TestCase
 
     protected function setUp(): void
     {
+        \Packages\Observability\MetricsRegistry::reset();
         $this->pdo = new PDO('sqlite::memory:');
         $this->pdo->exec('CREATE TABLE devices (
             id TEXT PRIMARY KEY, user_id TEXT, device_uuid TEXT, platform TEXT,
@@ -69,7 +70,7 @@ final class AuthLogoutRecoveryTest extends TestCase
         )');
         $this->pdo->exec('CREATE TABLE refresh_tokens (
             id TEXT PRIMARY KEY, user_id TEXT, device_id TEXT, token_hash TEXT UNIQUE,
-            expires_at TEXT, revoked_at TEXT DEFAULT NULL, created_at TEXT
+            expires_at TEXT, revoked_at TEXT DEFAULT NULL, logged_out_at TEXT DEFAULT NULL, created_at TEXT
         )');
         $this->repository = new EloquentAuthRepository($this->pdo, new Snowflake());
         $this->deviceId = $this->repository->findOrCreateDevice('1001', 'recovery-device', 'test', '1.0', null, null)->id;
@@ -233,7 +234,7 @@ final class AuthLogoutRecoveryTest extends TestCase
     public function testHistoricalRecoveryDoesNotExtendTheOriginalWindow(): void
     {
         $revokedAt = (new DateTimeImmutable('@' . (time() - 120)))->format('Y-m-d H:i:s.u');
-        $this->pdo->prepare('UPDATE refresh_tokens SET revoked_at = ?')->execute([$revokedAt]);
+        $this->pdo->prepare('UPDATE refresh_tokens SET revoked_at = ?, logged_out_at = ?')->execute([$revokedAt, $revokedAt]);
         $this->assertTrue($this->application()->logout('refresh'));
         $this->assertGreaterThanOrEqual(7078, $this->deviceCommands[0][2]);
         $this->assertLessThanOrEqual(7080, $this->deviceCommands[0][2]);
@@ -241,7 +242,8 @@ final class AuthLogoutRecoveryTest extends TestCase
 
     public function testExpiredRecoveryWindowDoesNotWriteRedis(): void
     {
-        $this->pdo->prepare('UPDATE refresh_tokens SET revoked_at = ?')->execute([gmdate('Y-m-d H:i:s', time() - 7201)]);
+        $cutoff = gmdate('Y-m-d H:i:s', time() - 7201);
+        $this->pdo->prepare('UPDATE refresh_tokens SET revoked_at = ?, logged_out_at = ?')->execute([$cutoff, $cutoff]);
         $this->assertTrue($this->application()->logout('refresh'));
         $this->assertSame([], $this->values);
         $this->assertSame([], $this->deviceCommands);
@@ -262,6 +264,94 @@ final class AuthLogoutRecoveryTest extends TestCase
         $this->assertSame(401, $this->dispatch($this->application(), 'refresh', 'invalid-jwt')->getStatusCode());
         $this->assertNull($this->repository->findRefreshToken(hash('sha256', 'refresh'))?->revokedAt);
         $this->assertSame([], $this->values);
+        $this->assertMatchesRegularExpression('/auth_logout_recovery_total\{[^}\n]*status="401"[^}\n]*\} 1/',
+            \Packages\Observability\MetricsRegistry::instance()->render(false));
+    }
+
+    public function testRecoveryMetricsDistinguishUnavailableAndRecoveredRequests(): void
+    {
+        $app = $this->application();
+        $token = $this->token('original');
+        $this->failedWrite = 2;
+        $this->assertSame(503, $this->dispatch($app, 'refresh', $token)->getStatusCode());
+        $this->failedWrite = 3;
+        $this->assertSame(503, $this->dispatch($app, 'refresh', $token)->getStatusCode());
+        $this->failedWrite = 0;
+        $this->assertSame(200, $this->dispatch($app, 'refresh', $token)->getStatusCode());
+        $metrics = \Packages\Observability\MetricsRegistry::instance()->render(false);
+        foreach (['200', '503'] as $status) {
+            $this->assertMatchesRegularExpression('/auth_logout_recovery_total\{[^}\n]*status="' . $status . '"[^}\n]*\} 1/', $metrics);
+        }
+    }
+
+    public function testExpiredRefreshCannotLogOutANewerDeviceLogin(): void
+    {
+        $app = $this->application();
+        $login = $this->login($app);
+        $this->pdo->prepare('UPDATE refresh_tokens SET expires_at = ? WHERE token_hash = ?')
+            ->execute([gmdate('Y-m-d H:i:s', time() - 1), hash('sha256', 'refresh')]);
+        $this->assertSame(401, $this->dispatch($app, 'refresh', $this->token('old'))->getStatusCode());
+        $this->assertTrue($this->repository->findRefreshToken(hash('sha256', $login['refresh_token']))->isValid());
+        $this->assertTrue($app->verifyToken($login['access_token'])['valid']);
+    }
+
+    public function testLogoutRevokesEveryLoginOnTheDeviceAndPreservesOtherDevices(): void
+    {
+        $app = $this->application();
+        $first = $this->login($app);
+        $second = $this->login($app);
+        $otherDevice = $this->repository->findOrCreateDevice('1001', 'other-device', 'test', '1', null, null);
+        $this->repository->createRefreshToken('1001', $otherDevice->id, hash('sha256', 'other-refresh'), gmdate('Y-m-d H:i:s', time() + 300));
+
+        $this->assertSame(200, $this->dispatch($app, $first['refresh_token'], $first['access_token'])->getStatusCode());
+        foreach ([$first, $second] as $login) {
+            $this->assertFalse($app->verifyToken($login['access_token'])['valid']);
+            $record = $this->repository->findRefreshToken(hash('sha256', $login['refresh_token']));
+            $this->assertNotNull($record?->loggedOutAt);
+            $this->assertFalse($record->isValid());
+        }
+        $this->assertTrue($this->repository->findRefreshToken(hash('sha256', 'other-refresh'))->isValid());
+        $this->expectExceptionCode(ErrorCode::AUTH_TOKEN_EXPIRED->value);
+        $app->refreshToken($second['refresh_token']);
+    }
+
+    public function testRotatedCredentialIsRejectedInsteadOfReportingLogoutSuccess(): void
+    {
+        $app = $this->application();
+        $login = $this->login($app);
+        $rotated = $app->refreshToken($login['refresh_token']);
+        $this->assertSame(401, $this->dispatch($app, $login['refresh_token'], $login['access_token'])->getStatusCode());
+        $this->assertSame([], $this->deviceCommands);
+        $this->assertNull($this->repository->findRefreshToken(hash('sha256', $login['refresh_token']))?->loggedOutAt);
+        $this->assertTrue($app->verifyToken($rotated['access_token'])['valid']);
+        $this->assertSame(200, $this->dispatch($app, $rotated['refresh_token'], $rotated['access_token'])->getStatusCode());
+        $this->assertFalse($app->verifyToken($rotated['access_token'])['valid']);
+    }
+
+    public function testRefreshResponseCompletedAfterLogoutCannotRestoreAccess(): void
+    {
+        $repository = $this->createMock(AuthRepositoryInterface::class);
+        foreach (['findRefreshToken', 'revokeRefreshToken', 'deviceBelongsToUser'] as $method) {
+            $repository->method($method)->willReturnCallback(fn (...$args) => $this->repository->{$method}(...$args));
+        }
+        $app = $this->application($repository);
+        $repository->method('rotateRefreshToken')->willReturnCallback(function (...$args) use ($app) {
+            $record = $this->repository->rotateRefreshToken(...$args);
+            // The replacement commits, then a sibling credential logs out before the JWT is encoded.
+            $this->assertTrue($app->logout('sibling-refresh'));
+            return $record;
+        });
+        $this->repository->createRefreshToken('1001', $this->deviceId, hash('sha256', 'sibling-refresh'), gmdate('Y-m-d H:i:s', time() + 300));
+        $result = $app->refreshToken('refresh');
+        $this->assertFalse($app->verifyToken($result['access_token'])['valid']);
+        $this->assertFalse($this->repository->findRefreshToken(hash('sha256', $result['refresh_token']))->isValid());
+    }
+
+    public function testShorterIssuanceTtlRetainsHistoricalRevocationWindow(): void
+    {
+        $app = $this->application(accessTokenTtl: 900);
+        $this->assertTrue($app->logout('refresh', $this->token('old-long-lived-token')));
+        $this->assertGreaterThanOrEqual(7198, $this->deviceCommands[0][2]);
     }
 
     private function token(string $id, ?float $issuedAt = null): string
@@ -270,7 +360,7 @@ final class AuthLogoutRecoveryTest extends TestCase
             'iat' => $issuedAt ?? microtime(true) - 1, 'exp' => time() + 300]);
     }
 
-    private function application(?AuthRepositoryInterface $repository = null): AuthApplicationService
+    private function application(?AuthRepositoryInterface $repository = null, int $accessTokenTtl = 7200): AuthApplicationService
     {
         $users = $this->createMock(UserDirectoryInterface::class);
         $users->method('findById')->willReturnCallback(static fn (string $id): array => ['user_id' => $id, 'status' => UserDirectoryInterface::STATUS_ACTIVE]);
@@ -283,6 +373,7 @@ final class AuthLogoutRecoveryTest extends TestCase
             userDirectory: $users,
             accessTokenRevocationStore: new RedisAccessTokenRevocationStore($this->redis),
             phoneLoginEnabled: true,
+            accessTokenTtl: $accessTokenTtl,
         );
     }
 

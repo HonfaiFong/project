@@ -46,6 +46,7 @@ final class EloquentAuthRepositoryTest extends TestCase
             $table->char('token_hash', 64)->unique();
             $table->dateTime('expires_at');
             $table->dateTime('revoked_at')->nullable();
+            $table->dateTime('logged_out_at', 6)->nullable();
             $table->dateTime('created_at');
         });
         $this->repository = new EloquentAuthRepository($this->pdo, new Snowflake());

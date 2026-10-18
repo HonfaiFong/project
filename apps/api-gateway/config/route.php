@@ -13,6 +13,7 @@ use Apps\ApiGateway\Controller\PersonaController;
 use Apps\ApiGateway\Controller\UserController;
 use Apps\ApiGateway\Middleware\AppEnvironmentMiddleware;
 use Apps\ApiGateway\Middleware\AuthMiddleware;
+use Apps\ApiGateway\Middleware\LogoutRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\MetricsAccessMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindRateLimitMiddleware;
 use Apps\ApiGateway\Middleware\SocialBindUserRateLimitMiddleware;
@@ -34,9 +35,10 @@ Route::post('/api/v1/auth/login', [AuthController::class, 'login'])
 Route::post('/api/v1/auth/social/login', [AuthController::class, 'socialLogin'])
     ->middleware([SocialLoginRateLimitMiddleware::class]);
 Route::post('/api/v1/auth/refresh', [AuthController::class, 'refresh']);
+Route::post('/api/v1/auth/logout', [AuthController::class, 'logout'])
+    ->middleware([LogoutRateLimitMiddleware::class, AuthMiddleware::class]);
 
 Route::group('/api/v1', static function (): void {
-    Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::post('/ws/ticket', [AuthController::class, 'createWsTicket']);
     Route::get('/me', [UserController::class, 'me']);
     Route::get('/personas', [PersonaController::class, 'list']);

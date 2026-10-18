@@ -11,6 +11,8 @@ use LogicException;
 use Packages\Tracing\TraceContext;
 use Exception;
 use RuntimeException;
+use Throwable;
+use Packages\Observability\MetricsRegistry;
 use Webman\Http\Request;
 use Webman\Http\Response;
 use Webman\MiddlewareInterface;
@@ -41,7 +43,19 @@ final readonly class AuthMiddleware implements MiddlewareInterface
             // 对于注销请求（/api/v1/auth/logout），如果在部分成功的重试过程中设备或令牌已被标记撤销，
             // verifyToken 会返回 false。放行请求至控制器由 AuthService 执行幂等收尾与主体强校验。
             if (rtrim($request->path(), '/') === '/api/v1/auth/logout') {
-                return $handler($request);
+                try {
+                    $response = $handler($request);
+                    MetricsRegistry::instance()->inc('auth_logout_recovery_total', ['status' => (string)$response->getStatusCode()]);
+                    return $response;
+                } catch (Throwable $exception) {
+                    $status = match ($exception->getCode()) {
+                        ErrorCode::SERVICE_UNAVAILABLE->value => '503',
+                        ErrorCode::AUTH_UNAUTHORIZED->value, ErrorCode::AUTH_TOKEN_INVALID->value => '401',
+                        default => 'error',
+                    };
+                    MetricsRegistry::instance()->inc('auth_logout_recovery_total', ['status' => $status]);
+                    throw $exception;
+                }
             }
 
             throw new RuntimeException('Invalid or expired token', ErrorCode::AUTH_TOKEN_INVALID->value);

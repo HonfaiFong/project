@@ -864,6 +864,7 @@ device_id BIGINT UNSIGNED
 token_hash CHAR(64)
 expires_at DATETIME(3)
 revoked_at DATETIME(6) NULL
+logged_out_at DATETIME(6) NULL          # 设备注销时间；轮换消费仅设置 revoked_at
 created_at DATETIME(3)
 
 UNIQUE(token_hash)
@@ -1592,6 +1593,16 @@ updated_at
 
 部署此行为前需先运行 `make migrate`，应用 `20261018000000_preserve_refresh_revocation_precision`。已有记录丢失的小数精度无法重建，不得通过推迟历史截止时间补偿。
 
+Logout 定义为退出当前用户的整个设备：有效 Refresh Token 在设备行锁内撤销该设备全部未撤销 Refresh Token，Refresh 轮换与新登录创建也使用同一把锁。`revoked_at` 表示不可再刷新，`logged_out_at` 仅表示设备注销；已轮换或已过期的旧 Refresh Token 请求注销返回 401，客户端必须使用当前令牌。已注销令牌仅能恢复原注销截止时间，不能影响后续重新登录。
+
+部署前先执行 `make migrate`，应用 `20261018000100_separate_refresh_logout_state`。历史 `revoked_at` 无法区分轮换和注销，迁移不会将其推断为注销记录，旧记录不能使用重试通道。
+
+`AUTH_ACCESS_TOKEN_REVOCATION_TTL` 默认 7200 秒，保留窗口取它与当前签发 TTL 的较大值。缩短签发 TTL 前，该配置须至少覆盖所有仍可能有效的历史 Access Token 的最大 TTL；直到这些令牌全部过期后才可降低。
+
+`/auth/logout` 在认证前使用独立 Redis IP 与 IP/设备限流桶，默认每分钟 60/20 次，分别由 `AUTH_LOGOUT_RATE_LIMIT`、`AUTH_LOGOUT_RATE_DEVICE_LIMIT`、`AUTH_LOGOUT_RATE_WINDOW_SECONDS` 配置。设备头仅用于收紧 IP 限制，不授予权限。监控 `auth_logout_recovery_total{status="200|401|503|error"}`，观察被普通 VerifyToken 拒绝后进入注销通道的恢复结果。
+
+首次微信/QQ 注册自动创建 MAIN Persona，公共 API 不提供 Persona 创建入口。
+
 初期至少实现：
 
 ```text
@@ -1604,7 +1615,6 @@ POST /api/v1/auth/logout
 GET  /api/v1/me
 
 GET  /api/v1/personas
-POST /api/v1/personas
 GET  /api/v1/personas/{id}
 PATCH /api/v1/personas/{id}
 
