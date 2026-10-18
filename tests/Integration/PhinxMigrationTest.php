@@ -111,6 +111,51 @@ final class PhinxMigrationTest extends TestCase
         }
     }
 
+    public function testRefreshRevocationMigrationPreservesMicrosecondsAndExistingRows(): void
+    {
+        $this->executePrefixedBaseline();
+        $schema = $this->prefix . 'auth_db';
+        $tokens = $schema . '.refresh_tokens';
+        $this->connection()->table($tokens)->insert([
+            'id' => '900001', 'user_id' => '1001', 'device_id' => '2001',
+            'token_hash' => hash('sha256', 'precision-test'), 'expires_at' => '2099-01-01 00:00:00',
+            'revoked_at' => '2026-10-18 12:34:56.123', 'created_at' => '2026-10-18 12:00:00',
+        ]);
+        require_once dirname(__DIR__, 2) . '/database/migrations/20261018000000_preserve_refresh_revocation_precision.php';
+        $migration = new \PreserveRefreshRevocationPrecision('test', 20261018000000);
+        $adapter = new MysqlAdapter([
+            'connection' => $this->pdo, 'name' => $schema,
+            'migration_table' => $schema . '.phinxlog', 'schema_prefix' => $this->prefix,
+        ]);
+        $migration->setAdapter($adapter);
+        $migration->up();
+        $this->assertSame(6, (int)$this->connection()->table('information_schema.COLUMNS')
+            ->where('TABLE_SCHEMA', $schema)->where('TABLE_NAME', 'refresh_tokens')
+            ->where('COLUMN_NAME', 'revoked_at')->value('DATETIME_PRECISION'));
+        $this->assertSame('2026-10-18 12:34:56.123000', $this->connection()->table($tokens)->where('id', '900001')->value('revoked_at'));
+        $this->connection()->table($tokens)->where('id', '900001')->update(['revoked_at' => '2026-10-18 12:34:56.123456']);
+        $migration->up();
+        $this->assertSame('2026-10-18 12:34:56.123456', $this->connection()->table($tokens)->where('id', '900001')->value('revoked_at'));
+
+        $this->pdo->exec('USE `' . $schema . '`');
+        $repository = new \Services\AuthService\Infrastructure\Repository\EloquentAuthRepository($this->pdo, new \Packages\IdGenerator\Snowflake());
+        $device = $repository->findOrCreateDevice('1001', 'precision-device', 'test', '1.0', null, null);
+        $hash = hash('sha256', 'new-precision-token');
+        $repository->createRefreshToken('1001', $device->id, $hash, '2099-01-01 00:00:00');
+        $before = microtime(true);
+        $this->assertTrue($repository->revokeRefreshToken($hash));
+        $after = microtime(true);
+        $record = $repository->findRefreshToken($hash);
+        $this->assertNotNull($record?->revokedAt);
+        $cutoff = (float)(new \DateTimeImmutable($record->revokedAt, new \DateTimeZone('UTC')))->format('U.u');
+        $this->assertGreaterThanOrEqual($before, $cutoff);
+        $this->assertLessThanOrEqual($after, $cutoff);
+        $this->assertFalse($repository->revokeRefreshToken($hash));
+        $this->assertSame($record->revokedAt, $repository->findRefreshToken($hash)?->revokedAt);
+        $this->expectException(IrreversibleMigrationException::class);
+        $migration->down();
+    }
+
     public function testFreshMigrationIsIdempotentAndPreservesRowsAndHistory(): void
     {
         $this->assertMigrationSucceeds();

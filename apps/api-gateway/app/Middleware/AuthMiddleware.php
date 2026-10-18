@@ -38,6 +38,12 @@ final readonly class AuthMiddleware implements MiddlewareInterface
         $res = $this->authClient->verifyToken($token);
 
         if (!($res['valid'] ?? false)) {
+            // 对于注销请求（/api/v1/auth/logout），如果在部分成功的重试过程中设备或令牌已被标记撤销，
+            // verifyToken 会返回 false。放行请求至控制器由 AuthService 执行幂等收尾与主体强校验。
+            if (rtrim($request->path(), '/') === '/api/v1/auth/logout') {
+                return $handler($request);
+            }
+
             throw new RuntimeException('Invalid or expired token', ErrorCode::AUTH_TOKEN_INVALID->value);
         }
 

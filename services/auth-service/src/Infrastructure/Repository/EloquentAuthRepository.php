@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Services\AuthService\Infrastructure\Repository;
 
 use Illuminate\Database\QueryException;
+use DateTimeImmutable;
+use DateTimeZone;
 use Packages\IdGenerator\Snowflake;
 use Packages\Database\EloquentConnection;
 use PDO;
@@ -260,7 +262,7 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
 
     public function revokeRefreshToken(string $tokenHash): bool
     {
-        $now = gmdate('Y-m-d H:i:s.v');
+        $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
 
         return $this->refreshToken->newQuery()
             ->where('token_hash', $tokenHash)

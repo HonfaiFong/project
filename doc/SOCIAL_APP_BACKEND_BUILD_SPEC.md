@@ -863,7 +863,7 @@ user_id BIGINT UNSIGNED
 device_id BIGINT UNSIGNED
 token_hash CHAR(64)
 expires_at DATETIME(3)
-revoked_at DATETIME(3) NULL
+revoked_at DATETIME(6) NULL
 created_at DATETIME(3)
 
 UNIQUE(token_hash)
@@ -1585,6 +1585,12 @@ updated_at
 ```text
 /api/v1
 ```
+
+注销请求必须携带属于同一用户、同一设备的 Bearer 和 Refresh Token。Refresh Token 不存在时返回认证错误；历史 Refresh Token 不得搭配首次撤销时间之后签发的 Bearer 注销新会话。
+
+注销先在 MySQL 中原子记录首次撤销时间，再写入 Redis。Redis 部分失败返回 503；客户端可在原 Bearer 尚未过期时重试同一请求，即使该 Bearer 已被设备标记撤销，AuthService 仍会校验签名、用户、设备和签发时间。重试复用首次截止时间，仅补写原 Access Token 生存期内的撤销标记，不延长恢复窗口。设备截止时间通过 Redis Lua 原子取最大值，避免旧请求覆盖新注销。
+
+部署此行为前需先运行 `make migrate`，应用 `20261018000000_preserve_refresh_revocation_precision`。已有记录丢失的小数精度无法重建，不得通过推迟历史截止时间补偿。
 
 初期至少实现：
 

@@ -4,17 +4,34 @@ declare(strict_types=1);
 
 namespace Tests\Integration;
 
+use Apps\ApiGateway\Action\CreateWsTicketAction;
+use Apps\ApiGateway\Controller\AuthController;
+use Apps\ApiGateway\Grpc\AuthServiceClient;
+use Apps\ApiGateway\Grpc\UserServiceClient;
+use Apps\ApiGateway\Http\GatewayExceptionHandler;
+use Apps\ApiGateway\Http\GatewayRequest;
+use Apps\ApiGateway\Middleware\AuthMiddleware;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Auth\V1\LogoutRequest;
+use Contracts\Gen\Auth\V1\VerifyTokenRequest;
+use DateTimeImmutable;
+use DateTimeZone;
+use Google\Protobuf\Internal\Message;
 use Packages\Database\EloquentConnection;
+use Packages\GrpcCommon\GrpcCallException;
+use Packages\GrpcCommon\UnaryGrpcClient;
 use Packages\IdGenerator\Snowflake;
+use Packages\Tracing\TraceContext;
 use PDO;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\MockObject\MockObject;
 use Psr\Log\NullLogger;
 use Redis;
 use RedisException;
+use RuntimeException;
 use Services\AuthService\Application\Service\AuthApplicationService;
 use Services\AuthService\Domain\Client\UserDirectoryInterface;
+use Services\AuthService\Domain\Repository\AuthRepositoryInterface;
 use Services\AuthService\Infrastructure\Auth\LoginCredentialVerifier;
 use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
 use Services\AuthService\Infrastructure\Repository\EloquentAuthRepository;
@@ -24,11 +41,72 @@ use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
 use Spiral\RoadRunner\GRPC\Context;
 use Spiral\RoadRunner\GRPC\Exception\GRPCException;
 use Spiral\RoadRunner\GRPC\ResponseTrailers;
-use Spiral\RoadRunner\GRPC\StatusCode;
 use Tests\TestCase;
+use Webman\Http\Response;
 
+/** Real SQLite repository and gateway/auth business chain; Redis and gRPC transport are test doubles. */
 final class AuthLogoutRecoveryTest extends TestCase
 {
+    private PDO $pdo;
+    private EloquentAuthRepository $repository;
+    private JwtTokenCodec $codec;
+    private Redis&MockObject $redis;
+    private string $deviceId;
+    /** @var array<string, string> */
+    private array $values = [];
+    /** @var list<array{string, string, int}> */
+    private array $deviceCommands = [];
+    private int $writes = 0;
+    private int $failedWrite = 0;
+    private bool $disconnect = false;
+
+    protected function setUp(): void
+    {
+        $this->pdo = new PDO('sqlite::memory:');
+        $this->pdo->exec('CREATE TABLE devices (
+            id TEXT PRIMARY KEY, user_id TEXT, device_uuid TEXT, platform TEXT,
+            app_version TEXT, push_token TEXT, last_active_at TEXT, created_at TEXT, updated_at TEXT
+        )');
+        $this->pdo->exec('CREATE TABLE refresh_tokens (
+            id TEXT PRIMARY KEY, user_id TEXT, device_id TEXT, token_hash TEXT UNIQUE,
+            expires_at TEXT, revoked_at TEXT DEFAULT NULL, created_at TEXT
+        )');
+        $this->repository = new EloquentAuthRepository($this->pdo, new Snowflake());
+        $this->deviceId = $this->repository->findOrCreateDevice('1001', 'recovery-device', 'test', '1.0', null, null)->id;
+        $this->repository->createRefreshToken('1001', $this->deviceId, hash('sha256', 'refresh'), gmdate('Y-m-d H:i:s', time() + 300));
+        $this->codec = new JwtTokenCodec('test-secret-at-least-32-chars-long-12345');
+        $this->redis = $this->createMock(Redis::class);
+        $write = function (string $key, int $ttl, string $value): bool {
+            if (++$this->writes === $this->failedWrite) {
+                if ($this->disconnect) {
+                    throw new RedisException('connection lost');
+                }
+                return false;
+            }
+            $this->values[$key] = $value;
+            return true;
+        };
+        $this->redis->method('setex')->willReturnCallback($write);
+        // Lua itself is tested against a real Redis in RedisSocialAuthSupportTest.
+        $this->redis->method('eval')->willReturnCallback(function (string $script, array $args, int $numKeys) use ($write): int|false {
+            $this->assertSame(1, $numKeys);
+            $this->deviceCommands[] = $args;
+            [$key, $cutoff, $ttl] = $args;
+            if (isset($this->values[$key]) && (float)$this->values[$key] >= (float)$cutoff) {
+                return 1;
+            }
+            return $write($key, $ttl, $cutoff) ? 1 : false;
+        });
+        $this->redis->method('mGet')->willReturnCallback(fn (array $keys): array =>
+            array_map(fn (string $key): string|false => $this->values[$key] ?? false, $keys));
+    }
+
+    protected function tearDown(): void
+    {
+        TraceContext::reset();
+        EloquentConnection::forget($this->pdo);
+    }
+
     /** @return array<string, array{int, bool}> */
     public static function writeFailures(): array
     {
@@ -43,82 +121,203 @@ final class AuthLogoutRecoveryTest extends TestCase
     #[DataProvider('writeFailures')]
     public function testLogoutCanBeRetriedAfterRedisRecovers(int $failedWrite, bool $disconnect): void
     {
-        $pdo = new PDO('sqlite::memory:');
-        try {
-            // Exercise the production repository: revoked refresh rows must remain discoverable.
-            $pdo->exec('CREATE TABLE devices (
-                id TEXT PRIMARY KEY, user_id TEXT, device_uuid TEXT, platform TEXT,
-                app_version TEXT, push_token TEXT, last_active_at TEXT, created_at TEXT, updated_at TEXT
-            )');
-            $pdo->exec('CREATE TABLE refresh_tokens (
-                id TEXT PRIMARY KEY, user_id TEXT, device_id TEXT, token_hash TEXT UNIQUE,
-                expires_at TEXT, revoked_at TEXT DEFAULT NULL, created_at TEXT
-            )');
-            $repository = new EloquentAuthRepository($pdo, new Snowflake());
-            $device = $repository->findOrCreateDevice('1001', 'recovery-device', 'test', '1.0', null, null);
-            $hash = hash('sha256', 'refresh');
-            $repository->createRefreshToken('1001', $device->id, $hash, gmdate('Y-m-d H:i:s', time() + 300));
+        $this->failedWrite = $failedWrite;
+        $this->disconnect = $disconnect;
+        $app = $this->application();
+        $token = $this->token('original');
+        $first = $this->dispatch($app, 'refresh', $token);
+        $this->assertSame(503, $first->getStatusCode());
+        $this->assertSame(ErrorCode::SERVICE_UNAVAILABLE->value, json_decode($first->rawBody(), true)['code']);
+        $record = $this->repository->findRefreshToken(hash('sha256', 'refresh'));
+        $this->assertNotNull($record);
+        $this->assertNotNull($record->revokedAt);
+        $this->assertFalse($record->isValid());
+        $this->assertFalse($this->repository->revokeRefreshToken(hash('sha256', 'refresh')));
+        if ($failedWrite === 2) {
+            $this->assertFalse($app->verifyToken($token)['valid'], 'Device revocation already succeeded before the 503');
+        }
 
-            $values = [];
-            $writes = 0;
-            $redis = $this->createMock(Redis::class);
-            $redis->expects($this->exactly($failedWrite + 2))->method('setex')->willReturnCallback(
-                static function (string $key, int $ttl, string $value) use (&$values, &$writes, $failedWrite, $disconnect): bool {
-                    if (++$writes === $failedWrite) {
-                        if ($disconnect) {
-                            throw new RedisException('connection lost');
-                        }
-                        return false;
-                    }
-                    $values[$key] = $value;
-                    return true;
-                },
-            );
-            $redis->method('mGet')->willReturnCallback(
-                static function (array $keys) use (&$values): array {
-                    return array_map(static fn (string $key): string|false => $values[$key] ?? false, $keys);
-                },
-            );
-            $users = $this->createMock(UserDirectoryInterface::class);
-            $users->method('findById')->willReturn(['user_id' => '1001', 'status' => UserDirectoryInterface::STATUS_ACTIVE]);
-            $codec = new JwtTokenCodec('test-secret-at-least-32-chars-long-12345');
-            $application = new AuthApplicationService(
-                authRepo: $repository,
-                jwtCodec: $codec,
-                wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
-                credentialVerifier: new LoginCredentialVerifier('local', 'test-code', null, true),
-                userDirectory: $users,
-                accessTokenRevocationStore: new RedisAccessTokenRevocationStore($redis),
-            );
-            $token = $codec->encode([
-                'sub' => '1001', 'device_id' => $device->id, 'iat' => time() - 1, 'exp' => time() + 300,
-            ]);
-            $this->assertTrue($application->verifyToken($token)['valid']);
-            $service = new RoadRunnerAuthService($application, new NullLogger());
-            $request = new LogoutRequest(['refresh_token' => 'refresh', 'access_token' => $token]);
+        $retry = $this->dispatch($app, 'refresh', $token);
+        $this->assertSame(200, $retry->getStatusCode());
+        $this->assertTrue(json_decode($retry->rawBody(), true)['data']['success']);
+        $this->assertFalse($app->verifyToken($token)['valid']);
+        $this->assertSame('1', $this->values['auth:access-token-revoked:' . hash('sha256', $token)]);
+        $this->assertSame($this->deviceCommands[0][1], $this->deviceCommands[1][1], 'Retries must reuse the exact persisted cutoff');
+    }
+
+    /** @return array<string, array{string}> */
+    public static function mismatchedPrincipals(): array
+    {
+        return ['other user' => ['1002'], 'same user, other device' => ['1001']];
+    }
+
+    #[DataProvider('mismatchedPrincipals')]
+    public function testMismatchedBearerAndRefreshTokenIsRejected(string $userId): void
+    {
+        $other = $this->repository->findOrCreateDevice($userId, 'other-device', 'test', '1.0', null, null);
+        $token = $this->codec->encode(['sub' => $userId, 'device_id' => $other->id, 'iat' => microtime(true), 'exp' => time() + 300]);
+        $app = $this->application();
+        $this->assertTrue($app->verifyToken($token)['valid']);
+        $this->assertSame(401, $this->dispatch($app, 'refresh', $token)->getStatusCode());
+        $this->assertNull($this->repository->findRefreshToken(hash('sha256', 'refresh'))?->revokedAt);
+        $this->assertSame([], $this->values);
+    }
+
+    public function testReplayingRevokedRefreshTokenDoesNotRevokeNewerSessions(): void
+    {
+        $app = $this->application();
+        $original = $this->token('original');
+        $this->assertSame(200, $this->dispatch($app, 'refresh', $original)->getStatusCode());
+        $cutoff = $this->values['auth:access-device-revoked:' . $this->deviceId];
+        $login = $this->login($app);
+        $this->assertTrue($app->verifyToken($login['access_token'])['valid']);
+        $this->assertSame(200, $this->dispatch($app, 'refresh', $original)->getStatusCode());
+        $this->assertSame($cutoff, $this->values['auth:access-device-revoked:' . $this->deviceId]);
+        $this->assertTrue($app->verifyToken($login['access_token'])['valid']);
+    }
+
+    public function testOldRefreshCannotBlacklistBearerFromNewLogin(): void
+    {
+        $app = $this->application();
+        $this->assertTrue($app->logout('refresh', $this->token('original')));
+        $login = $this->login($app);
+        $before = $this->values;
+        $this->assertSame(401, $this->dispatch($app, 'refresh', $login['access_token'])->getStatusCode());
+        $this->assertSame($before, $this->values);
+        $this->assertTrue($app->verifyToken($login['access_token'])['valid']);
+        $this->assertTrue($this->repository->findRefreshToken(hash('sha256', $login['refresh_token']))?->isValid());
+    }
+
+    public function testRecoveryRevokesOtherTokensIssuedBeforeLogoutInTheSameSecond(): void
+    {
+        $this->failedWrite = 1;
+        $app = $this->application();
+        $issuedAt = microtime(true);
+        $original = $this->token('original', $issuedAt);
+        $sibling = $this->token('sibling', $issuedAt);
+        $this->assertSame(503, $this->dispatch($app, 'refresh', $original)->getStatusCode());
+        $record = $this->repository->findRefreshToken(hash('sha256', 'refresh'));
+        $this->assertNotNull($record?->revokedAt);
+        $this->assertMatchesRegularExpression('/\.\d{6}$/', $record->revokedAt);
+        $persisted = new DateTimeImmutable($record->revokedAt, new DateTimeZone('UTC'));
+        $this->assertGreaterThanOrEqual($issuedAt, (float)$persisted->format('U.u'));
+        $this->assertSame(200, $this->dispatch($app, 'refresh', $original)->getStatusCode());
+        $this->assertFalse($app->verifyToken($sibling)['valid'], 'Recovery must revoke all older device tokens, including fractional iat values');
+    }
+
+    public function testConcurrentLogoutDoesNotAdvanceFirstCutoffPastNewLogin(): void
+    {
+        $repository = $this->createMock(AuthRepositoryInterface::class);
+        foreach (['findRefreshToken', 'findOrCreateDevice', 'createRefreshToken', 'deviceBelongsToUser'] as $method) {
+            $repository->method($method)->willReturnCallback(fn (...$args) => $this->repository->{$method}(...$args));
+        }
+        $entered = false;
+        $app = $this->application($repository);
+        $newLogin = null;
+        $original = $this->token('original');
+        $repository->method('revokeRefreshToken')->willReturnCallback(function (string $hash) use (&$entered, $app, &$newLogin, $original): bool {
+            if (!$entered) {
+                $entered = true;
+                // A has read the active row. B commits logout and a new login before A's UPDATE resumes.
+                $this->assertTrue($app->logout('refresh', $original));
+                $newLogin = $this->login($app);
+                $this->assertTrue($app->verifyToken($newLogin['access_token'])['valid']);
+            }
+            return $this->repository->revokeRefreshToken($hash);
+        });
+        $this->assertTrue($app->logout('refresh', $original));
+        $this->assertTrue($app->verifyToken($newLogin['access_token'])['valid']);
+        $this->assertSame($this->deviceCommands[0][1], $this->deviceCommands[1][1]);
+    }
+
+    public function testHistoricalRecoveryDoesNotExtendTheOriginalWindow(): void
+    {
+        $revokedAt = (new DateTimeImmutable('@' . (time() - 120)))->format('Y-m-d H:i:s.u');
+        $this->pdo->prepare('UPDATE refresh_tokens SET revoked_at = ?')->execute([$revokedAt]);
+        $this->assertTrue($this->application()->logout('refresh'));
+        $this->assertGreaterThanOrEqual(7078, $this->deviceCommands[0][2]);
+        $this->assertLessThanOrEqual(7080, $this->deviceCommands[0][2]);
+    }
+
+    public function testExpiredRecoveryWindowDoesNotWriteRedis(): void
+    {
+        $this->pdo->prepare('UPDATE refresh_tokens SET revoked_at = ?')->execute([gmdate('Y-m-d H:i:s', time() - 7201)]);
+        $this->assertTrue($this->application()->logout('refresh'));
+        $this->assertSame([], $this->values);
+        $this->assertSame([], $this->deviceCommands);
+    }
+
+    public function testNonExistentRefreshTokenReturnsFalseAndDoesNotRevoke(): void
+    {
+        $app = $this->application();
+        $token = $this->token('original');
+        $this->assertFalse($app->logout('nonexistent', $token));
+        $this->assertSame(401, $this->dispatch($app, 'nonexistent', $token)->getStatusCode());
+        $this->assertTrue($app->verifyToken($token)['valid']);
+        $this->assertSame([], $this->values);
+    }
+
+    public function testInvalidBearerCannotUseTheLogoutRecoveryException(): void
+    {
+        $this->assertSame(401, $this->dispatch($this->application(), 'refresh', 'invalid-jwt')->getStatusCode());
+        $this->assertNull($this->repository->findRefreshToken(hash('sha256', 'refresh'))?->revokedAt);
+        $this->assertSame([], $this->values);
+    }
+
+    private function token(string $id, ?float $issuedAt = null): string
+    {
+        return $this->codec->encode(['jti' => $id, 'sub' => '1001', 'device_id' => $this->deviceId,
+            'iat' => $issuedAt ?? microtime(true) - 1, 'exp' => time() + 300]);
+    }
+
+    private function application(?AuthRepositoryInterface $repository = null): AuthApplicationService
+    {
+        $users = $this->createMock(UserDirectoryInterface::class);
+        $users->method('findById')->willReturnCallback(static fn (string $id): array => ['user_id' => $id, 'status' => UserDirectoryInterface::STATUS_ACTIVE]);
+        $users->method('findOrCreateByPhone')->willReturn(['user_id' => '1001', 'is_new_user' => false]);
+        return new AuthApplicationService(
+            authRepo: $repository ?? $this->repository,
+            jwtCodec: $this->codec,
+            wsTicketIssuer: new WsTicketIssuer('test-ws-secret-at-least-32-chars-12345', 60),
+            credentialVerifier: new LoginCredentialVerifier('local', 'test-code', null, true),
+            userDirectory: $users,
+            accessTokenRevocationStore: new RedisAccessTokenRevocationStore($this->redis),
+            phoneLoginEnabled: true,
+        );
+    }
+
+    /** @return array<string, mixed> */
+    private function login(AuthApplicationService $app): array
+    {
+        return $app->login('13800138000', 'test-code', ['device_uuid' => 'recovery-device', 'platform' => 'test', 'app_version' => '1.0']);
+    }
+
+    private function dispatch(AuthApplicationService $app, string $refreshToken, string $bearer): Response
+    {
+        $service = new RoadRunnerAuthService($app, new NullLogger());
+        $grpc = $this->createMock(UnaryGrpcClient::class);
+        $grpc->method('call')->willReturnCallback(static function (string $method, Message $request) use ($service): Message {
             $trailers = new ResponseTrailers();
             $context = new Context(['metadata' => [], ResponseTrailers::class => $trailers]);
             try {
-                $service->Logout($context, $request);
-                $this->fail('The first logout must report the Redis failure');
+                return match (true) {
+                    $method === '/auth.v1.AuthService/VerifyToken' && $request instanceof VerifyTokenRequest => $service->VerifyToken($context, $request),
+                    $method === '/auth.v1.AuthService/Logout' && $request instanceof LogoutRequest => $service->Logout($context, $request),
+                    default => throw new \LogicException('Unexpected gRPC call: ' . $method),
+                };
             } catch (GRPCException $e) {
-                $this->assertSame(StatusCode::UNAVAILABLE, $e->getCode());
-                $this->assertSame((string)ErrorCode::SERVICE_UNAVAILABLE->value, $trailers->get('x-app-error-code', null));
+                $code = $trailers->get('x-app-error-code', null);
+                throw new GrpcCallException($e->getCode(), $code === null ? null : (int)$code, $e->getMessage());
             }
-
-            $record = $repository->findRefreshToken($hash);
-            $this->assertNotNull($record);
-            $this->assertNotNull($record->revokedAt);
-            $this->assertFalse($record->isValid());
-            $this->assertFalse($repository->revokeRefreshToken($hash), 'The retry cannot rely on revoking the SQL row again');
-
-            $retryContext = new Context(['metadata' => [], ResponseTrailers::class => new ResponseTrailers()]);
-            $this->assertTrue($service->Logout($retryContext, $request)->getSuccess());
-            $this->assertSame(['valid' => false], $application->verifyToken($token));
-            $this->assertSame('1', $values['auth:access-token-revoked:' . hash('sha256', $token)]);
-            $this->assertArrayHasKey('auth:access-device-revoked:' . $device->id, $values);
-        } finally {
-            EloquentConnection::forget($pdo);
+        });
+        $client = new AuthServiceClient(client: $grpc);
+        $controller = new AuthController($client, new CreateWsTicketAction($client, new UserServiceClient('127.0.0.1:1')), $this->validationFactory());
+        $request = new GatewayRequest("POST /api/v1/auth/logout HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {$bearer}\r\nContent-Type: application/json\r\n\r\n"
+            . json_encode(['refresh_token' => $refreshToken]));
+        try {
+            return (new AuthMiddleware($client))->process($request, static fn (GatewayRequest $request): Response => $controller->logout($request));
+        } catch (RuntimeException $e) {
+            return (new GatewayExceptionHandler(new NullLogger(), false))->render($request, $e);
         }
     }
 }

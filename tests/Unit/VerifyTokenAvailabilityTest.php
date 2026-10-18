@@ -85,11 +85,14 @@ final class VerifyTokenAvailabilityTest extends TestCase
     public function testDeviceRevocationStoresSubsecondCutoff(): void
     {
         $redis = $this->createMock(Redis::class);
-        $redis->expects($this->once())->method('setex')->with(
-            'auth:access-device-revoked:device',
-            60,
-            $this->matchesRegularExpression('/^\d+\.\d{6}$/'),
-        )->willReturn(true);
+        $redis->expects($this->never())->method('get');
+        $redis->expects($this->never())->method('setex');
+        $redis->expects($this->once())->method('eval')->with(
+            $this->isType('string'),
+            $this->callback(static fn (array $args): bool => $args[0] === 'auth:access-device-revoked:device'
+                && preg_match('/^\d+\.\d{6}$/', $args[1]) === 1 && $args[2] === 60),
+            1,
+        )->willReturn(1);
         (new RedisAccessTokenRevocationStore($redis))->revokeDevice('device', 60);
     }
 
@@ -100,7 +103,7 @@ final class VerifyTokenAvailabilityTest extends TestCase
     {
         foreach (['revokeToken', 'revokeDevice'] as $method) {
             $redis = $this->createMock(Redis::class);
-            $redis->expects($this->once())->method('setex')->willReturn(false);
+            $redis->expects($this->once())->method($method === 'revokeDevice' ? 'eval' : 'setex')->willReturn(false);
 
             try {
                 (new RedisAccessTokenRevocationStore($redis))->{$method}('value', 60);
@@ -116,7 +119,7 @@ final class VerifyTokenAvailabilityTest extends TestCase
     public function testRevocationTransportFailurePropagatesAsServiceUnavailable(): void
     {
         $redis = $this->createMock(Redis::class);
-        $redis->method('setex')->willThrowException(new RedisException('connection lost'));
+        $redis->method('eval')->willThrowException(new RedisException('connection lost'));
 
         try {
             (new RedisAccessTokenRevocationStore($redis))->revokeDevice('device', 60);
@@ -131,7 +134,7 @@ final class VerifyTokenAvailabilityTest extends TestCase
     public function testLogoutFailsWhenTheDeviceRevocationWriteFails(): void
     {
         $redis = $this->createMock(Redis::class);
-        $redis->method('setex')->willReturn(false);
+        $redis->method('eval')->willReturn(false);
         $repository = $this->createMock(AuthRepositoryInterface::class);
         $repository->method('findRefreshToken')->willReturn(new RefreshToken(
             id: 'rt-1',
@@ -139,6 +142,7 @@ final class VerifyTokenAvailabilityTest extends TestCase
             deviceId: '2001',
             tokenHash: hash('sha256', 'refresh'),
             expiresAt: gmdate('Y-m-d H:i:s', time() + 300),
+            revokedAt: gmdate('Y-m-d H:i:s', time() - 1),
         ));
         $repository->method('revokeRefreshToken')->willReturn(true);
         $application = new AuthApplicationService(

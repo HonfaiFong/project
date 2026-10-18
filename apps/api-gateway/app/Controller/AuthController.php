@@ -124,7 +124,11 @@ final readonly class AuthController
             return ApiResponse::error(ErrorCode::AUTH_UNAUTHORIZED->value, 'unauthorized');
         }
 
-        $this->authClient->logout($refreshToken, $accessToken);
+        $res = $this->authClient->logout($refreshToken, $accessToken);
+        if (!($res['success'] ?? false)) {
+            return ApiResponse::error(ErrorCode::AUTH_TOKEN_INVALID->value, 'invalid refresh token');
+        }
+
         return ApiResponse::success(['success' => true]);
     }
 

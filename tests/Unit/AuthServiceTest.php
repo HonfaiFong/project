@@ -109,8 +109,16 @@ final class InMemoryAuthRepository implements AuthRepositoryInterface
 
     public function revokeRefreshToken(string $tokenHash): bool
     {
-        if (isset($this->tokens[$tokenHash])) {
-            unset($this->tokens[$tokenHash]);
+        $record = $this->tokens[$tokenHash] ?? null;
+        if ($record !== null && $record->revokedAt === null) {
+            $this->tokens[$tokenHash] = new RefreshToken(
+                id: $record->id,
+                userId: $record->userId,
+                deviceId: $record->deviceId,
+                tokenHash: $record->tokenHash,
+                expiresAt: $record->expiresAt,
+                revokedAt: (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s.u'),
+            );
             return true;
         }
         return false;
@@ -130,9 +138,13 @@ final class InMemoryAccessTokenRevocationStore implements AccessTokenRevocationS
         $this->tokenHashes[$tokenHash] = true;
     }
 
-    public function revokeDevice(string $deviceId, int $ttl): void
+    public function revokeDevice(string $deviceId, int $ttl, ?float $revokedAt = null): void
     {
-        $this->deviceRevokedAt[$deviceId] = microtime(true);
+        $timestamp = $revokedAt ?? microtime(true);
+        if (isset($this->deviceRevokedAt[$deviceId]) && $this->deviceRevokedAt[$deviceId] >= $timestamp) {
+            return;
+        }
+        $this->deviceRevokedAt[$deviceId] = $timestamp;
     }
 
     public function isRevoked(string $tokenHash, string $deviceId, float $issuedAt): bool

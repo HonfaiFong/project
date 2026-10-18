@@ -108,11 +108,14 @@ final class SocialAuthRepositoryFake implements AuthRepositoryInterface
 
     public function revokeRefreshToken(string $tokenHash): bool
     {
-        if (!isset($this->tokens[$tokenHash])) {
+        $record = $this->tokens[$tokenHash] ?? null;
+        if ($record === null || $record->revokedAt !== null) {
             return false;
         }
 
-        unset($this->tokens[$tokenHash]);
+        $properties = get_object_vars($record);
+        $properties['revokedAt'] = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
+        $this->tokens[$tokenHash] = new RefreshToken(...$properties);
 
         return true;
     }

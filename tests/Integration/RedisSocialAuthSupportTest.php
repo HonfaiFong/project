@@ -8,6 +8,7 @@ use Contracts\Errors\ErrorCode;
 use Redis;
 use Services\AuthService\Domain\Phone\VerificationScene;
 use Services\AuthService\Infrastructure\Cache\RedisDistributedLock;
+use Services\AuthService\Infrastructure\Cache\RedisAccessTokenRevocationStore;
 use Services\AuthService\Infrastructure\Cache\RedisSocialBindSessionStore;
 use Services\AuthService\Infrastructure\Phone\RedisPhoneVerificationService;
 use Services\AuthService\Domain\Phone\SmsSenderInterface;
@@ -70,6 +71,37 @@ final class RedisSocialAuthSupportTest extends TestCase
             }
             $this->redis->close();
         }
+    }
+
+    public function testDeviceRevocationKeepsTheMaximumCutoffAndSubsecondPrecision(): void
+    {
+        $device = 'revocation-' . bin2hex(random_bytes(8));
+        $key = 'auth:access-device-revoked:' . $device;
+        $this->keysToDelete[] = $key;
+        $store = new RedisAccessTokenRevocationStore($this->redis);
+        $store->revokeDevice($device, 60, 100.567890);
+        $store->revokeDevice($device, 600, 100.123456);
+        $this->assertSame('100.567890', $this->redis->get($key));
+        $this->assertTrue($store->isRevoked('not-blacklisted', $device, 100.567890));
+        $this->assertFalse($store->isRevoked('not-blacklisted', $device, 100.567891));
+        $this->assertLessThanOrEqual(60000, $this->redis->pttl($key), 'An older replay must not extend retention');
+
+        $store->revokeDevice($device, 60, 100.900001);
+        $store->revokeDevice($device, 60, 100.567890);
+        $this->assertSame('100.900001', $this->redis->get($key));
+        $this->assertTrue($store->isRevoked('not-blacklisted', $device, 100.8));
+    }
+
+    public function testNewerDeviceCutoffDoesNotShortenExistingRetention(): void
+    {
+        $device = 'revocation-' . bin2hex(random_bytes(8));
+        $key = 'auth:access-device-revoked:' . $device;
+        $this->keysToDelete[] = $key;
+        $store = new RedisAccessTokenRevocationStore($this->redis);
+        $store->revokeDevice($device, 60, 100.0);
+        $store->revokeDevice($device, 1, 200.0);
+        $this->assertSame('200.000000', $this->redis->get($key));
+        $this->assertGreaterThan(58000, $this->redis->pttl($key));
     }
 
     public function testBindSessionRotationPhoneLockAndConsumption(): void

@@ -38,5 +38,6 @@ interface AuthRepositoryInterface
 
     public function findRefreshToken(string $tokenHash): ?RefreshToken;
 
+    /** Atomically persist the first revocation time; retain the row for idempotent recovery. */
     public function revokeRefreshToken(string $tokenHash): bool;
 }

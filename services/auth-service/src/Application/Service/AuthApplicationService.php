@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Services\AuthService\Application\Service;
 
 use Contracts\Errors\ErrorCode;
+use DateTimeImmutable;
+use DateTimeZone;
 use Exception;
 use Packages\Phone\PhoneNormalizer;
 use Random\RandomException;
@@ -291,37 +293,78 @@ final readonly class AuthApplicationService
     {
         $tokenHash = hash('sha256', $rawRefreshToken);
         $record = $this->authRepo->findRefreshToken($tokenHash);
-        $refreshRevoked = $this->authRepo->revokeRefreshToken($tokenHash);
-        $accessRevoked = false;
-
-        if ($this->accessTokenRevocationStore !== null && $record !== null) {
-            $this->accessTokenRevocationStore->revokeDevice($record->deviceId, $this->accessTokenTtl);
-            $accessRevoked = true;
+        if ($record === null) {
+            return false;
         }
 
-        if ($this->accessTokenRevocationStore !== null && $rawAccessToken !== null && $rawAccessToken !== '') {
-            $payload = null;
+        $payload = null;
+        if ($rawAccessToken !== null && $rawAccessToken !== '') {
             try {
                 $payload = $this->jwtCodec->decode($rawAccessToken);
-            } catch (Throwable) {
-                // 无效访问令牌无法用于认证，无须添加黑名单条目。
+            } catch (Throwable $e) {
+                throw new RuntimeException(
+                    ErrorCode::AUTH_UNAUTHORIZED->message(),
+                    ErrorCode::AUTH_UNAUTHORIZED->value,
+                    $e,
+                );
             }
 
             if (
-                $payload !== null
-                && ($record === null
-                    || ((string)($payload['sub'] ?? '') === $record->userId
-                        && (string)($payload['device_id'] ?? '') === $record->deviceId))
+                (string)($payload['sub'] ?? '') !== $record->userId
+                || (string)($payload['device_id'] ?? '') !== $record->deviceId
+                || !isset($payload['iat']) || !is_numeric($payload['iat'])
             ) {
+                throw new RuntimeException(
+                    ErrorCode::AUTH_UNAUTHORIZED->message(),
+                    ErrorCode::AUTH_UNAUTHORIZED->value,
+                );
+            }
+        }
+
+        if ($record->revokedAt === null) {
+            $this->authRepo->revokeRefreshToken($tokenHash);
+            // The conditional UPDATE may have lost to another logout. Always use the persisted winner.
+            $record = $this->authRepo->findRefreshToken($tokenHash);
+        }
+
+        if ($record === null || $record->revokedAt === null) {
+            throw new RuntimeException(ErrorCode::SERVICE_UNAVAILABLE->message(), ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
+
+        $utc = new DateTimeZone('UTC');
+        $revokedAt = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s.u', $record->revokedAt, $utc)
+            ?: DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $record->revokedAt, $utc);
+        if ($revokedAt === false) {
+            throw new RuntimeException(ErrorCode::SERVICE_UNAVAILABLE->message(), ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
+        $revocationTimestamp = (float)$revokedAt->format('U.u');
+
+        // A historical refresh token only authorizes recovery of its original logout, not a newer bearer.
+        if ($payload !== null && (float)$payload['iat'] > $revocationTimestamp) {
+            throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
+        }
+
+        $remainingTtl = (int)ceil($revocationTimestamp + $this->accessTokenTtl - microtime(true));
+        if ($remainingTtl <= 0) {
+            return true;
+        }
+
+        if ($this->accessTokenRevocationStore !== null) {
+            $this->accessTokenRevocationStore->revokeDevice(
+                $record->deviceId,
+                $remainingTtl,
+                $revocationTimestamp
+            );
+
+            if ($payload !== null) {
                 $this->accessTokenRevocationStore->revokeToken(
                     hash('sha256', $rawAccessToken),
                     max(1, (int)$payload['exp'] - time())
                 );
-                $accessRevoked = true;
             }
         }
 
-        return $refreshRevoked || $accessRevoked;
+        return true;
     }
 
     /**
