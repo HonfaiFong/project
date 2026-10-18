@@ -20,6 +20,11 @@ interface AuthRepositoryInterface
 
     public function deviceBelongsToUser(string $userId, string $deviceId): bool;
 
+    /**
+     * Require an existing device owned by the user and serialize creation with device logout.
+     * Return createdAt as the UTC microsecond issuance instant captured while holding that lock;
+     * preserve its precision in the returned entity even if database storage truncates it.
+     */
     public function createRefreshToken(
         string $userId,
         string $deviceId,

@@ -73,7 +73,8 @@ final class InMemoryAuthRepository implements AuthRepositoryInterface
             userId: $userId,
             deviceId: $deviceId,
             tokenHash: $tokenHash,
-            expiresAt: $expiresAt
+            expiresAt: $expiresAt,
+            createdAt: (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s.u'),
         );
         $this->tokens[$tokenHash] = $tok;
         return $tok;

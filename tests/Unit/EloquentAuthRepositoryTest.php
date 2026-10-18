@@ -8,6 +8,7 @@ use Packages\IdGenerator\Snowflake;
 use Illuminate\Database\QueryException;
 use PDO;
 use PDOException;
+use RuntimeException;
 use Throwable;
 use Illuminate\Database\Schema\Blueprint;
 use Packages\Database\EloquentConnection;
@@ -104,7 +105,7 @@ final class EloquentAuthRepositoryTest extends TestCase
     }
 
     /** @throws Throwable */
-    public function testMismatchedRefreshTokenIsNotUsableForAnotherDeviceOwner(): void
+    public function testRefreshCreationRejectsAnotherDeviceOwner(): void
     {
         $device = $this->repository->findOrCreateDevice(
             userId: '1001',
@@ -115,14 +116,24 @@ final class EloquentAuthRepositoryTest extends TestCase
             ip: null,
         );
 
-        $this->repository->createRefreshToken(
-            userId: '1002',
-            deviceId: $device->id,
-            tokenHash: str_repeat('a', 64),
-            expiresAt: '2099-01-01 00:00:00.000',
-        );
+        $this->assertRefreshCreationRejected('1002', $device->id);
+    }
 
-        $this->assertNull($this->repository->findRefreshToken(str_repeat('a', 64)));
+    public function testRefreshCreationRejectsAMissingDevice(): void
+    {
+        $this->assertRefreshCreationRejected('1001', '9999');
+    }
+
+    private function assertRefreshCreationRejected(string $userId, string $deviceId): void
+    {
+        try {
+            $this->repository->createRefreshToken($userId, $deviceId, str_repeat('a', 64), '2099-01-01 00:00:00.000');
+            $this->fail('An existing device owned by the user is required');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('Device does not exist or belongs to another user', $exception->getMessage());
+        }
+        $this->assertSame(0, EloquentConnection::fromPdo($this->pdo)->table('refresh_tokens')->count());
+        $this->assertFalse($this->pdo->inTransaction());
     }
 
     /** @throws Throwable */

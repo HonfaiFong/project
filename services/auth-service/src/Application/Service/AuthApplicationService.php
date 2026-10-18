@@ -210,24 +210,30 @@ final readonly class AuthApplicationService
         $accessExpiresAt = $now + $this->accessTokenTtl;
         $refreshExpiresAt = $now + $this->refreshTokenTtl;
 
-        // Fractional NumericDate keeps a later login distinct from a same-second device revocation.
-        $accessToken = $this->jwtCodec->encode([
-            'jti'       => bin2hex(random_bytes(16)),
-            'sub'       => $userId,
-            'device_id' => $device->id,
-            'iat'       => microtime(true),
-            'exp'       => $accessExpiresAt,
-        ]);
-
         $rawRefreshToken = bin2hex(random_bytes(32));
         $tokenHash = hash('sha256', $rawRefreshToken);
 
-        $this->authRepo->createRefreshToken(
+        $record = $this->authRepo->createRefreshToken(
             userId: $userId,
             deviceId: $device->id,
             tokenHash: $tokenHash,
             expiresAt: gmdate('Y-m-d H:i:s.v', $refreshExpiresAt)
         );
+
+        $issuedAt = $record->createdAt === null ? false : DateTimeImmutable::createFromFormat(
+            '!Y-m-d H:i:s.u', $record->createdAt, new DateTimeZone('UTC')
+        );
+        if ($issuedAt === false) {
+            throw new RuntimeException(ErrorCode::SERVICE_UNAVAILABLE->message(), ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
+        // Use the instant captured under the device lock, even if logout commits before JWT encoding.
+        $accessToken = $this->jwtCodec->encode([
+            'jti'       => bin2hex(random_bytes(16)),
+            'sub'       => $userId,
+            'device_id' => $device->id,
+            'iat'       => (float)$issuedAt->format('U.u'),
+            'exp'       => $accessExpiresAt,
+        ]);
 
         return [
             'user_id'                  => $userId,

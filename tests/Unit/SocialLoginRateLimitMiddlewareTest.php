@@ -31,6 +31,21 @@ final class SocialLoginRateLimitMiddlewareTest extends TestCase
         $logout->process($request, $handler);
     }
 
+    public function testLogoutWithoutDeviceHintStillEnforcesTheIpLimit(): void
+    {
+        $keys = [];
+        $middleware = new \Apps\ApiGateway\Middleware\LogoutRateLimitMiddleware(
+            counter: $this->recordingCounter($keys), limit: 1, environment: 'development');
+        $request = $this->request('192.0.2.10', post: ['refresh_token' => 'refresh-only']);
+        $handler = static fn (Request $request): Response => new Response(200);
+        $this->assertSame(200, $middleware->process($request, $handler)->getStatusCode());
+        $this->assertCount(2, $keys);
+        $this->assertArrayHasKey('auth:gateway:logout:' . hash('sha256', '192.0.2.10'), $keys);
+        $this->assertArrayHasKey('auth:gateway:logout:logout:' . hash('sha256', '192.0.2.10'), $keys);
+        $this->expectExceptionCode(ErrorCode::RATE_LIMIT_EXCEEDED->value);
+        $middleware->process($request, $handler);
+    }
+
     public function testSocialLoginRequestsAreLimitedPerClientIp(): void
     {
         $keys = [];

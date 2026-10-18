@@ -347,6 +347,41 @@ final class AuthLogoutRecoveryTest extends TestCase
         $this->assertFalse($this->repository->findRefreshToken(hash('sha256', $result['refresh_token']))->isValid());
     }
 
+    #[DataProvider('loginLogoutCommitOrders')]
+    public function testLoginAndLogoutKeepBothCredentialsInTheSameSession(bool $logoutFirst): void
+    {
+        $repository = $this->createMock(AuthRepositoryInterface::class);
+        foreach (['findOrCreateDevice', 'findRefreshToken', 'revokeRefreshToken', 'deviceBelongsToUser'] as $method) {
+            $repository->method($method)->willReturnCallback(fn (...$args) => $this->repository->{$method}(...$args));
+        }
+        $app = $this->application($repository);
+        $issuedAt = null;
+        $repository->method('createRefreshToken')->willReturnCallback(function (...$args) use ($app, $logoutFirst, &$issuedAt) {
+            if ($logoutFirst) {
+                // Login has started, but logout commits before it can acquire the device lock.
+                $this->assertTrue($app->logout('refresh'));
+            }
+            $record = $this->repository->createRefreshToken(...$args);
+            $issuedAt = (float)(new DateTimeImmutable($record->createdAt, new DateTimeZone('UTC')))->format('U.u');
+            if (!$logoutFirst) {
+                // Login commits first; logout completes before the login JWT is encoded/returned.
+                $this->assertTrue($app->logout('refresh'));
+            }
+            return $record;
+        });
+
+        $login = $this->login($app);
+        $this->assertSame($issuedAt, $this->codec->decode($login['access_token'])['iat']);
+        $this->assertSame($logoutFirst, $app->verifyToken($login['access_token'])['valid']);
+        $this->assertSame($logoutFirst, $this->repository->findRefreshToken(hash('sha256', $login['refresh_token']))->isValid());
+    }
+
+    /** @return array<string, array{bool}> */
+    public static function loginLogoutCommitOrders(): array
+    {
+        return ['logout commits first' => [true], 'login commits first' => [false]];
+    }
+
     public function testShorterIssuanceTtlRetainsHistoricalRevocationWindow(): void
     {
         $app = $this->application(accessTokenTtl: 900);

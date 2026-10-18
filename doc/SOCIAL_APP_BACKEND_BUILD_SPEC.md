@@ -1599,7 +1599,9 @@ Logout 定义为退出当前用户的整个设备：有效 Refresh Token 在设�
 
 `AUTH_ACCESS_TOKEN_REVOCATION_TTL` 默认 7200 秒，保留窗口取它与当前签发 TTL 的较大值。缩短签发 TTL 前，该配置须至少覆盖所有仍可能有效的历史 Access Token 的最大 TTL；直到这些令牌全部过期后才可降低。
 
-`/auth/logout` 在认证前使用独立 Redis IP 与 IP/设备限流桶，默认每分钟 60/20 次，分别由 `AUTH_LOGOUT_RATE_LIMIT`、`AUTH_LOGOUT_RATE_DEVICE_LIMIT`、`AUTH_LOGOUT_RATE_WINDOW_SECONDS` 配置。设备头仅用于收紧 IP 限制，不授予权限。监控 `auth_logout_recovery_total{status="200|401|503|error"}`，观察被普通 VerifyToken 拒绝后进入注销通道的恢复结果。
+新登录在持有设备行锁时确定 Refresh Token 创建时间，仓储将未截断的 UTC 微秒时间返回应用层作为 Access Token 的 `iat`。注销先提交时，新登录的两种凭据都在原注销截止时间之后；登录先提交时，后续注销会撤销两种凭据，即使 JWT 编码或响应稍后才完成也不能恢复会话。
+
+`/auth/logout` 在认证前使用独立 Redis IP 限流桶，默认每分钟 60 次；仅当请求体提供 `device.device_uuid` 或请求头提供 `x-device-id` 时，才叠加每分钟 20 次的 IP/设备桶。两者及窗口分别由 `AUTH_LOGOUT_RATE_LIMIT`、`AUTH_LOGOUT_RATE_DEVICE_LIMIT`、`AUTH_LOGOUT_RATE_WINDOW_SECONDS` 配置。只携带 `refresh_token` 的常规请求仍受 IP 限制。客户端设备提示是可选的附加限制，不作为可信身份或授权依据。监控 `auth_logout_recovery_total{status="200|401|503|error"}`，观察被普通 VerifyToken 拒绝后进入注销通道的恢复结果。
 
 首次微信/QQ 注册自动创建 MAIN Persona，公共 API 不提供 Persona 创建入口。
 

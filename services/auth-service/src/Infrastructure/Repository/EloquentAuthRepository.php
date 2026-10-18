@@ -11,6 +11,7 @@ use Packages\IdGenerator\Snowflake;
 use Packages\Database\EloquentConnection;
 use PDO;
 use PDOException;
+use RuntimeException;
 use Throwable;
 use Services\AuthService\Domain\Entity\Device;
 use Services\AuthService\Domain\Entity\RefreshToken;
@@ -149,9 +150,14 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
         string $expiresAt
     ): RefreshToken {
         return $this->refreshToken->getConnection()->transaction(function () use ($userId, $deviceId, $tokenHash, $expiresAt): RefreshToken {
-            $this->device->newQuery()->whereKey($deviceId)->lockForUpdate()->first();
+            $device = $this->device->newQuery()->whereKey($deviceId)
+                ->where('user_id', $userId)->lockForUpdate()->first();
+            if ($device === null) {
+                throw new RuntimeException('Device does not exist or belongs to another user');
+            }
             $id = $this->snowflake->nextId();
-            $now = gmdate('Y-m-d H:i:s.v');
+            // Preserve the issuance instant under the same device lock as logout.
+            $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.u');
 
             $this->refreshToken->newQuery()->create([
                 'id' => $id,

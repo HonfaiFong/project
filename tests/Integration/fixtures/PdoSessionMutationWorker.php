@@ -27,6 +27,11 @@ try {
         }
     });
     $repository = new EloquentAuthRepository($pdo, new Snowflake(1022));
+    if ($operation === 'login') {
+        $record = $repository->createRefreshToken('2001', $argv[6], $replacementHash, '2099-01-01 00:00:00');
+        file_put_contents($resultPath, 'ok|' . $record->createdAt);
+        exit(0);
+    }
     $success = $operation === 'logout'
         ? $repository->revokeRefreshToken($tokenHash)
         : $repository->rotateRefreshToken($tokenHash, $replacementHash, '2099-01-01 00:00:00') !== null;

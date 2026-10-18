@@ -79,6 +79,7 @@ final class SocialAuthRepositoryFake implements AuthRepositoryInterface
             deviceId: $deviceId,
             tokenHash: $tokenHash,
             expiresAt: $expiresAt,
+            createdAt: (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s.u'),
         );
         $this->tokens[$tokenHash] = $token;
 

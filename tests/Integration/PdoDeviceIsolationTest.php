@@ -302,6 +302,77 @@ final class PdoDeviceIsolationTest extends TestCase
         }
     }
 
+    public function testLoginCreationAndLogoutSerializeForBothCommitOrders(): void
+    {
+        $this->applyDeviceMigration();
+        foreach (['login', 'logout'] as $firstOperation) {
+            $repository = $this->repository();
+            $device = $repository->findOrCreateDevice('2001', 'login-order-' . $firstOperation, 'ios', '1', null, null);
+            $oldHash = hash('sha256', $device->id . ':old');
+            $newHash = hash('sha256', $device->id . ':new');
+            $repository->createRefreshToken('2001', $device->id, $oldHash, '2099-01-01 00:00:00');
+            $prefix = tempnam(sys_get_temp_dir(), 'login-lock-');
+            $this->assertNotFalse($prefix);
+            $ready = $prefix . '-ready';
+            $result = $prefix . '-result';
+            $workers = [];
+            $barrier = new \ArrayObject(['started' => false]);
+            EloquentConnection::fromPdo($this->pdo)->beforeExecuting(function (string $query) use ($barrier, &$workers, $firstOperation, $device, $oldHash, $newHash, $ready, $result): void {
+                $mutation = $firstOperation === 'login' ? 'insert into `refresh_tokens`' : 'update `refresh_tokens`';
+                if ($barrier['started'] || !str_starts_with($query, $mutation)) {
+                    return;
+                }
+                $barrier['started'] = true;
+                // Parent holds the device lock before its mutation; worker reaches the competing locking read.
+                $pipes = [];
+                $process = proc_open([PHP_BINARY, __DIR__ . '/fixtures/PdoSessionMutationWorker.php',
+                    $ready, $result, $firstOperation === 'login' ? 'logout' : 'login', $oldHash, $newHash, $device->id],
+                    [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes,
+                    dirname(__DIR__, 2), null, ['bypass_shell' => true]);
+                if (!is_resource($process)) {
+                    throw new RuntimeException('Unable to start login/logout worker');
+                }
+                fclose($pipes[0]);
+                stream_set_blocking($pipes[1], false);
+                stream_set_blocking($pipes[2], false);
+                $workers[] = ['process' => $process, 'pipes' => $pipes];
+                $this->waitForPaths([$ready]);
+                $this->assertFileDoesNotExist($result, 'Competing mutation must wait for the device lock');
+            });
+            try {
+                $createdAt = null;
+                if ($firstOperation === 'login') {
+                    $createdAt = $repository->createRefreshToken('2001', $device->id, $newHash, '2099-01-01 00:00:00')->createdAt;
+                } else {
+                    $this->assertTrue($repository->revokeRefreshToken($oldHash));
+                }
+                $this->assertTrue($barrier['started']);
+                $this->waitForWorkers($workers);
+                $workerResult = trim((string)file_get_contents($result));
+                $this->assertStringStartsWith('ok|', $workerResult);
+                $cutoff = $repository->findRefreshToken($oldHash)->loggedOutAt;
+                $this->assertNotNull($cutoff);
+                $newToken = $repository->findRefreshToken($newHash);
+                $this->assertNotNull($newToken);
+                if ($firstOperation === 'login') {
+                    $this->assertSame('ok|1', $workerResult);
+                    $this->assertNotNull($createdAt);
+                    $this->assertTrue($createdAt <= $cutoff, 'Later logout must cover the login issuance instant');
+                    $this->assertFalse($newToken->isValid());
+                } else {
+                    $createdAt = substr($workerResult, 3);
+                    $this->assertTrue($createdAt > $cutoff, 'Issuance must be captured after waiting for logout');
+                    $this->assertTrue($newToken->isValid());
+                }
+            } finally {
+                $this->stopWorkers($workers);
+                foreach ([$prefix, $ready, $result] as $path) {
+                    @unlink($path);
+                }
+            }
+        }
+    }
+
     /** @throws RandomException */
     private function repository(): EloquentAuthRepository
     {
