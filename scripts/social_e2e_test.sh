@@ -126,7 +126,7 @@ assert_mysql() {
   local database="$1" sql="$2" expected="$3" actual
   actual="$(mysql_query "$database" "$sql" | tr -d '\r\n')"
   if [[ "$actual" != "$expected" ]]; then
-    echo "FAILED MySQL assertion: got '${actual}', expected '${expected}'" >&2
+    echo "FAILED MySQL assertion (${database}): ${sql}; got '${actual}', expected '${expected}'" >&2
     exit 1
   fi
 }
@@ -141,11 +141,17 @@ assert_redis() {
   fi
 }
 
-# 每个新账户均有且仅有一个默认人格及两条注册 Outbox 事件，无论中继是否已发布事件。
+# 每个新账户均有 MAIN、内部 ALIAS 及三条注册 Outbox 事件，无论中继是否已发布事件。
 assert_new_account_baseline() {
   local user_id="$1"
-  assert_mysql user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND deleted_at IS NULL" '1'
-  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events WHERE event_key = '${user_id}'" '2'
+  assert_mysql user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND deleted_at IS NULL" '2'
+  assert_mysql user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND type = 1 AND is_internal_alias = 0 AND deleted_at IS NULL" '1'
+  assert_mysql user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND type = 2 AND is_internal_alias = 1 AND deleted_at IS NULL" '1'
+  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events WHERE event_key = '${user_id}'" '3'
+  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events WHERE event_key = '${user_id}' AND aggregate_type = 'user' AND aggregate_id = '${user_id}' AND event_type = 'user.registered.v1'" '1'
+  # Compare string aggregate IDs with BIGINT persona IDs without floating-point coercion.
+  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events e JOIN personas p ON BINARY e.aggregate_id = BINARY p.id WHERE e.event_key = '${user_id}' AND e.aggregate_type = 'persona' AND e.event_type = 'persona.updated.v1' AND p.user_id = '${user_id}' AND p.type = 1 AND p.is_internal_alias = 0 AND p.deleted_at IS NULL" '1'
+  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events e JOIN personas p ON BINARY e.aggregate_id = BINARY p.id WHERE e.event_key = '${user_id}' AND e.aggregate_type = 'persona' AND e.event_type = 'persona.updated.v1' AND p.user_id = '${user_id}' AND p.type = 2 AND p.is_internal_alias = 1 AND p.deleted_at IS NULL" '1'
 }
 
 run_id="$(date +%s)$$"
@@ -177,6 +183,8 @@ qq_first_code="qq-${qq_first_identity}~1"
 qq_first_code_repeat="qq-${qq_first_identity}~2"
 
 echo "Running social HTTP -> gRPC -> MySQL/Redis E2E for run ${run_id}"
+source "$(dirname "${BASH_SOURCE[0]}")/wait_for_api.sh"
+wait_for_api "$BASE_URL" "$BODY_FILE"
 
 # 已废弃的手机号绑定端点必须完全不存在。
 request_without_body 404 POST /api/v1/auth/social/phone/code '{"bind_token":"social-e2e"}'
@@ -355,6 +363,13 @@ expect_field data.user.id "$user_b"
 
 request 200 POST /api/v1/auth/logout "{\"refresh_token\":\"${refreshed_refresh_a}\"}" "$refreshed_access_a"
 expect_code 0
+# Reuse the same device immediately, with a fresh single-use OAuth code.
+request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"qq-${qq_identity}~relogin\",\"device\":${device}}"
+expect_code 0
+relogin_access_a="$(field data.access_token)"
+[[ "$relogin_access_a" != "$refreshed_access_a" ]]
+request 200 GET /api/v1/me '' "$relogin_access_a"
+expect_field data.user.id "$user_a"
 request 401 GET /api/v1/me '' "$refreshed_access_a"
 request 200 GET /api/v1/me '' "$access_b"
 expect_field data.user.id "$user_b"

@@ -10,5 +10,6 @@ interface AccessTokenRevocationStoreInterface
 
     public function revokeDevice(string $deviceId, int $ttl): void;
 
-    public function isRevoked(string $tokenHash, string $deviceId, int $issuedAt): bool;
+    /** NumericDate in seconds, including fractional seconds for same-second sessions. */
+    public function isRevoked(string $tokenHash, string $deviceId, float $issuedAt): bool;
 }

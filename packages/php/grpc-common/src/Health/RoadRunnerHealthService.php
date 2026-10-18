@@ -9,6 +9,7 @@ use Contracts\Gen\Common\V1\HealthCheckResponse;
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Contracts\Gen\Common\V1\HealthStatus;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\IdGenerator\WorkerId;
 use Packages\Observability\Span;
 use Packages\Observability\Tracer;
 use Packages\Tracing\TraceContext;
@@ -53,6 +54,13 @@ final class RoadRunnerHealthService implements HealthServiceInterface
         ]);
 
         try {
+            try {
+                WorkerId::maintain(force: true);
+            } catch (Throwable) {
+                return (new HealthCheckResponse())
+                    ->setStatus(HealthStatus::HEALTH_STATUS_NOT_SERVING)
+                    ->setMessage('worker ID lease unavailable');
+            }
             if ($this->readinessChecker !== null) {
                 try {
                     $ok = ($this->readinessChecker)();

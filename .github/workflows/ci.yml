@@ -193,6 +193,9 @@ jobs:
       - name: Verify production auth readiness and startup guards
         run: bash scripts/test_production_auth_config.sh
 
+      - name: Verify health RPC reconnection and deadline boundaries
+        run: docker compose run --rm --no-deps auth-service php /app/vendor/bin/phpunit /app/tests/Integration/HealthRetryTest.php --fail-on-skipped
+
       - name: Export MySQL credentials from .env for integration tests
         run: |
           while IFS='=' read -r key value; do

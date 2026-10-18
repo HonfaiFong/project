@@ -10,6 +10,7 @@ use Contracts\Gen\Chat\V1\GetOrCreatePrivateConversationRequest;
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\LeaseMaintainingRelay;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Identity\AnonymousReferenceFactory;
@@ -25,7 +26,6 @@ use Services\ChatService\Infrastructure\UserIdentityDirectoryAdapter;
 use Services\ChatService\Transport\Grpc\RoadRunnerChatService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
-use Spiral\RoadRunner\Worker;
 
 [$application, $repository, $logger, $pdo] = require __DIR__ . '/bootstrap.php';
 
@@ -58,4 +58,4 @@ $server = new Server(new Invoker());
 $server->registerService(ChatServiceInterface::class, $grpc);
 $server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService(authorizer: $authorizer));
 $logger->info('ChatService started with RoadRunner gRPC worker');
-$server->serve(Worker::create());
+$server->serve(LeaseMaintainingRelay::createWorker());

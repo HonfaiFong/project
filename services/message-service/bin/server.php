@@ -11,6 +11,7 @@ use Contracts\Gen\Message\V1\PublicSendMessageRequest;
 use Contracts\Gen\Message\V1\SyncMessagesRequest;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\LeaseMaintainingRelay;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Identity\AnonymousAuthorProjector;
@@ -25,7 +26,6 @@ use Services\MessageService\Infrastructure\SnowflakeIdGenerator;
 use Services\MessageService\Transport\Grpc\RoadRunnerMessageService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
-use Spiral\RoadRunner\Worker;
 
 MetricsHttpServer::startInBackground();
 
@@ -95,4 +95,4 @@ $server = new Server(new Invoker());
 $server->registerService(MessageServiceInterface::class, $grpc);
 $server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService(authorizer: $authorizer));
 $logger->info('MessageService started with RoadRunner gRPC worker');
-$server->serve(Worker::create());
+$server->serve(LeaseMaintainingRelay::createWorker());

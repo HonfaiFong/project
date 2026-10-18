@@ -28,11 +28,11 @@ final class RedisAccessTokenRevocationStore implements AccessTokenRevocationStor
     public function revokeDevice(string $deviceId, int $ttl): void
     {
         if ($ttl > 0) {
-            $this->redis->setex(self::DEVICE_KEY_PREFIX . $deviceId, $ttl, (string)time());
+            $this->redis->setex(self::DEVICE_KEY_PREFIX . $deviceId, $ttl, sprintf('%.6F', microtime(true)));
         }
     }
 
-    public function isRevoked(string $tokenHash, string $deviceId, int $issuedAt): bool
+    public function isRevoked(string $tokenHash, string $deviceId, float $issuedAt): bool
     {
         // 缺失键在结果数组中表示为 false；命令执行失败则不会返回数组。
         $values = $this->redis->mGet([
@@ -49,6 +49,6 @@ final class RedisAccessTokenRevocationStore implements AccessTokenRevocationStor
         [$tokenRevoked, $deviceRevokedAt] = array_values($values);
 
         return $tokenRevoked !== false
-            || ($deviceId !== '' && $deviceRevokedAt !== false && $issuedAt <= (int)$deviceRevokedAt);
+            || ($deviceId !== '' && $deviceRevokedAt !== false && $issuedAt <= (float)$deviceRevokedAt);
     }
 }

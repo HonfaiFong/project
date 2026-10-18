@@ -14,6 +14,7 @@ final class OtlpHttpExporter implements SpanExporter
     private readonly float $timeoutSeconds;
     /** @var array<string, string> */
     private readonly array $headers;
+    private ?AsyncOtlpTransport $transport = null;
 
     /** @param array<string, string> $headers */
     public function __construct(
@@ -54,20 +55,15 @@ final class OtlpHttpExporter implements SpanExporter
             $headers[] = $key . ': ' . $value;
         }
 
-        $handle = curl_init($this->endpoint);
-        if ($handle === false) {
-            return;
+        $message = json_encode([
+            'endpoint' => $this->endpoint,
+            'timeout' => $this->timeoutSeconds,
+            'headers' => $headers,
+            'payload' => $payload,
+        ], JSON_UNESCAPED_SLASHES);
+        if ($message !== false) {
+            ($this->transport ??= new AsyncOtlpTransport())->send($message);
         }
-        curl_setopt_array($handle, [
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT_MS => (int)max(1, $this->timeoutSeconds * 1000),
-            CURLOPT_TIMEOUT_MS => (int)max(1, $this->timeoutSeconds * 1000),
-        ]);
-        curl_exec($handle);
-        curl_close($handle);
     }
 
     public static function endpointFromEnvironment(): string

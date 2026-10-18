@@ -10,6 +10,7 @@ use Contracts\Gen\Content\V1\ContentServiceInterface;
 use Packages\Database\EloquentConnection;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\LeaseMaintainingRelay;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousAuthorSnapshotFactory;
 use Packages\Identity\AnonymousReferenceFactory;
@@ -25,7 +26,6 @@ use Services\ContentService\Infrastructure\GrpcBlockStatusResolver;
 use Services\ContentService\Transport\Grpc\ContentGrpcService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
-use Spiral\RoadRunner\Worker;
 
 MetricsHttpServer::startInBackground();
 
@@ -111,4 +111,4 @@ $server->registerService(ContentServiceInterface::class, new ContentGrpcService(
 $server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService(authorizer: $authorizer));
 
 $logger->info('ContentService started with RoadRunner gRPC worker');
-$server->serve(Worker::create());
+$server->serve(LeaseMaintainingRelay::createWorker());

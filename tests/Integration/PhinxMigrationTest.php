@@ -97,6 +97,20 @@ final class PhinxMigrationTest extends TestCase
         EloquentConnection::forget($this->pdo);
     }
 
+    public function testMigrationIgnoresInheritedMigrationPassword(): void
+    {
+        $previous = getenv('MYSQL_MIGRATION_PASSWORD');
+        putenv('MYSQL_MIGRATION_PASSWORD=wrong-inherited-migration-password');
+
+        try {
+            $this->assertMigrationSucceeds();
+            $this->assertCompleteSchema();
+            $this->assertSame('wrong-inherited-migration-password', getenv('MYSQL_MIGRATION_PASSWORD'));
+        } finally {
+            putenv($previous === false ? 'MYSQL_MIGRATION_PASSWORD' : 'MYSQL_MIGRATION_PASSWORD=' . $previous);
+        }
+    }
+
     public function testFreshMigrationIsIdempotentAndPreservesRowsAndHistory(): void
     {
         $this->assertMigrationSucceeds();
@@ -720,6 +734,8 @@ final class PhinxMigrationTest extends TestCase
             'MYSQL_SCHEMA_PREFIX' => $this->prefix,
             'MYSQL_MIGRATION_LOCK_TIMEOUT' => (string)$lockTimeout,
         ]);
+        // Keep the test account paired with its password, regardless of CI's migration secret.
+        unset($environment['MYSQL_MIGRATION_PASSWORD']);
 
         $pipes = [];
         $process = proc_open(

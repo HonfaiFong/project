@@ -47,8 +47,8 @@ expect_code() {
 
 stamp="$(date +%s)-${RANDOM}"
 
-request 200 GET /health
-expect_code 0
+source "$(dirname "${BASH_SOURCE[0]}")/wait_for_api.sh"
+wait_for_api "$BASE_URL" "$BODY_FILE"
 
 request 401 POST /api/v1/auth/social/login '{"provider":"wechat","code":"invalid","device":{"device_uuid":"e2e-invalid","platform":"ios"}}'
 
@@ -63,17 +63,19 @@ request 200 GET /api/v1/me '' "$access_a"
 expect_code 0
 [[ "$(field data.user.id)" == "$user_a" ]]
 
-request 201 POST /api/v1/personas '{"type":1,"nickname":"NightWatcher"}' "$access_a"
-expect_code 0
-persona_a="$(field data.id)"
-[[ -n "$persona_a" ]]
-
 request 200 GET /api/v1/personas '' "$access_a"
 expect_code 0
-php -r '$body=json_decode(file_get_contents($argv[1]), true); $ids=array_column($body["data"]["personas"] ?? [], "id"); exit(in_array($argv[2], array_map("strval", $ids), true) ? 0 : 1);' "$BODY_FILE" "$persona_a"
+persona_a="$(php -r '
+  $body=json_decode(file_get_contents($argv[1]), true, 512, JSON_THROW_ON_ERROR);
+  $main=array_values(array_filter($body["data"]["personas"] ?? [], static fn ($persona) => ($persona["type"] ?? null) === 1));
+  if (count($main) !== 1 || empty($main[0]["id"])) exit(1);
+  echo $main[0]["id"];
+' "$BODY_FILE")"
+[[ -n "$persona_a" ]]
 
 request 200 GET "/api/v1/personas/${persona_a}" '' "$access_a"
 expect_code 0
+[[ "$(field data.id)" == "$persona_a" ]]
 php -r '$body=json_decode(file_get_contents($argv[1]), true); exit(isset($body["data"]["user_id"]) ? 1 : 0);' "$BODY_FILE"
 
 request 201 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"wechat-primary-${stamp}b\",\"device\":{\"device_uuid\":\"e2e-b-${stamp}\",\"platform\":\"ios\"}}"

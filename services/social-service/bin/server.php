@@ -16,6 +16,7 @@ use Contracts\Gen\Social\V1\UnlikeRequest;
 use Packages\Database\EloquentConnection;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\LeaseMaintainingRelay;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
@@ -29,7 +30,6 @@ use Services\SocialService\Infrastructure\Repository\PdoSocialRepository;
 use Services\SocialService\Transport\Grpc\SocialGrpcService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
-use Spiral\RoadRunner\Worker;
 
 MetricsHttpServer::startInBackground();
 
@@ -135,4 +135,4 @@ $server->registerService(SocialServiceInterface::class, $grpc);
 $server->registerService(HealthServiceInterface::class, new RoadRunnerHealthService(authorizer: $authorizer));
 
 $logger->info('SocialService started with RoadRunner gRPC worker');
-$server->serve(Worker::create());
+$server->serve(LeaseMaintainingRelay::createWorker());

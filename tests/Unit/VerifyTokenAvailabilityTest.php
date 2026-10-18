@@ -65,6 +65,33 @@ final class VerifyTokenAvailabilityTest extends TestCase
         $this->assertTrue($store->isRevoked('hash', 'device', 101));
     }
 
+    public function testDeviceRevocationPreservesFractionalSecondsAndLegacyCutoffs(): void
+    {
+        $redis = $this->createMock(Redis::class);
+        $redis->method('mGet')->willReturnOnConsecutiveCalls(
+            [false, '100.500000'], [false, '100.500000'], [false, '100.500000'],
+            [false, '100'], [false, '100'], ['1', '100.500000'],
+        );
+        $store = new RedisAccessTokenRevocationStore($redis);
+        $this->assertTrue($store->isRevoked('hash', 'device', 100.4));
+        $this->assertTrue($store->isRevoked('hash', 'device', 100.5));
+        $this->assertFalse($store->isRevoked('hash', 'device', 100.6));
+        $this->assertTrue($store->isRevoked('hash', 'device', 100));
+        $this->assertFalse($store->isRevoked('hash', 'device', 100.1));
+        $this->assertTrue($store->isRevoked('hash', 'device', 100.6));
+    }
+
+    public function testDeviceRevocationStoresSubsecondCutoff(): void
+    {
+        $redis = $this->createMock(Redis::class);
+        $redis->expects($this->once())->method('setex')->with(
+            'auth:access-device-revoked:device',
+            60,
+            $this->matchesRegularExpression('/^\d+\.\d{6}$/'),
+        )->willReturn(true);
+        (new RedisAccessTokenRevocationStore($redis))->revokeDevice('device', 60);
+    }
+
     #[DataProvider('failures')]
     public function testVerificationFailureReachesGatewayWithCorrectHttpStatus(string $failure, ErrorCode $expected): void
     {

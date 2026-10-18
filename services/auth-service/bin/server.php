@@ -8,6 +8,7 @@ use GuzzleHttp\Client;
 use Packages\Database\EloquentConnection;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\LeaseMaintainingRelay;
 use Packages\GrpcCommon\DeadlineEnv;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
@@ -40,7 +41,6 @@ use Services\AuthService\Infrastructure\Token\WsTicketIssuer;
 use Services\AuthService\Transport\Grpc\RoadRunnerAuthService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
-use Spiral\RoadRunner\Worker;
 
 // 建立数据库或 Redis 连接前，拒绝无效截止时间配置。
 $deadlineConfig = GrpcDeadlineConfig::fromEnvironment();
@@ -97,6 +97,7 @@ for ($i = 0; $i < $maxRetries; $i++) {
         if (!$candidate->connect($redisHost, $redisPort, 1.0)) {
             throw new RuntimeException('Redis connection failed');
         }
+        $candidate->setOption(Redis::OPT_READ_TIMEOUT, 1.0);
         if ($redisPassword !== '' && !$candidate->auth($redisPassword)) {
             throw new RuntimeException('Redis authentication failed');
         }
@@ -238,4 +239,4 @@ $server->registerService(
 );
 
 $logger->info('AuthService started with RoadRunner gRPC worker');
-$server->serve(Worker::create());
+$server->serve(LeaseMaintainingRelay::createWorker());

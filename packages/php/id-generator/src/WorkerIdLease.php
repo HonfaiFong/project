@@ -148,6 +148,9 @@ final class WorkerIdLease
     public function renew(): void
     {
         $this->ensureNotReleased();
+        if ($this->lost) {
+            throw new RuntimeException(sprintf('Worker ID lease %d was lost; refusing to generate IDs', $this->workerId));
+        }
 
         try {
             $result = $this->redis->eval(

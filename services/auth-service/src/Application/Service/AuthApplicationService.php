@@ -206,10 +206,12 @@ final readonly class AuthApplicationService
         $accessExpiresAt = $now + $this->accessTokenTtl;
         $refreshExpiresAt = $now + $this->refreshTokenTtl;
 
+        // Fractional NumericDate keeps a later login distinct from a same-second device revocation.
         $accessToken = $this->jwtCodec->encode([
+            'jti'       => bin2hex(random_bytes(16)),
             'sub'       => $userId,
             'device_id' => $device->id,
-            'iat'       => $now,
+            'iat'       => microtime(true),
             'exp'       => $accessExpiresAt,
         ]);
 
@@ -270,9 +272,10 @@ final readonly class AuthApplicationService
         }
 
         $accessToken = $this->jwtCodec->encode([
+            'jti'       => bin2hex(random_bytes(16)),
             'sub'       => $record->userId,
             'device_id' => $record->deviceId,
-            'iat'       => $now,
+            'iat'       => microtime(true),
             'exp'       => $accessExpiresAt,
         ]);
 
@@ -342,7 +345,7 @@ final readonly class AuthApplicationService
             if ($this->accessTokenRevocationStore?->isRevoked(
                 hash('sha256', $token),
                 (string)($payload['device_id'] ?? ''),
-                (int)($payload['iat'] ?? 0)
+                (float)($payload['iat'] ?? 0)
             )) {
                 return ['valid' => false];
             }

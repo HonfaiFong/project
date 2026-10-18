@@ -55,4 +55,19 @@ final class HealthControllerTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
         $this->assertSame('SERVING', $body['data']['services']['custom_service']);
     }
+
+    public function testUnhealthyReasonIsReportedAndNextProbeCanRecover(): void
+    {
+        $client = $this->createMock(\Apps\ApiGateway\Grpc\HealthCheckClient::class);
+        $client->method('checkHealth')->willReturnOnConsecutiveCalls(
+            ['status' => \Contracts\Gen\Common\V1\HealthStatus::HEALTH_STATUS_NOT_SERVING, 'message' => 'worker ID lease unavailable'],
+            ['status' => \Contracts\Gen\Common\V1\HealthStatus::HEALTH_STATUS_SERVING, 'message' => 'ok'],
+        );
+        $controller = new HealthController(['auth_service' => $client]);
+        $failed = $controller->check();
+        $body = json_decode($failed->rawBody(), true);
+        $this->assertSame(503, $failed->getStatusCode());
+        $this->assertSame('worker ID lease unavailable', $body['details']['failures']['auth_service']);
+        $this->assertSame(200, $controller->check()->getStatusCode());
+    }
 }

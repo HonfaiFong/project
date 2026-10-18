@@ -76,6 +76,18 @@ final class WorkerId
         return self::$leases[$workerId] ?? null;
     }
 
+    /** Maintain every lease owned by this process; failures must recycle the worker. */
+    public static function maintain(bool $force = false): void
+    {
+        foreach (self::$leases as $lease) {
+            if ($force) {
+                $lease->renew();
+            } else {
+                $lease->assertValid();
+            }
+        }
+    }
+
     /**
      * Release a registered lease early. Process shutdown also releases it;
      * the Redis TTL remains the recovery path when shutdown is unclean.
@@ -158,6 +170,7 @@ final class WorkerId
             if (!$redis->connect($host, $port, $timeout)) {
                 throw new RuntimeException('Redis connection returned false');
             }
+            $redis->setOption(Redis::OPT_READ_TIMEOUT, $timeout);
             if ($password !== '' && !$redis->auth($password)) {
                 throw new RuntimeException('Redis authentication returned false');
             }

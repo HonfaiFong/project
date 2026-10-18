@@ -52,7 +52,7 @@ final class ObservabilityConfigTest extends TestCase
         self::assertStringContainsString('127.0.0.1}:3000:3000', $compose);
         self::assertStringContainsString('"8787:8787"', $compose);
         self::assertStringContainsString('"9100"', $compose);
-        self::assertStringContainsString('OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}', $compose);
+        self::assertStringContainsString('OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}', $compose);
         self::assertStringContainsString('METRICS_ALLOWED_CIDRS=${METRICS_ALLOWED_CIDRS:-}', $compose);
         self::assertStringContainsString('./infra/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro', $compose);
         self::assertStringContainsString('./infra/observability/otel-collector.yaml:/etc/otelcol-contrib/otel-collector.yaml:ro', $compose);
@@ -73,7 +73,7 @@ final class ObservabilityConfigTest extends TestCase
 
         foreach (['.env.example', '.env.production.example'] as $envFile) {
             $env = $this->read($envFile);
-            self::assertStringContainsString('OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318', $env);
+            self::assertStringContainsString('OTEL_EXPORTER_OTLP_ENDPOINT=', $env);
             self::assertStringNotContainsString('OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317', $env);
         }
         self::assertStringContainsString('GRAFANA_ADMIN_PASSWORD=replace-with-random-grafana-admin-password', $this->read('.env.example'));

@@ -30,6 +30,7 @@ final readonly class HealthController
             'api_gateway' => 'SERVING',
         ];
         $healthy = true;
+        $failures = [];
 
         foreach ($this->upstreamClients as $name => $client) {
             try {
@@ -37,8 +38,12 @@ final readonly class HealthController
                 $status = $res['status'] === HealthStatus::HEALTH_STATUS_SERVING
                     ? 'SERVING'
                     : 'NOT_SERVING';
+                if ($status !== 'SERVING') {
+                    $failures[$name] = $res['message'];
+                }
             } catch (Throwable $e) {
                 $status = 'DOWN: ' . $e->getMessage();
+                $failures[$name] = $e->getMessage();
             }
 
             if ($status !== 'SERVING') {
@@ -53,7 +58,7 @@ final readonly class HealthController
             return ApiResponse::error(
                 ErrorCode::SERVICE_UNAVAILABLE->value,
                 'one or more upstream services are unhealthy',
-                ['services' => $services]
+                ['services' => $services, 'failures' => $failures]
             );
         }
 

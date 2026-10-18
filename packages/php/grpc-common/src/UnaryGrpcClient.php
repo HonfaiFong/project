@@ -20,7 +20,22 @@ class UnaryGrpcClient extends BaseStub
         private readonly ?string $serviceToken = null,
     )
     {
-        parent::__construct($target, GrpcTlsConfig::fromEnvironment($target)->stubOptions());
+        $options = GrpcTlsConfig::fromEnvironment($target)->stubOptions();
+        // A replaced container can leave an idle channel pointing at its old IP.
+        // Only the read-only health RPC waits for reconnection and retries once;
+        // both attempts share the original call deadline, including backoff.
+        $options['grpc.service_config'] = json_encode(['methodConfig' => [[
+            'name' => [['service' => 'common.v1.HealthService', 'method' => 'Check']],
+            'waitForReady' => true,
+            'retryPolicy' => [
+                'maxAttempts' => 2,
+                'initialBackoff' => '0.01s',
+                'maxBackoff' => '0.01s',
+                'backoffMultiplier' => 1,
+                'retryableStatusCodes' => ['UNAVAILABLE'],
+            ],
+        ]]], JSON_THROW_ON_ERROR);
+        parent::__construct($target, $options);
     }
 
     /**

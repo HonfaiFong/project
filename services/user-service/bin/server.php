@@ -7,6 +7,7 @@ require_once __DIR__ . '/../../../vendor/autoload.php';
 use Packages\Database\EloquentConnection;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\LeaseMaintainingRelay;
 use Packages\IdGenerator\Snowflake;
 use Packages\IdGenerator\WorkerId;
 use Packages\Logging\JsonLogger;
@@ -30,7 +31,6 @@ use Services\UserService\Infrastructure\Repository\EloquentUserRepository;
 use Services\UserService\Transport\Grpc\UserGrpcService;
 use Spiral\RoadRunner\GRPC\Invoker;
 use Spiral\RoadRunner\GRPC\Server;
-use Spiral\RoadRunner\Worker;
 
 MetricsHttpServer::startInBackground();
 
@@ -148,4 +148,4 @@ $server->registerService(
 );
 
 $logger->info('UserService started with RoadRunner gRPC worker');
-$server->serve(Worker::create());
+$server->serve(LeaseMaintainingRelay::createWorker());

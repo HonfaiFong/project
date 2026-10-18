@@ -6,6 +6,8 @@ require_once __DIR__ . '/../../../vendor/autoload.php';
 
 use Contracts\Events\EventEnvelope;
 use Packages\Database\EloquentConnection;
+use Packages\IdGenerator\WorkerId;
+use PhpAmqpLib\Exception\AMQPTimeoutException;
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
@@ -57,7 +59,12 @@ for (;;) {
             },
         );
         while ($channel->is_consuming()) {
-            $channel->wait();
+            WorkerId::maintain();
+            try {
+                $channel->wait(null, false, 1.0);
+            } catch (AMQPTimeoutException) {
+                // Keep leases alive while the message queue is idle.
+            }
         }
     } catch (Throwable $exception) {
         $logger->error('Message consumer failed', ['exception' => $exception::class]);

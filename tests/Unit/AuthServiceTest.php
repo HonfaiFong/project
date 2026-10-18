@@ -122,7 +122,7 @@ final class InMemoryAccessTokenRevocationStore implements AccessTokenRevocationS
     /** @var array<string, true> */
     public array $tokenHashes = [];
 
-    /** @var array<string, int> */
+    /** @var array<string, float> */
     public array $deviceRevokedAt = [];
 
     public function revokeToken(string $tokenHash, int $ttl): void
@@ -132,10 +132,10 @@ final class InMemoryAccessTokenRevocationStore implements AccessTokenRevocationS
 
     public function revokeDevice(string $deviceId, int $ttl): void
     {
-        $this->deviceRevokedAt[$deviceId] = time();
+        $this->deviceRevokedAt[$deviceId] = microtime(true);
     }
 
-    public function isRevoked(string $tokenHash, string $deviceId, int $issuedAt): bool
+    public function isRevoked(string $tokenHash, string $deviceId, float $issuedAt): bool
     {
         return isset($this->tokenHashes[$tokenHash])
             || (isset($this->deviceRevokedAt[$deviceId]) && $issuedAt <= $this->deviceRevokedAt[$deviceId]);
@@ -316,6 +316,32 @@ final class AuthServiceTest extends TestCase
         $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
     }
 
+    public function testSameSecondReloginAndRefreshSurviveOldTokenRevocation(): void
+    {
+        $codec = new JwtTokenCodec('test-secret-at-least-32-chars-long-12345');
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            $old = $this->loginForStatusTest();
+            $this->assertTrue($this->authService->logout($old['refresh_token'], $old['access_token']));
+            $new = $this->loginForStatusTest();
+            $rotated = $this->authService->refreshToken($new['refresh_token']);
+            $oldPayload = $codec->decode($old['access_token']);
+            $newPayload = $codec->decode($new['access_token']);
+            $rotatedPayload = $codec->decode($rotated['access_token']);
+
+            $this->assertNotSame($oldPayload['jti'], $newPayload['jti']);
+            $this->assertNotSame($newPayload['jti'], $rotatedPayload['jti']);
+            $this->assertFalse($this->authService->verifyToken($old['access_token'])['valid']);
+            $this->assertTrue($this->authService->verifyToken($new['access_token'])['valid']);
+            $this->assertTrue($this->authService->verifyToken($rotated['access_token'])['valid']);
+
+            // Retry only if the wall clock crossed a second during this sequence.
+            if ((int)$oldPayload['iat'] === (int)$rotatedPayload['iat']) {
+                return;
+            }
+        }
+        $this->fail('Could not exercise login/logout/refresh within one second');
+    }
+
     public function testIssuedTokenRejectsBannedUserOnNextVerification(): void
     {
         $login = $this->loginForStatusTest();
@@ -361,7 +387,7 @@ final class AuthServiceTest extends TestCase
         $this->assertFalse($this->authService->verifyToken($login['access_token'])['valid']);
     }
 
-    /** @return array{access_token: string} */
+    /** @return array{access_token: string, refresh_token: string} */
     private function loginForStatusTest(): array
     {
         return $this->authService->login('+8613800000000', 'dev-1234', [
