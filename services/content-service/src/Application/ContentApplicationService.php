@@ -13,6 +13,7 @@ use Contracts\Gen\Content\V1\MediaItem;
 use Contracts\Gen\Content\V1\PublicComment;
 use Contracts\Gen\Content\V1\PublicPost;
 use Packages\GrpcCommon\BusinessActor;
+use Packages\Database\PostgresErrorClassifier;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousAuthorSnapshotFactory;
 use Packages\Identity\PersonaMode;
@@ -87,11 +88,11 @@ final class ContentApplicationService
         try {
             $this->transaction(function () use ($actor, $postId, $identity, $snapshot, $requestKey, $media, $now, $type, $content, $visibility, $emotion): void {
                 $statement = $this->pdo->prepare(
-                    'INSERT INTO `posts` '
-                    . '(`id`, `author_user_id`, `request_id`, `persona_id`, `identity_mode`, `author_display_name`, '
-                    . '`author_avatar_key`, `author_anonymous_ref`, `author_scope_type`, `author_scope_id`, '
-                    . '`type`, `content`, `visibility`, `emotion`, `status`, `moderation_status`, '
-                    . '`published_at`, `created_at`, `updated_at`) '
+                    'INSERT INTO "posts" '
+                    . '("id", "author_user_id", "request_id", "persona_id", "identity_mode", "author_display_name", '
+                    . '"author_avatar_key", "author_anonymous_ref", "author_scope_type", "author_scope_id", '
+                    . '"type", "content", "visibility", "emotion", "status", "moderation_status", '
+                    . '"published_at", "created_at", "updated_at") '
                     . 'VALUES (:id, :user_id, :request_id, :persona_id, :identity_mode, :display_name, :avatar_key, '
                     . ':anonymous_ref, :scope_type, :scope_id, :type, :content, :visibility, :emotion, '
                     . '1, 1, :published_at, :created_at, :updated_at)',
@@ -124,16 +125,15 @@ final class ContentApplicationService
                 ]);
             });
         } catch (PDOException $e) {
-            if ($requestKey !== null && ((int)($e->errorInfo[1] ?? 0) === 1062 || ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' && (int)($e->errorInfo[1] ?? 0) === 19))) {
+            if ($requestKey !== null && $this->isUniqueViolation($e)) {
                 $existing = $this->findByRequest('posts', $actor->userId, $requestKey);
-                if ($existing !== null) {
-                    if (!$this->postRequestMatches($identity, $existing, $type, $content, $visibility, $this->nullableText($emotion, 32), $media, $aliasDisplayName)) {
-                        throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
-                    }
-
-                    return $this->getPost($actor, (string)$existing['id']);
+                if ($existing === null) {
+                    throw $e;
                 }
-                throw new RuntimeException('request_id is already in use', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
+                if (!$this->postRequestMatches($identity, $existing, $type, $content, $visibility, $this->nullableText($emotion, 32), $media, $aliasDisplayName)) {
+                    throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
+                }
+                return $this->getPost($actor, (string)$existing['id']);
             }
             throw $e;
         }
@@ -186,8 +186,8 @@ final class ContentApplicationService
         $now = $this->now();
         $this->transaction(function () use ($actor, $postId, $requestId, $now): void {
             $statement = $this->pdo->prepare(
-                'UPDATE `posts` SET `status` = 0, `deleted_at` = :deleted_at, `updated_at` = :updated_at '
-                . 'WHERE `id` = :id AND `author_user_id` = :user_id AND `deleted_at` IS NULL',
+                'UPDATE "posts" SET "status" = 0, "deleted_at" = :deleted_at, "updated_at" = :updated_at '
+                . 'WHERE "id" = :id AND "author_user_id" = :user_id AND "deleted_at" IS NULL',
             );
             $statement->execute(['deleted_at' => $now, 'updated_at' => $now, 'id' => $postId, 'user_id' => $actor->userId]);
             if ($statement->rowCount() === 0) {
@@ -205,9 +205,9 @@ final class ContentApplicationService
         }
         $this->transaction(function () use ($postId, $status, $moderationStatus, $requestId): void {
             $statement = $this->pdo->prepare(
-                'UPDATE `posts` SET `status` = :status, `moderation_status` = :moderation_status, '
-                . '`updated_at` = :updated_at WHERE `id` = :id AND `deleted_at` IS NULL '
-                . 'AND (`status` <> :current_status OR `moderation_status` <> :current_moderation_status)',
+                'UPDATE "posts" SET "status" = :status, "moderation_status" = :moderation_status, '
+                . '"updated_at" = :updated_at WHERE "id" = :id AND "deleted_at" IS NULL '
+                . 'AND ("status" <> :current_status OR "moderation_status" <> :current_moderation_status)',
             );
             $statement->execute([
                 'status' => $status,
@@ -287,10 +287,10 @@ final class ContentApplicationService
         try {
             $this->transaction(function () use ($actor, $commentId, $identity, $snapshot, $requestKey, $postId, $parentId, $replyToCommentId, $content, $now): void {
                 $statement = $this->pdo->prepare(
-                    'INSERT INTO `comments` '
-                    . '(`id`, `post_id`, `author_user_id`, `request_id`, `persona_id`, `identity_mode`, `author_display_name`, '
-                    . '`author_avatar_key`, `author_anonymous_ref`, `author_scope_type`, `author_scope_id`, '
-                    . '`parent_id`, `reply_to_comment_id`, `content`, `status`, `created_at`, `updated_at`) '
+                    'INSERT INTO "comments" '
+                    . '("id", "post_id", "author_user_id", "request_id", "persona_id", "identity_mode", "author_display_name", '
+                    . '"author_avatar_key", "author_anonymous_ref", "author_scope_type", "author_scope_id", '
+                    . '"parent_id", "reply_to_comment_id", "content", "status", "created_at", "updated_at") '
                     . 'VALUES (:id, :post_id, :user_id, :request_id, :persona_id, :identity_mode, :display_name, :avatar_key, '
                     . ':anonymous_ref, :scope_type, :scope_id, :parent_id, :reply_to_comment_id, :content, 1, :created_at, :updated_at)',
                 );
@@ -312,7 +312,7 @@ final class ContentApplicationService
                     'created_at' => $now,
                     'updated_at' => $now,
                 ]);
-                $updatePost = $this->pdo->prepare('UPDATE `posts` SET `comment_count` = `comment_count` + 1 WHERE `id` = :id');
+                $updatePost = $this->pdo->prepare('UPDATE "posts" SET "comment_count" = "comment_count" + 1 WHERE "id" = :id');
                 $updatePost->execute(['id' => $postId]);
                 $this->recordEvent('comment', $commentId, 'comment.created.v1', $requestKey ?? '', [
                     'comment_id' => $commentId,
@@ -323,16 +323,15 @@ final class ContentApplicationService
                 ]);
             });
         } catch (PDOException $e) {
-            if ($requestKey !== null && ((int)($e->errorInfo[1] ?? 0) === 1062 || ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite' && (int)($e->errorInfo[1] ?? 0) === 19))) {
+            if ($requestKey !== null && $this->isUniqueViolation($e)) {
                 $existing = $this->findByRequest('comments', $actor->userId, $requestKey);
-                if ($existing !== null) {
-                    if (!$this->commentRequestMatches($identity, $existing, $postId, $parentId, $replyToCommentId, $content, $aliasDisplayName)) {
-                        throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
-                    }
-
-                    return $this->getComment($actor, (string)$existing['id']);
+                if ($existing === null) {
+                    throw $e;
                 }
-                throw new RuntimeException('request_id is already in use', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
+                if (!$this->commentRequestMatches($identity, $existing, $postId, $parentId, $replyToCommentId, $content, $aliasDisplayName)) {
+                    throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
+                }
+                return $this->getComment($actor, (string)$existing['id']);
             }
             throw $e;
         }
@@ -359,19 +358,19 @@ final class ContentApplicationService
         /** @var array<string, mixed> $blockedAuthors */
         $blockedAuthors = [];
         while (true) {
-            $sql = 'SELECT * FROM `comments` WHERE `post_id` = :post_id AND `status` = 1 AND `deleted_at` IS NULL';
+            $sql = 'SELECT * FROM "comments" WHERE "post_id" = :post_id AND "status" = 1 AND "deleted_at" IS NULL';
             $params = ['post_id' => $postId];
             if ($parentId === null) {
-                $sql .= ' AND `parent_id` IS NULL';
+                $sql .= ' AND "parent_id" IS NULL';
             } else {
-                $sql .= ' AND `parent_id` = :parent_id';
+                $sql .= ' AND "parent_id" = :parent_id';
                 $params['parent_id'] = $parentId;
             }
             if ($rawCursor !== '') {
-                $sql .= ' AND `id` < :cursor';
+                $sql .= ' AND "id" < :cursor';
                 $params['cursor'] = $rawCursor;
             }
-            $sql .= ' ORDER BY `id` DESC LIMIT ' . ($limit + 1);
+            $sql .= ' ORDER BY "id" DESC LIMIT ' . ($limit + 1);
             $statement = $this->pdo->prepare($sql);
             $statement->execute($params);
             $page = $statement->fetchAll(PDO::FETCH_ASSOC);
@@ -433,7 +432,7 @@ final class ContentApplicationService
         }
         $list = array_values($ids);
         $placeholders = implode(', ', array_fill(0, count($list), '?'));
-        $statement = $this->pdo->prepare('SELECT * FROM `comments` WHERE `id` IN (' . $placeholders . ')');
+        $statement = $this->pdo->prepare('SELECT * FROM "comments" WHERE "id" IN (' . $placeholders . ')');
         $statement->execute($list);
         $fetched = [];
         foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
@@ -463,7 +462,7 @@ final class ContentApplicationService
 
     public function getComment(?BusinessActor $actor, string $commentId): PublicComment
     {
-        $statement = $this->pdo->prepare('SELECT * FROM `comments` WHERE `id` = :id LIMIT 1');
+        $statement = $this->pdo->prepare('SELECT * FROM "comments" WHERE "id" = :id LIMIT 1');
         $statement->execute(['id' => $commentId]);
         $row = $statement->fetch(PDO::FETCH_ASSOC);
         if (!is_array($row) || (int)$row['status'] !== 1 || $row['deleted_at'] !== null || !$this->isCommentChainReadable($row)) {
@@ -483,7 +482,7 @@ final class ContentApplicationService
 
     public function deleteComment(BusinessActor $actor, string $commentId, string $requestId): void
     {
-        $statement = $this->pdo->prepare('SELECT * FROM `comments` WHERE `id` = :id LIMIT 1');
+        $statement = $this->pdo->prepare('SELECT * FROM "comments" WHERE "id" = :id LIMIT 1');
         $statement->execute(['id' => $commentId]);
         $row = $statement->fetch(PDO::FETCH_ASSOC);
         if (!is_array($row)) {
@@ -497,8 +496,8 @@ final class ContentApplicationService
         $postId = (string)$row['post_id'];
         $this->transaction(function () use ($actor, $commentId, $postId, $requestId, $now): void {
             $update = $this->pdo->prepare(
-                'UPDATE `comments` SET `status` = 0, `deleted_at` = :deleted_at, `updated_at` = :updated_at '
-                . 'WHERE `id` = :id AND `author_user_id` = :user_id AND `deleted_at` IS NULL',
+                'UPDATE "comments" SET "status" = 0, "deleted_at" = :deleted_at, "updated_at" = :updated_at '
+                . 'WHERE "id" = :id AND "author_user_id" = :user_id AND "deleted_at" IS NULL',
             );
             $update->execute(['deleted_at' => $now, 'updated_at' => $now, 'id' => $commentId, 'user_id' => $actor->userId]);
             if ($update->rowCount() === 0) {
@@ -517,8 +516,8 @@ final class ContentApplicationService
             return;
         }
         $statement = $this->pdo->prepare(
-            'UPDATE `posts` SET `comment_count` = `comment_count` - 1 '
-            . 'WHERE `id` = :id AND `comment_count` > 0',
+            'UPDATE "posts" SET "comment_count" = "comment_count" - 1 '
+            . 'WHERE "id" = :id AND "comment_count" > 0',
         );
         $statement->execute(['id' => $postId]);
     }
@@ -613,8 +612,8 @@ final class ContentApplicationService
         }
         usort($expected, static fn (array $a, array $b): int => $a['sort_order'] <=> $b['sort_order']);
         $statement = $this->pdo->prepare(
-            'SELECT `type`, `object_key`, `mime_type`, `width`, `height`, `duration_ms`, `sort_order` '
-            . 'FROM `post_media` WHERE `post_id` = :post_id ORDER BY `sort_order`, `id`',
+            'SELECT "type", "object_key", "mime_type", "width", "height", "duration_ms", "sort_order" '
+            . 'FROM "post_media" WHERE "post_id" = :post_id ORDER BY "sort_order", "id"',
         );
         $statement->execute(['post_id' => $postId]);
         $stored = array_map(
@@ -647,12 +646,12 @@ final class ContentApplicationService
         $where = $this->exactColumn('author_scope_type', 'scope_type')
             . ' AND ' . $this->exactColumn('author_scope_id', 'scope_id')
             . ' AND ' . $this->exactColumn('author_anonymous_ref', 'anonymous_ref')
-            . ' AND `identity_mode` = 2 AND `author_user_id` IS NOT NULL'
-            . ' AND `status` = 1 AND `deleted_at` IS NULL';
+            . ' AND "identity_mode" = 2 AND "author_user_id" IS NOT NULL'
+            . ' AND "status" = 1 AND "deleted_at" IS NULL';
         foreach (['posts', 'comments'] as $table) {
-            $scopeFilter = $table === 'posts' ? '`id` = :scope_id' : '`post_id` = :scope_id';
+            $scopeFilter = $table === 'posts' ? '"id" = :scope_id' : '"post_id" = :scope_id';
             $statement = $this->pdo->prepare(
-                'SELECT * FROM `' . $table . '` WHERE ' . $scopeFilter . ' AND ' . $where . ' LIMIT 1',
+                'SELECT * FROM "' . $table . '" WHERE ' . $scopeFilter . ' AND ' . $where . ' LIMIT 1',
             );
             $statement->execute([
                 'scope_type' => $scopeType,
@@ -754,7 +753,7 @@ final class ContentApplicationService
         if (!$this->isPositiveId($postId)) {
             return null;
         }
-        $statement = $this->pdo->prepare('SELECT * FROM `posts` WHERE `id` = :id LIMIT 1');
+        $statement = $this->pdo->prepare('SELECT * FROM "posts" WHERE "id" = :id LIMIT 1');
         $statement->execute(['id' => $postId]);
         $row = $statement->fetch(PDO::FETCH_ASSOC);
 
@@ -767,7 +766,7 @@ final class ContentApplicationService
         if (!$this->isPositiveId($commentId)) {
             return null;
         }
-        $statement = $this->pdo->prepare('SELECT * FROM `comments` WHERE `id` = :id LIMIT 1');
+        $statement = $this->pdo->prepare('SELECT * FROM "comments" WHERE "id" = :id LIMIT 1');
         $statement->execute(['id' => $commentId]);
         $row = $statement->fetch(PDO::FETCH_ASSOC);
 
@@ -777,7 +776,7 @@ final class ContentApplicationService
     private function projectPost(array $row): PublicPost
     {
         $postId = (string)$row['id'];
-        $statement = $this->pdo->prepare('SELECT * FROM `post_media` WHERE `post_id` = :post_id ORDER BY `sort_order`, `id`');
+        $statement = $this->pdo->prepare('SELECT * FROM "post_media" WHERE "post_id" = :post_id ORDER BY "sort_order", "id"');
         $statement->execute(['post_id' => $postId]);
         $media = [];
         foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $item) {
@@ -853,9 +852,9 @@ final class ContentApplicationService
 
     private function exactColumn(string $column, string $parameter): string
     {
-        $quoted = '`' . $column . '`';
-        if ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
-            return $quoted . ' COLLATE utf8mb4_bin = :' . $parameter;
+        $quoted = '"' . $column . '"';
+        if ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'pgsql') {
+            return $quoted . ' COLLATE "C" = :' . $parameter;
         }
 
         return $quoted . ' = :' . $parameter . ' COLLATE BINARY';
@@ -966,8 +965,8 @@ final class ContentApplicationService
     private function insertMedia(string $postId, array $media, string $now): void
     {
         $statement = $this->pdo->prepare(
-            'INSERT INTO `post_media` (`id`, `post_id`, `type`, `object_key`, `mime_type`, `width`, `height`, '
-            . '`duration_ms`, `sort_order`, `created_at`) VALUES (:id, :post_id, :type, :object_key, :mime_type, '
+            'INSERT INTO "post_media" ("id", "post_id", "type", "object_key", "mime_type", "width", "height", '
+            . '"duration_ms", "sort_order", "created_at") VALUES (:id, :post_id, :type, :object_key, :mime_type, '
             . ':width, :height, :duration_ms, :sort_order, :created_at)',
         );
         foreach (array_values($media) as $index => $item) {
@@ -992,18 +991,18 @@ final class ContentApplicationService
 
     private function countComments(string $postId, ?string $parentId): int
     {
-        $sql = 'SELECT COUNT(*) FROM `comments` AS `c` WHERE `c`.`post_id` = :post_id AND `c`.`status` = 1 AND `c`.`deleted_at` IS NULL'
-            . ' AND (`c`.`parent_id` IS NULL OR EXISTS ('
-            . 'SELECT 1 FROM `comments` AS `parent` WHERE `parent`.`id` = `c`.`parent_id`'
-            . ' AND `parent`.`post_id` = `c`.`post_id` AND `parent`.`status` = 1 AND `parent`.`deleted_at` IS NULL))'
-            . ' AND (`c`.`reply_to_comment_id` IS NULL OR EXISTS ('
-            . 'SELECT 1 FROM `comments` AS `reply` WHERE `reply`.`id` = `c`.`reply_to_comment_id`'
-            . ' AND `reply`.`post_id` = `c`.`post_id` AND `reply`.`status` = 1 AND `reply`.`deleted_at` IS NULL))';
+        $sql = 'SELECT COUNT(*) FROM "comments" AS "c" WHERE "c"."post_id" = :post_id AND "c"."status" = 1 AND "c"."deleted_at" IS NULL'
+            . ' AND ("c"."parent_id" IS NULL OR EXISTS ('
+            . 'SELECT 1 FROM "comments" AS "parent" WHERE "parent"."id" = "c"."parent_id"'
+            . ' AND "parent"."post_id" = "c"."post_id" AND "parent"."status" = 1 AND "parent"."deleted_at" IS NULL))'
+            . ' AND ("c"."reply_to_comment_id" IS NULL OR EXISTS ('
+            . 'SELECT 1 FROM "comments" AS "reply" WHERE "reply"."id" = "c"."reply_to_comment_id"'
+            . ' AND "reply"."post_id" = "c"."post_id" AND "reply"."status" = 1 AND "reply"."deleted_at" IS NULL))';
         $params = ['post_id' => $postId];
         if ($parentId === null) {
-            $sql .= ' AND `c`.`parent_id` IS NULL';
+            $sql .= ' AND "c"."parent_id" IS NULL';
         } else {
-            $sql .= ' AND `c`.`parent_id` = :parent_id';
+            $sql .= ' AND "c"."parent_id" = :parent_id';
             $params['parent_id'] = $parentId;
         }
         $statement = $this->pdo->prepare($sql);
@@ -1021,12 +1020,20 @@ final class ContentApplicationService
             throw new RuntimeException('invalid idempotency table', ErrorCode::INTERNAL_SERVER_ERROR->value);
         }
         $statement = $this->pdo->prepare(
-            'SELECT * FROM `' . $table . '` WHERE `author_user_id` = :user_id AND `request_id` = :request_id LIMIT 1',
+            'SELECT * FROM "' . $table . '" WHERE "author_user_id" = :user_id AND "request_id" = :request_id LIMIT 1',
         );
         $statement->execute(['user_id' => $userId, 'request_id' => $requestId]);
         $row = $statement->fetch(PDO::FETCH_ASSOC);
 
         return is_array($row) ? $row : null;
+    }
+
+    private function isUniqueViolation(PDOException $exception): bool
+    {
+        if ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+            return (int)($exception->errorInfo[1] ?? 0) === 19;
+        }
+        return PostgresErrorClassifier::isUniqueViolation($exception);
     }
 
     private function recordEvent(string $aggregateType, string $aggregateId, string $eventType, string $requestId, array $payload): void

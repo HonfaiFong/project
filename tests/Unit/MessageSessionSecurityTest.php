@@ -4,15 +4,13 @@ declare(strict_types=1);
 
 namespace Tests\Unit;
 
-use PDO;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousReferenceFactory;
-use Packages\Outbox\EventOutboxInterface;
 use Services\MessageService\Application\MessageApplicationService;
 use Services\MessageService\Domain\ChatMemberSnapshotClient;
 use Services\MessageService\Domain\Exception\MessageException;
 use Services\MessageService\Domain\IdGenerator;
-use Services\MessageService\Infrastructure\PdoMessageRepository;
+use Tests\Support\InMemoryMessageStore;
 use Tests\TestCase;
 
 final class MessageSessionSecurityTest extends TestCase
@@ -61,7 +59,7 @@ final class MessageSessionSecurityTest extends TestCase
         self::assertSame('101', (string)$first->getAuthor()->getPersonaId());
         self::assertSame('Frozen main', $first->getAuthor()->getDisplayName());
         self::assertTrue($first->getAuthor()->getProfileAccessible());
-        self::assertSame(1, (int)$repository->pdo()->query('SELECT COUNT(*) FROM outbox_events')->fetchColumn());
+        self::assertCount(1, $repository->outbox);
     }
 
     public function testOutboxFailureRollsBackMessageAndSequenceAllocation(): void
@@ -70,9 +68,8 @@ final class MessageSessionSecurityTest extends TestCase
             'allowed' => true,
             'member' => ['user_id' => '100', 'persona_id' => '101', 'identity_mode' => 1],
         ]);
-        $outbox = $this->createMock(EventOutboxInterface::class);
-        $outbox->method('recordEvent')->willThrowException(new \RuntimeException('outbox unavailable'));
-        [$app, $repository] = $this->app($chat, $outbox);
+        [$app, $repository] = $this->app($chat);
+        $repository->failOutbox = true;
         try {
             $app->sendMessage('100', [
                 'client_message_id' => 'failed-event', 'conversation_id' => '900',
@@ -82,8 +79,8 @@ final class MessageSessionSecurityTest extends TestCase
         } catch (\RuntimeException $exception) {
             self::assertSame('outbox unavailable', $exception->getMessage());
         }
-        self::assertSame(0, (int)$repository->pdo()->query('SELECT COUNT(*) FROM messages')->fetchColumn());
-        self::assertSame(0, (int)$repository->pdo()->query('SELECT COUNT(*) FROM conversation_sequences')->fetchColumn());
+        self::assertCount(0, $repository->messages);
+        self::assertCount(0, $repository->sequences);
     }
 
     public function testJsonObjectAndArrayRemainDifferentForIdempotency(): void
@@ -149,7 +146,7 @@ final class MessageSessionSecurityTest extends TestCase
         self::assertFalse($message->getAuthor()->getProfileAccessible());
 
         // A corrupted scope is projected as an unlinked anonymous author.
-        $repository->pdo()->exec("UPDATE messages SET sender_scope_id = 'other' WHERE message_id = 1000");
+        $repository->updateMessage('1000', ['sender_scope_id' => 'other']);
         $synced = $app->syncMessages('100', '900', '0', 10);
         self::assertSame('', $synced['messages'][0]->getAuthor()->getAnonymousRef());
         self::assertSame('0', (string)$synced['messages'][0]->getAuthor()->getPersonaId());
@@ -181,15 +178,10 @@ final class MessageSessionSecurityTest extends TestCase
         return $chat;
     }
 
-    /** @return array{0:MessageApplicationService,1:PdoMessageRepository} */
-    private function app(ChatMemberSnapshotClient $chat, ?EventOutboxInterface $outbox = null): array
+    /** @return array{0:MessageApplicationService,1:InMemoryMessageStore} */
+    private function app(ChatMemberSnapshotClient $chat): array
     {
-        if (!extension_loaded('pdo_sqlite')) {
-            self::markTestSkipped('pdo_sqlite is required; run PHP with -d extension=pdo_sqlite');
-        }
-        $pdo = new PDO('sqlite::memory:');
-        $repository = new PdoMessageRepository($pdo);
-        $repository->ensureSchema();
+        $repository = new InMemoryMessageStore();
         $ids = new class implements IdGenerator {
             private int $next = 1000;
 
@@ -203,11 +195,11 @@ final class MessageSessionSecurityTest extends TestCase
         return [
             new MessageApplicationService(
                 repository: $repository,
+                transactions: $repository,
                 chat: $chat,
                 ids: $ids,
-                clock: static fn (): string => '2026-10-11 00:00:00.000',
                 projector: $projector,
-                outbox: $outbox,
+                clock: static fn (): string => '2026-10-11 00:00:00.000',
             ),
             $repository,
         ];

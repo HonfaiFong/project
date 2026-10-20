@@ -170,8 +170,11 @@ final class PdoChatRepository
             }
             $sql .= ' AND (COALESCE(c.last_message_at, c.created_at) < :after_at '
                 . 'OR (COALESCE(c.last_message_at, c.created_at) = :equal_at AND c.id < :after_id))';
-            $params['after_at'] = $cursor['at'];
-            $params['equal_at'] = $cursor['at'];
+            // The cursor wire format is UTC without a suffix; PostgreSQL must
+            // receive an explicit zone even if the session TimeZone differs.
+            $cursorAt = $this->isSqlite() ? $cursor['at'] : $cursor['at'] . '+00:00';
+            $params['after_at'] = $cursorAt;
+            $params['equal_at'] = $cursorAt;
             $params['after_id'] = $cursor['id'];
         }
         $sql .= ' ORDER BY COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC LIMIT ' . (int)($limit + 1);
@@ -273,7 +276,10 @@ final class PdoChatRepository
     public function listCursor(array $row): string
     {
         return base64_encode(json_encode([
-            'at' => (string)($row['last_message_at'] ?? $row['created_at']),
+            'at' => (new \DateTimeImmutable(
+                (string)($row['last_message_at'] ?? $row['created_at']),
+                new \DateTimeZone('UTC'),
+            ))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s.v'),
             'id' => (string)$row['id'],
         ], JSON_THROW_ON_ERROR));
     }
@@ -347,6 +353,6 @@ final class PdoChatRepository
             throw ChatException::invalid('invalid database identifier');
         }
 
-        return '`' . $identifier . '`';
+        return '"' . $identifier . '"';
     }
 }

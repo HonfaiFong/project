@@ -7,6 +7,7 @@ namespace Services\AuthService\Infrastructure\Repository;
 use Contracts\Errors\ErrorCode;
 use Illuminate\Database\QueryException;
 use Packages\Database\EloquentConnection;
+use Packages\Database\PostgresErrorClassifier;
 use Packages\IdGenerator\Snowflake;
 use PDO;
 use PDOException;
@@ -93,7 +94,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
         $id = $this->snowflake->nextId();
         $now = gmdate('Y-m-d H:i:s.v');
         try {
-            $this->identity->newQuery()->create([
+            $this->identity->getConnection()->transaction(fn () => $this->identity->newQuery()->create([
                 'id' => $id,
                 'user_id' => null,
                 'provider' => $identity->provider->value,
@@ -108,7 +109,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
                 'last_login_at' => null,
                 'created_at' => $now,
                 'updated_at' => $now,
-            ]);
+            ]));
         } catch (QueryException $e) {
             if ($this->isUniqueConstraintViolation($e)) {
                 $winner = $this->findByExternalIdentity($identity);
@@ -176,7 +177,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
         $now = gmdate('Y-m-d H:i:s.v');
 
         try {
-            $updated = $this->identity->newQuery()
+            $updated = $this->identity->getConnection()->transaction(fn () => $this->identity->newQuery()
                 ->whereKey($identityId)
                 ->where('status', $expectedStatus)
                 ->whereNull('user_id')
@@ -185,7 +186,7 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
                     'status' => SocialIdentity::STATUS_ACTIVE,
                     'bound_at' => $now,
                     'updated_at' => $now,
-                ]);
+                ]));
         } catch (QueryException $e) {
             if ($this->isUniqueConstraintViolation($e)) {
                 throw new RuntimeException(
@@ -537,18 +538,9 @@ final readonly class EloquentSocialIdentityRepository implements SocialIdentityR
         );
     }
 
-    /**
-     * 沿用原 PDO 处理规则：SQLSTATE 23000 或 MySQL 错误 1062。Laravel 将驱动错误包装为 QueryException，因此须取出底
-     * 层 PDO 异常。
-     */
+    /** Laravel wraps the PostgreSQL SQLSTATE in QueryException's previous PDOException. */
     private function isUniqueConstraintViolation(QueryException $exception): bool
     {
-        $previous = $exception->getPrevious();
-        if (!$previous instanceof PDOException) {
-            return false;
-        }
-
-        return $previous->getCode() === '23000'
-            || (isset($previous->errorInfo[1]) && (int)$previous->errorInfo[1] === 1062);
+        return PostgresErrorClassifier::isUniqueViolation($exception);
     }
 }

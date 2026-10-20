@@ -12,13 +12,14 @@ use Google\Protobuf\PrintOptions;
 use JsonException;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousReferenceFactory;
-use Packages\Outbox\EventOutboxInterface;
-use Packages\Outbox\OutboxRepository;
+use Packages\GrpcCommon\OperationBudget;
 use Packages\Tracing\TraceContext;
 use Services\MessageService\Domain\ChatMemberSnapshotClient;
 use Services\MessageService\Domain\Exception\MessageException;
 use Services\MessageService\Domain\IdGenerator;
-use Services\MessageService\Infrastructure\PdoMessageRepository;
+use Services\MessageService\Domain\Repository\MessageRepositoryInterface;
+use Services\MessageService\Domain\Repository\MessageTransactionManagerInterface;
+use Services\MessageService\Domain\Repository\MessageWriteTransactionInterface;
 use Services\MessageService\Infrastructure\RandomIdGenerator;
 use Throwable;
 
@@ -28,14 +29,13 @@ final class MessageApplicationService
     private const ALIAS = 2;
 
     public function __construct(
-        private readonly PdoMessageRepository $repository,
+        private readonly MessageRepositoryInterface $repository,
+        private readonly MessageTransactionManagerInterface $transactions,
         private readonly ChatMemberSnapshotClient $chat,
         ?IdGenerator $ids = null,
         ?\Closure $clock = null,
         ?AnonymousAuthorProjector $projector = null,
-        ?EventOutboxInterface $outbox = null,
     ) {
-        $this->outbox = $outbox ?? new OutboxRepository($repository->pdo());
         $this->ids = $ids ?? new RandomIdGenerator();
         $this->clock = $clock ?? static fn (): string => (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Y-m-d H:i:s.v');
         if ($projector !== null) {
@@ -50,14 +50,14 @@ final class MessageApplicationService
     }
 
     private readonly IdGenerator $ids;
-    private readonly EventOutboxInterface $outbox;
     private readonly AnonymousAuthorProjector $projector;
     /** @var \Closure():string */
     private readonly \Closure $clock;
 
     /** @param array<string,mixed> $request */
-    public function sendMessage(string $trustedUserId, array $request): PublicMessage
+    public function sendMessage(string $trustedUserId, array $request, ?OperationBudget $budget = null): PublicMessage
     {
+        $budget ??= new OperationBudget(600);
         $trustedUserId = $this->id($trustedUserId, 'user_id');
         $clientMessageId = trim((string)($request['client_message_id'] ?? ''));
         if ($clientMessageId === '' || strlen($clientMessageId) > 36) {
@@ -78,7 +78,7 @@ final class MessageApplicationService
             throw MessageException::invalid('message content must be valid JSON');
         }
 
-        $access = $this->chat->getConversationMemberSnapshot($trustedUserId, $conversationId);
+        $access = $this->chat->getConversationMemberSnapshot($trustedUserId, $conversationId, $budget);
         $member = $this->authorizedMember($access, $trustedUserId, $conversationId);
         $normalized = [
             'client_message_id' => $clientMessageId,
@@ -86,7 +86,7 @@ final class MessageApplicationService
             'type' => $type,
             'content' => $content,
         ];
-        $existing = $this->repository->findBySenderClientId($trustedUserId, $clientMessageId);
+        $existing = $this->repository->findBySenderClientId($trustedUserId, $clientMessageId, $budget);
         if ($existing !== null) {
             if (!$this->repository->idempotencyMatches($existing, $normalized)) {
                 throw MessageException::duplicate('client_message_id was already used for a different message');
@@ -95,28 +95,39 @@ final class MessageApplicationService
             return $this->publicMessage($existing);
         }
 
-        $pdo = $this->repository->pdo();
-        for ($attempt = 0; $attempt < 3; $attempt++) {
-            try {
-                $pdo->beginTransaction();
-                $existing = $this->repository->findBySenderClientId($trustedUserId, $clientMessageId);
+        // Values outside the transaction callback stay stable if MongoDB asks
+        // us to retry a transient transaction.
+        $now = ($this->clock)();
+        $messageId = $this->ids->nextId();
+        $eventId = TraceContext::generateUuidV7();
+        $traceId = TraceContext::current()->traceId;
+        try {
+            return $this->transactions->transaction(function (MessageWriteTransactionInterface $transaction) use (
+                $trustedUserId,
+                $clientMessageId,
+                $conversationId,
+                $type,
+                $content,
+                $member,
+                $normalized,
+                $now,
+                $messageId,
+                $eventId,
+                $traceId,
+            ): PublicMessage {
+                $existing = $transaction->findBySenderClientId($trustedUserId, $clientMessageId);
                 if ($existing !== null) {
-                    $pdo->commit();
                     if (!$this->repository->idempotencyMatches($existing, $normalized)) {
                         throw MessageException::duplicate('client_message_id was already used for a different message');
                     }
-
                     return $this->publicMessage($existing);
                 }
-                $now = ($this->clock)();
-                $seq = $this->repository->nextSequence($conversationId, $now);
+
                 $row = [
-                    'message_id' => $this->ids->nextId(),
+                    'message_id' => $messageId,
                     'conversation_id' => $conversationId,
-                    'seq' => $seq,
+                    'seq' => $transaction->nextSequence($conversationId, $now),
                     'sender_user_id' => $trustedUserId,
-                    // This is from ChatService's immutable member snapshot,
-                    // never from the public SendMessage body.
                     'sender_persona_id' => (string)$member['persona_id'],
                     'sender_identity_mode' => (int)$member['identity_mode'],
                     'sender_display_name' => $member['display_name_snapshot'] ?? $member['display_name'] ?? null,
@@ -129,64 +140,60 @@ final class MessageApplicationService
                     'content' => $content,
                     'created_at' => $now,
                 ];
-                $this->repository->insert($row);
-                $publicMessage = $this->publicMessage($row);
-                $this->outbox->recordEvent(
-                    eventId: TraceContext::generateUuidV7(),
-                    aggregateType: 'conversation',
-                    aggregateId: $conversationId,
-                    eventType: EventTypes::MESSAGE_CREATED,
-                    eventVersion: 1,
-                    payload: [
-                        'message' => json_decode($publicMessage->serializeToJsonString(
-                            PrintOptions::PRESERVE_PROTO_FIELD_NAMES | PrintOptions::ALWAYS_PRINT_ENUMS_AS_INTS,
-                        ), true, 512, JSON_THROW_ON_ERROR),
-                    ],
-                    eventKey: $conversationId,
-                    traceId: TraceContext::current()->traceId,
+                $transaction->insert($row);
+                $message = $this->publicMessage($row);
+                $payload = json_decode($message->serializeToJsonString(
+                    PrintOptions::PRESERVE_PROTO_FIELD_NAMES | PrintOptions::ALWAYS_PRINT_ENUMS_AS_INTS,
+                ), true, 512, JSON_THROW_ON_ERROR);
+                $transaction->recordMessageCreated(
+                    $eventId,
+                    $conversationId,
+                    $messageId,
+                    (string)$row['seq'],
+                    ['message' => $payload],
+                    $traceId,
+                    $now,
                 );
-                $pdo->commit();
-
-                return $publicMessage;
-            } catch (MessageException $e) {
-                if ($pdo->inTransaction()) {
-                    $pdo->rollBack();
-                }
-                throw $e;
-            } catch (Throwable $e) {
-                if ($pdo->inTransaction()) {
-                    $pdo->rollBack();
-                }
-                $existing = $this->repository->findBySenderClientId($trustedUserId, $clientMessageId);
-                if ($existing !== null) {
-                    if (!$this->repository->idempotencyMatches($existing, $normalized)) {
-                        throw MessageException::duplicate('client_message_id was already used for a different message');
-                    }
-
-                    return $this->publicMessage($existing);
-                }
-                if ($attempt === 2 || !$this->isRetryableConflict($e)) {
-                    throw $e;
-                }
+                return $message;
+            }, $budget);
+        } catch (Throwable $exception) {
+            if (!$this->isDuplicateKey($exception)) {
+                throw $exception;
             }
+            // A sender/client unique-key race is only idempotent when the
+            // winning row is found by that business key. An _id collision is
+            // deliberately allowed to propagate as an internal error.
+            $existing = $this->repository->findBySenderClientId($trustedUserId, $clientMessageId, $budget);
+            if ($existing === null) {
+                throw $exception;
+            }
+            if (!$this->repository->idempotencyMatches($existing, $normalized)) {
+                throw MessageException::duplicate('client_message_id was already used for a different message');
+            }
+            return $this->publicMessage($existing);
         }
-
-        throw MessageException::forbidden('message could not be persisted');
     }
 
     /** @return array{messages:list<PublicMessage>,has_more:bool,latest_seq:string} */
-    public function syncMessages(string $trustedUserId, string $conversationId, string $afterSeq, int $limit): array
+    public function syncMessages(
+        string $trustedUserId,
+        string $conversationId,
+        string $afterSeq,
+        int $limit,
+        ?OperationBudget $budget = null,
+    ): array
     {
+        $budget ??= new OperationBudget(600);
         $trustedUserId = $this->id($trustedUserId, 'user_id');
         $conversationId = $this->id($conversationId, 'conversation_id');
         $afterSeq = $this->uint($afterSeq, 'after_seq');
         $limit = $this->limit($limit);
         $this->authorizedMember(
-            $this->chat->getConversationMemberSnapshot($trustedUserId, $conversationId),
+            $this->chat->getConversationMemberSnapshot($trustedUserId, $conversationId, $budget),
             $trustedUserId,
             $conversationId,
         );
-        $rows = $this->repository->listAfter($conversationId, $afterSeq, $limit);
+        $rows = $this->repository->listAfter($conversationId, $afterSeq, $limit, $budget);
         $hasMore = count($rows) > $limit;
         if ($hasMore) {
             $rows = array_slice($rows, 0, $limit);
@@ -195,25 +202,32 @@ final class MessageApplicationService
         return [
             'messages' => array_map(fn (array $row): PublicMessage => $this->publicMessage($row), $rows),
             'has_more' => $hasMore,
-            'latest_seq' => $this->repository->latestSequence($conversationId),
+            'latest_seq' => $this->repository->latestSequence($conversationId, $budget),
         ];
     }
 
     /** @return array{messages:list<PublicMessage>,has_more:bool,next_cursor:string,total:string} */
-    public function getMessages(string $trustedUserId, string $conversationId, int $limit, ?string $cursor): array
+    public function getMessages(
+        string $trustedUserId,
+        string $conversationId,
+        int $limit,
+        ?string $cursor,
+        ?OperationBudget $budget = null,
+    ): array
     {
+        $budget ??= new OperationBudget(600);
         $trustedUserId = $this->id($trustedUserId, 'user_id');
         $conversationId = $this->id($conversationId, 'conversation_id');
         $limit = $this->limit($limit);
         $this->authorizedMember(
-            $this->chat->getConversationMemberSnapshot($trustedUserId, $conversationId),
+            $this->chat->getConversationMemberSnapshot($trustedUserId, $conversationId, $budget),
             $trustedUserId,
             $conversationId,
         );
         if ($cursor !== null && $cursor !== '') {
             $cursor = $this->id($cursor, 'cursor');
         }
-        $rows = $this->repository->listPage($conversationId, $limit, $cursor);
+        $rows = $this->repository->listPage($conversationId, $limit, $cursor, $budget);
         $hasMore = count($rows) > $limit;
         if ($hasMore) {
             $rows = array_slice($rows, 0, $limit);
@@ -223,7 +237,7 @@ final class MessageApplicationService
             'messages' => array_map(fn (array $row): PublicMessage => $this->publicMessage($row), $rows),
             'has_more' => $hasMore,
             'next_cursor' => $hasMore && $rows !== [] ? (string)$rows[array_key_last($rows)]['message_id'] : '',
-            'total' => $this->countForConversation($conversationId),
+            'total' => $this->repository->countForConversation($conversationId, $budget),
         ];
     }
 
@@ -296,18 +310,11 @@ final class MessageApplicationService
         ]);
     }
 
-    private function countForConversation(string $conversationId): string
-    {
-        $statement = $this->repository->pdo()->prepare('SELECT COUNT(*) FROM messages WHERE conversation_id = :conversation_id');
-        $statement->execute(['conversation_id' => $conversationId]);
-
-        return (string)$statement->fetchColumn();
-    }
-
     private function id(int|string $value, string $field): string
     {
         $value = trim((string)$value);
-        if ($value === '' || $value === '0' || preg_match('/\A[1-9][0-9]*\z/', $value) !== 1) {
+        if ($value === '' || $value === '0' || preg_match('/\A[1-9][0-9]*\z/', $value) !== 1
+            || strlen($value) > 19 || (strlen($value) === 19 && strcmp($value, '9223372036854775807') > 0)) {
             throw MessageException::invalid($field . ' is required');
         }
 
@@ -317,7 +324,8 @@ final class MessageApplicationService
     private function uint(int|string $value, string $field): string
     {
         $value = trim((string)$value);
-        if (preg_match('/\A[0-9]+\z/', $value) !== 1) {
+        if (preg_match('/\A[0-9]+\z/', $value) !== 1 || strlen($value) > 19
+            || (strlen($value) === 19 && strcmp($value, '9223372036854775807') > 0)) {
             throw MessageException::invalid($field . ' is invalid');
         }
 
@@ -329,12 +337,13 @@ final class MessageApplicationService
         return max(1, min($limit > 0 ? $limit : 50, 100));
     }
 
-    private function isRetryableConflict(Throwable $e): bool
+    private function isDuplicateKey(Throwable $e): bool
     {
-        $message = strtolower($e->getMessage());
-
-        return str_contains($message, 'unique')
-            || str_contains($message, 'duplicate')
-            || str_contains($message, 'locked');
+        for ($current = $e; $current !== null; $current = $current->getPrevious()) {
+            if ((int)$current->getCode() === 11000) {
+                return true;
+            }
+        }
+        return false;
     }
 }

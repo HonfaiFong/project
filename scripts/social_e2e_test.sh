@@ -4,7 +4,7 @@ set -euo pipefail
 # 面向无短信认证协议的社交注册和身份绑定端到端测试。
 #
 # 测试仅调用公共 HTTP API：每个请求通过真实网关 gRPC 客户端及 AuthService/UserService RoadRunner 工作进程，再访
-# 问 MySQL 和 Redis。使用 compose 的 `e2e` 配置和本地模拟 OAuth 上游，不连接生产 OAuth 提供方，也不涉及短信提供
+# 问 PostgreSQL 和 Redis。使用 compose 的 `e2e` 配置和本地模拟 OAuth 上游，不连接生产 OAuth 提供方，也不涉及短信提供
 # 方或手机号。
 #
 # 被测协议：
@@ -111,22 +111,23 @@ expect_field() {
   fi
 }
 
-mysql_query() {
+postgres_query() {
   local database="$1" sql="$2"
-  docker compose exec -T mysql sh -ec \
-    'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B "$1" -e "$2"' \
-    social-e2e-mysql "$database" "$sql"
+  case "$database" in auth_db|user_db) ;; *) echo 'Unexpected schema' >&2; return 1 ;; esac
+  docker compose exec -T postgres sh -ec \
+    'export PGPASSWORD="$POSTGRES_PASSWORD"; PGOPTIONS="-c search_path=$1" psql -X -qAt -v ON_ERROR_STOP=1 -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$2"' \
+    social-e2e-postgres "$database" "$sql"
 }
 
 redis_query() {
   docker compose exec -T redis redis-cli --raw "$@"
 }
 
-assert_mysql() {
+assert_postgres() {
   local database="$1" sql="$2" expected="$3" actual
-  actual="$(mysql_query "$database" "$sql" | tr -d '\r\n')"
+  actual="$(postgres_query "$database" "$sql" | tr -d '\r\n')"
   if [[ "$actual" != "$expected" ]]; then
-    echo "FAILED MySQL assertion (${database}): ${sql}; got '${actual}', expected '${expected}'" >&2
+    echo "FAILED PostgreSQL assertion (${database}): ${sql}; got '${actual}', expected '${expected}'" >&2
     exit 1
   fi
 }
@@ -144,14 +145,14 @@ assert_redis() {
 # 每个新账户均有 MAIN、内部 ALIAS 及三条注册 Outbox 事件，无论中继是否已发布事件。
 assert_new_account_baseline() {
   local user_id="$1"
-  assert_mysql user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND deleted_at IS NULL" '2'
-  assert_mysql user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND type = 1 AND is_internal_alias = 0 AND deleted_at IS NULL" '1'
-  assert_mysql user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND type = 2 AND is_internal_alias = 1 AND deleted_at IS NULL" '1'
-  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events WHERE event_key = '${user_id}'" '3'
-  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events WHERE event_key = '${user_id}' AND aggregate_type = 'user' AND aggregate_id = '${user_id}' AND event_type = 'user.registered.v1'" '1'
+  assert_postgres user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND deleted_at IS NULL" '2'
+  assert_postgres user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND type = 1 AND is_internal_alias = 0 AND deleted_at IS NULL" '1'
+  assert_postgres user_db "SELECT COUNT(*) FROM personas WHERE user_id = '${user_id}' AND type = 2 AND is_internal_alias = 1 AND deleted_at IS NULL" '1'
+  assert_postgres user_db "SELECT COUNT(*) FROM outbox_events WHERE event_key = '${user_id}'" '3'
+  assert_postgres user_db "SELECT COUNT(*) FROM outbox_events WHERE event_key = '${user_id}' AND aggregate_type = 'user' AND aggregate_id = '${user_id}' AND event_type = 'user.registered.v1'" '1'
   # Compare string aggregate IDs with BIGINT persona IDs without floating-point coercion.
-  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events e JOIN personas p ON BINARY e.aggregate_id = BINARY p.id WHERE e.event_key = '${user_id}' AND e.aggregate_type = 'persona' AND e.event_type = 'persona.updated.v1' AND p.user_id = '${user_id}' AND p.type = 1 AND p.is_internal_alias = 0 AND p.deleted_at IS NULL" '1'
-  assert_mysql user_db "SELECT COUNT(*) FROM outbox_events e JOIN personas p ON BINARY e.aggregate_id = BINARY p.id WHERE e.event_key = '${user_id}' AND e.aggregate_type = 'persona' AND e.event_type = 'persona.updated.v1' AND p.user_id = '${user_id}' AND p.type = 2 AND p.is_internal_alias = 1 AND p.deleted_at IS NULL" '1'
+  assert_postgres user_db "SELECT COUNT(*) FROM outbox_events e JOIN personas p ON e.aggregate_id = CAST(p.id AS TEXT) WHERE e.event_key = '${user_id}' AND e.aggregate_type = 'persona' AND e.event_type = 'persona.updated.v1' AND p.user_id = '${user_id}' AND p.type = 1 AND p.is_internal_alias = 0 AND p.deleted_at IS NULL" '1'
+  assert_postgres user_db "SELECT COUNT(*) FROM outbox_events e JOIN personas p ON e.aggregate_id = CAST(p.id AS TEXT) WHERE e.event_key = '${user_id}' AND e.aggregate_type = 'persona' AND e.event_type = 'persona.updated.v1' AND p.user_id = '${user_id}' AND p.type = 2 AND p.is_internal_alias = 1 AND p.deleted_at IS NULL" '1'
 }
 
 run_id="$(date +%s)$$"
@@ -182,7 +183,7 @@ qq_first_openid="qq-openid-${qq_first_identity}"
 qq_first_code="qq-${qq_first_identity}~1"
 qq_first_code_repeat="qq-${qq_first_identity}~2"
 
-echo "Running social HTTP -> gRPC -> MySQL/Redis E2E for run ${run_id}"
+echo "Running social HTTP -> gRPC -> PostgreSQL/Redis E2E for run ${run_id}"
 source "$(dirname "${BASH_SOURCE[0]}")/wait_for_api.sh"
 wait_for_api "$BASE_URL" "$BODY_FILE"
 
@@ -192,11 +193,11 @@ request_without_body 404 POST /api/v1/auth/social/phone/bind '{"bind_token":"soc
 
 # 临时上游失败须按实际故障报告，且不创建账户。已失效授权码保持失效；像真实一次性授权码一样，重放必须被拒绝，客户
 # 端须获取新授权码才能恢复。
-users_before_social="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
+users_before_social="$(postgres_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
 request 503 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_fail}\",\"device\":${device}}"
 expect_code 1001010
-assert_mysql user_db 'SELECT COUNT(*) FROM users' "$users_before_social"
-assert_mysql auth_db \
+assert_postgres user_db 'SELECT COUNT(*) FROM users' "$users_before_social"
+assert_postgres auth_db \
   "SELECT COUNT(*) FROM social_identities WHERE provider = 'wechat' AND openid = '${wechat_openid}' AND status = 1" \
   '0'
 request 401 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_fail}\",\"device\":${device}}"
@@ -213,22 +214,22 @@ access_a="$(field data.access_token)"
 refresh_a="$(field data.refresh_token)"
 [[ "$user_a" =~ ^[0-9]+$ ]]
 [[ -n "$access_a" && -n "$refresh_a" ]]
-assert_mysql user_db "SELECT COUNT(*) FROM users WHERE id = '${user_a}' AND phone IS NULL AND deleted_at IS NULL" '1'
-assert_mysql user_db "SELECT register_channel FROM users WHERE id = '${user_a}'" 'wechat'
-assert_mysql auth_db \
+assert_postgres user_db "SELECT COUNT(*) FROM users WHERE id = '${user_a}' AND phone IS NULL AND deleted_at IS NULL" '1'
+assert_postgres user_db "SELECT register_channel FROM users WHERE id = '${user_a}'" 'wechat'
+assert_postgres auth_db \
   "SELECT CONCAT(status, ':', COALESCE(user_id, 'NULL')) FROM social_identities WHERE provider = 'wechat' AND openid = '${wechat_openid}'" \
   "1:${user_a}"
 assert_new_account_baseline "$user_a"
 
 # 再次使用同一身份的新授权码访问时，复用账户及身份，返回 200 而非 201。
-users_after_registration="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
+users_after_registration="$(postgres_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
 request 200 POST /api/v1/auth/social/login "{\"provider\":\"wechat\",\"code\":\"${wechat_code_repeat}\",\"device\":${device}}"
 expect_code 0
 expect_field data.state authenticated
 expect_field data.is_new_user false
 expect_field data.user_id "$user_a"
-assert_mysql user_db 'SELECT COUNT(*) FROM users' "$users_after_registration"
-assert_mysql auth_db \
+assert_postgres user_db 'SELECT COUNT(*) FROM users' "$users_after_registration"
+assert_postgres auth_db \
   "SELECT COUNT(*) FROM social_identities WHERE provider = 'wechat' AND openid = '${wechat_openid}'" \
   '1'
 
@@ -245,11 +246,11 @@ request 200 POST /api/v1/auth/social/bind "{\"provider\":\"qq\",\"code\":\"${qq_
 expect_code 0
 expect_field data.user_id "$user_a"
 expect_field data.provider qq
-assert_mysql auth_db \
+assert_postgres auth_db \
   "SELECT CONCAT(status, ':', COALESCE(user_id, 'NULL')) FROM social_identities WHERE provider = 'qq' AND openid = '${qq_openid}'" \
   "1:${user_a}"
-assert_mysql user_db "SELECT COUNT(*) FROM users WHERE id = '${user_a}' AND phone IS NULL" '1'
-assert_mysql auth_db "SELECT COUNT(*) FROM social_identities WHERE user_id = '${user_a}' AND status = 1" '2'
+assert_postgres user_db "SELECT COUNT(*) FROM users WHERE id = '${user_a}' AND phone IS NULL" '1'
+assert_postgres auth_db "SELECT COUNT(*) FROM social_identities WHERE user_id = '${user_a}' AND status = 1" '2'
 
 # 使用已绑定身份的新 QQ 授权码登录时，认证为同一本地用户。
 request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_login}\",\"device\":${device}}"
@@ -269,8 +270,8 @@ expect_field data.is_new_user true
 user_c="$(field data.user_id)"
 [[ "$user_c" =~ ^[0-9]+$ ]]
 [[ "$user_c" != "$user_a" ]]
-assert_mysql user_db "SELECT COUNT(*) FROM users WHERE id = '${user_c}' AND phone IS NULL AND register_channel = 'qq'" '1'
-assert_mysql auth_db \
+assert_postgres user_db "SELECT COUNT(*) FROM users WHERE id = '${user_c}' AND phone IS NULL AND register_channel = 'qq'" '1'
+assert_postgres auth_db \
   "SELECT CONCAT(status, ':', COALESCE(user_id, 'NULL')) FROM social_identities WHERE provider = 'qq' AND openid = '${qq_first_openid}'" \
   "1:${user_c}"
 assert_new_account_baseline "$user_c"
@@ -316,9 +317,9 @@ parallel_user_two="$(field_of "$parallel_body_two" data.user_id)"
 [[ -n "$parallel_user_one" && "$parallel_user_one" == "$parallel_user_two" ]]
 # 两个并发请求中恰有一个可以报告账户已创建。
 [[ "$(field_of "$parallel_body_one" data.is_new_user)" != "$(field_of "$parallel_body_two" data.is_new_user)" ]]
-assert_mysql auth_db "SELECT COUNT(*) FROM social_identities WHERE provider = 'qq' AND openid = '${parallel_openid}'" '1'
-parallel_identity_id="$(mysql_query auth_db "SELECT id FROM social_identities WHERE provider = 'qq' AND openid = '${parallel_openid}'" | tr -d '\r\n')"
-assert_mysql user_db "SELECT COUNT(*) FROM users WHERE social_registration_key = 'social:${parallel_identity_id}'" '1'
+assert_postgres auth_db "SELECT COUNT(*) FROM social_identities WHERE provider = 'qq' AND openid = '${parallel_openid}'" '1'
+parallel_identity_id="$(postgres_query auth_db "SELECT id FROM social_identities WHERE provider = 'qq' AND openid = '${parallel_openid}'" | tr -d '\r\n')"
+assert_postgres user_db "SELECT COUNT(*) FROM users WHERE social_registration_key = 'social:${parallel_identity_id}'" '1'
 assert_new_account_baseline "$parallel_user_one"
 
 # 第二个用户使用相同安装实例，也不能抢占已绑定 QQ 身份；该身份继续认证为其所属用户。
@@ -331,15 +332,15 @@ access_b="$(field data.access_token)"
 refresh_b="$(field data.refresh_token)"
 [[ "$user_b" =~ ^[0-9]+$ ]]
 [[ "$user_b" != "$user_a" ]]
-assert_mysql user_db "SELECT COUNT(*) FROM users WHERE id = '${user_b}' AND phone IS NULL AND register_channel = 'wechat'" '1'
-assert_mysql auth_db \
+assert_postgres user_db "SELECT COUNT(*) FROM users WHERE id = '${user_b}' AND phone IS NULL AND register_channel = 'wechat'" '1'
+assert_postgres auth_db \
   "SELECT CONCAT(status, ':', COALESCE(user_id, 'NULL')) FROM social_identities WHERE provider = 'wechat' AND openid = '${second_wechat_openid}'" \
   "1:${user_b}"
 assert_new_account_baseline "$user_b"
 
 request 409 POST /api/v1/auth/social/bind "{\"provider\":\"qq\",\"code\":\"${qq_code_conflict}\"}" "$access_b"
 expect_code 1001015
-assert_mysql auth_db \
+assert_postgres auth_db \
   "SELECT CONCAT(status, ':', COALESCE(user_id, 'NULL')) FROM social_identities WHERE provider = 'qq' AND openid = '${qq_openid}'" \
   "1:${user_a}"
 request 200 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_owner}\",\"device\":${device}}"
@@ -355,7 +356,7 @@ request 200 GET /api/v1/me '' "$refreshed_access_a"
 expect_field data.user.id "$user_a"
 
 # 两个用户共享一个安装实例，但保持独立设备行。
-assert_mysql auth_db \
+assert_postgres auth_db \
   "SELECT COUNT(DISTINCT id) FROM devices WHERE device_uuid = '${device_uuid}' AND user_id IN ('${user_a}', '${user_b}')" \
   '2'
 request 200 GET /api/v1/me '' "$access_b"
@@ -379,8 +380,8 @@ refreshed_access_b="$(field data.access_token)"
 request 200 GET /api/v1/me '' "$refreshed_access_b"
 expect_field data.user.id "$user_b"
 
-device_a="$(mysql_query auth_db "SELECT id FROM devices WHERE device_uuid = '${device_uuid}' AND user_id = '${user_a}'" | tr -d '\r\n')"
-device_b="$(mysql_query auth_db "SELECT id FROM devices WHERE device_uuid = '${device_uuid}' AND user_id = '${user_b}'" | tr -d '\r\n')"
+device_a="$(postgres_query auth_db "SELECT id FROM devices WHERE device_uuid = '${device_uuid}' AND user_id = '${user_a}'" | tr -d '\r\n')"
+device_b="$(postgres_query auth_db "SELECT id FROM devices WHERE device_uuid = '${device_uuid}' AND user_id = '${user_b}'" | tr -d '\r\n')"
 [[ -n "$device_a" && -n "$device_b" && "$device_a" != "$device_b" ]]
 assert_redis 1 EXISTS "auth:access-device-revoked:${device_a}"
 assert_redis 0 EXISTS "auth:access-device-revoked:${device_b}"
@@ -392,23 +393,23 @@ expect_code 0
 expect_field data.user_id "$user_a"
 banned_access_a="$(field data.access_token)"
 
-mysql_query user_db "UPDATE users SET status = 0 WHERE id = '${user_a}'" >/dev/null
+postgres_query user_db "UPDATE users SET status = 0 WHERE id = '${user_a}'" >/dev/null
 request 401 GET /api/v1/me '' "$banned_access_a"
 # 被封禁账户不能创建新会话，也不能注册替代账户。
-users_during_ban="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
+users_during_ban="$(postgres_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
 request 403 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_banned}\",\"device\":${device}}"
 expect_code 2001003
-assert_mysql user_db 'SELECT COUNT(*) FROM users' "$users_during_ban"
-mysql_query user_db "UPDATE users SET status = 1 WHERE id = '${user_a}'" >/dev/null
+assert_postgres user_db 'SELECT COUNT(*) FROM users' "$users_during_ban"
+postgres_query user_db "UPDATE users SET status = 1 WHERE id = '${user_a}'" >/dev/null
 request 200 GET /api/v1/me '' "$banned_access_a"
 expect_field data.user.id "$user_a"
-mysql_query user_db "UPDATE users SET deleted_at = NOW(3) WHERE id = '${user_a}'" >/dev/null
+postgres_query user_db "UPDATE users SET deleted_at = CURRENT_TIMESTAMP(3) WHERE id = '${user_a}'" >/dev/null
 request 401 GET /api/v1/me '' "$banned_access_a"
-users_during_delete="$(mysql_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
+users_during_delete="$(postgres_query user_db 'SELECT COUNT(*) FROM users' | tr -d '\r\n')"
 request 404 POST /api/v1/auth/social/login "{\"provider\":\"qq\",\"code\":\"${qq_code_deleted}\",\"device\":${device}}"
 expect_code 2001001
-assert_mysql user_db 'SELECT COUNT(*) FROM users' "$users_during_delete"
-mysql_query user_db "UPDATE users SET deleted_at = NULL WHERE id = '${user_a}'" >/dev/null
+assert_postgres user_db 'SELECT COUNT(*) FROM users' "$users_during_delete"
+postgres_query user_db "UPDATE users SET deleted_at = NULL WHERE id = '${user_a}'" >/dev/null
 request 200 GET /api/v1/me '' "$banned_access_a"
 expect_field data.user.id "$user_a"
 

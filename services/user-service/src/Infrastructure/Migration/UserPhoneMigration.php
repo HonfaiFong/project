@@ -102,38 +102,27 @@ final class UserPhoneMigration
 
     private function createPlanTable(PDO $pdo): void
     {
-        $mysql = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql';
-        $temporary = $mysql ? 'TEMPORARY ' : 'TEMP ';
         $this->dropPlanTable($pdo);
-        $pdo->exec('CREATE ' . $temporary . 'TABLE ' . self::PLAN_TABLE . ' (
+        $pdo->exec('CREATE TEMPORARY TABLE ' . self::PLAN_TABLE . ' (
                 user_id VARCHAR(64) NOT NULL PRIMARY KEY,
                 original_phone VARCHAR(64) NOT NULL,
                 normalized_phone VARCHAR(64) NULL,
-                error_code VARCHAR(32) NULL'
-            . ($mysql ? ', INDEX idx_normalized_phone (normalized_phone)' : '')
-            . ')'
+                error_code VARCHAR(32) NULL
+            )'
         );
-        if (!$mysql) {
-            $pdo->exec(
-                'CREATE INDEX idx_normalized_phone ON ' . self::PLAN_TABLE . ' (normalized_phone)'
-            );
-        }
+        $pdo->exec('CREATE INDEX idx_normalized_phone ON ' . self::PLAN_TABLE . ' (normalized_phone)');
     }
 
     private function dropPlanTable(PDO $pdo): void
     {
-        $temporary = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'TEMPORARY ' : '';
-        $pdo->exec('DROP ' . $temporary . 'TABLE IF EXISTS ' . self::PLAN_TABLE);
-        $pdo->exec('DROP ' . $temporary . 'TABLE IF EXISTS ' . self::COLLISION_TABLE);
+        $pdo->exec('DROP TABLE IF EXISTS ' . self::PLAN_TABLE);
+        $pdo->exec('DROP TABLE IF EXISTS ' . self::COLLISION_TABLE);
     }
 
     private function createCollisionTable(PDO $pdo): void
     {
-        $temporary = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql'
-            ? 'TEMPORARY '
-            : 'TEMP ';
         $pdo->exec(
-            'CREATE ' . $temporary . 'TABLE ' . self::COLLISION_TABLE . ' (
+            'CREATE TEMPORARY TABLE ' . self::COLLISION_TABLE . ' (
                 normalized_phone VARCHAR(64) NOT NULL PRIMARY KEY
             )'
         );
@@ -162,7 +151,7 @@ final class UserPhoneMigration
                     WHERE phone IS NOT NULL AND id > :last_id
                     ORDER BY id
                     LIMIT ' . $this->batchSize;
-            if ($lockRows && $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql') {
+            if ($lockRows && $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'pgsql') {
                 $sql .= ' FOR UPDATE';
             }
 
@@ -250,8 +239,7 @@ final class UserPhoneMigration
                 ),
             ];
         } finally {
-            $temporary = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'mysql' ? 'TEMPORARY ' : '';
-            $pdo->exec('DROP ' . $temporary . 'TABLE IF EXISTS ' . self::COLLISION_TABLE);
+            $pdo->exec('DROP TABLE IF EXISTS ' . self::COLLISION_TABLE);
         }
     }
 

@@ -17,4 +17,10 @@ final class OutboxEvent extends Model
     public $timestamps = false;
 
     protected $guarded = [];
+
+    protected $casts = [
+        'event_version' => 'integer',
+        'status' => 'integer',
+        'attempt_count' => 'integer',
+    ];
 }

@@ -23,6 +23,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     install-php-extensions \
         pdo_mysql \
+        pdo_pgsql \
+        mongodb \
         pcntl \
         posix \
         sockets \

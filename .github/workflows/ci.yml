@@ -19,7 +19,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_mysql, pdo_sqlite, redis, bcmath, sockets, grpc
+          extensions: pdo, pdo_pgsql, pdo_sqlite, mongodb, redis, bcmath, sockets, grpc
           coverage: none
       - run: composer install --no-interaction --prefer-dist
       - run: cp .env.example .env
@@ -50,7 +50,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_mysql, pdo_sqlite, redis, bcmath, sockets, grpc
+          extensions: pdo, pdo_pgsql, pdo_sqlite, mongodb, redis, bcmath, sockets, grpc
           coverage: none
 
       - name: Setup Go
@@ -144,7 +144,7 @@ jobs:
         with:
           php-version: '8.4'
           # posix/pcntl 供隔离进程回归测试使用：MetricsHttpServer 依赖 posix_getppid 探测父进程存活。
-          extensions: pdo, pdo_mysql, pdo_sqlite, redis, bcmath, sockets, grpc, posix, pcntl
+          extensions: pdo, pdo_pgsql, pdo_sqlite, mongodb, redis, bcmath, sockets, grpc, posix, pcntl
           coverage: none
 
       - name: Install Composer dependencies for E2E
@@ -155,6 +155,8 @@ jobs:
           cp .env.example .env
           cat >> .env <<'EOF'
           APP_ENV=testing
+          PG_DATABASE=test_social_backend
+          MONGODB_DATABASE=test_message_db
           ENABLE_WECHAT_LOGIN=true
           ENABLE_QQ_LOGIN=true
           WECHAT_APP_ID=e2e-wechat-app
@@ -169,19 +171,16 @@ jobs:
           EOF
 
       - name: Start infrastructure
-        run: docker compose up -d mysql redis
+        run: docker compose up -d postgres mongo mongo-init redis
 
-      - name: Wait for MySQL to become healthy
-        run: make mysql-ready
+      - name: Wait for database readiness
+        run: make postgres-ready mongo-ready redis-ready
 
-      - name: Wait for Redis to become ready
-        run: make redis-ready
-
-      - name: Verify MySQL readiness rejects wrong credentials
+      - name: Verify PostgreSQL rejects wrong credentials
         run: |
-          if docker compose exec -T mysql sh -c \
-            'mysql -h 127.0.0.1 -uroot -p"definitely-wrong-password" -e "SELECT 1" >/dev/null 2>&1'; then
-            echo "MySQL accepted invalid credentials"
+          if docker compose exec -T postgres sh -ec \
+            'PGPASSWORD=definitely-wrong-password psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1" >/dev/null 2>&1'; then
+            echo "PostgreSQL accepted invalid credentials"
             exit 1
           fi
 
@@ -197,28 +196,15 @@ jobs:
       - name: Verify health RPC reconnection and deadline boundaries
         run: docker compose run --rm --no-deps auth-service php /app/vendor/bin/phpunit /app/tests/Integration/HealthRetryTest.php --cache-directory /tmp/project-phpunit-cache --fail-on-skipped
 
-      - name: Export MySQL credentials from .env for integration tests
-        run: |
-          while IFS='=' read -r key value; do
-            case "$key" in
-              MYSQL_PASSWORD|MYSQL_*_PASSWORD) echo "${key}=${value}" >> "$GITHUB_ENV" ;;
-            esac
-          done < .env
-
-      - name: Prepare MySQL integration database
-        run: |
-          docker compose exec -T mysql sh -c \
-            'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS social_test_auth CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"'
-
-      - name: Run MySQL and Redis integration tests
+      - name: Run PostgreSQL and MongoDB regression tests
         timeout-minutes: 5
-        run: vendor/bin/phpunit tests/Integration/EloquentSocialIdentityRepositoryTest.php tests/Integration/PdoDeviceIsolationTest.php tests/Integration/RedisSocialAuthSupportTest.php tests/Integration/UserPhoneMigrationTest.php tests/Integration/PhinxMigrationTest.php tests/Integration/UserSocialRegistrationConcurrencyTest.php tests/Integration/EloquentOutboxConcurrencyTest.php tests/Integration/AuthWarmPathLatencyTest.php tests/Integration/SocialLikeConcurrencyTest.php tests/Integration/ContentPersistenceConcurrencyTest.php --fail-on-skipped
+        run: |
+          docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 -e MONGODB_TEST_RUNTIME_PASSWORD=replace-with-random-local-mongo-runtime-password -e MONGODB_TEST_RELAY_PASSWORD=replace-with-random-local-mongo-relay-password --entrypoint php mongodb-migrate vendor/bin/phpunit tests/Integration/MongoMessagePersistenceTest.php --fail-on-skipped
+          docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 --entrypoint php database-migrate vendor/bin/phpunit tests/Integration/PostgresMigrationRuntimeTest.php --fail-on-skipped
+
+      - name: Run Redis integration tests
+        run: vendor/bin/phpunit tests/Integration/RedisSocialAuthSupportTest.php --fail-on-skipped
         env:
-          SOCIAL_TEST_MYSQL_DATABASE: social_test_auth
-          SOCIAL_TEST_MYSQL_HOST: 127.0.0.1
-          SOCIAL_TEST_MYSQL_PORT: '3306'
-          SOCIAL_TEST_MYSQL_USER: root
-          SOCIAL_TEST_MYSQL_PASSWORD: ${{ env.MYSQL_PASSWORD }}
           SOCIAL_TEST_REDIS_HOST: 127.0.0.1
           SOCIAL_TEST_REDIS_PORT: '6379'
 
@@ -230,23 +216,6 @@ jobs:
         env:
           SOCIAL_TEST_REDIS_HOST: 127.0.0.1
           SOCIAL_TEST_REDIS_PORT: '6379'
-
-      - name: Run MySQL least-privilege integration test
-        run: vendor/bin/phpunit tests/Integration/MySqlLeastPrivilegeTest.php --fail-on-skipped
-        env:
-          MYSQL_PRIVILEGE_TEST: '1'
-          MYSQL_HOST: 127.0.0.1
-          MYSQL_PORT: '3306'
-          MYSQL_PASSWORD: ${{ env.MYSQL_PASSWORD }}
-          MYSQL_AUTH_RUNTIME_PASSWORD: ${{ env.MYSQL_AUTH_RUNTIME_PASSWORD }}
-          MYSQL_USER_RUNTIME_PASSWORD: ${{ env.MYSQL_USER_RUNTIME_PASSWORD }}
-          MYSQL_CONTENT_RUNTIME_PASSWORD: ${{ env.MYSQL_CONTENT_RUNTIME_PASSWORD }}
-          MYSQL_SOCIAL_RUNTIME_PASSWORD: ${{ env.MYSQL_SOCIAL_RUNTIME_PASSWORD }}
-          MYSQL_CHAT_RUNTIME_PASSWORD: ${{ env.MYSQL_CHAT_RUNTIME_PASSWORD }}
-          MYSQL_MESSAGE_RUNTIME_PASSWORD: ${{ env.MYSQL_MESSAGE_RUNTIME_PASSWORD }}
-          MYSQL_USER_OUTBOX_RELAY_PASSWORD: ${{ env.MYSQL_USER_OUTBOX_RELAY_PASSWORD }}
-          MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD: ${{ env.MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD }}
-          MYSQL_MIGRATION_PASSWORD: ${{ env.MYSQL_MIGRATION_PASSWORD }}
 
       - name: Start application services
         run: docker compose up -d

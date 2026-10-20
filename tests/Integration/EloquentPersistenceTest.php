@@ -7,6 +7,7 @@ namespace Tests\Integration;
 use Illuminate\Database\Schema\Blueprint;
 use Packages\Database\EloquentConnection;
 use Packages\Outbox\Model\OutboxEvent;
+use Packages\Outbox\OutboxClaim;
 use Packages\Outbox\OutboxRepository;
 use PDO;
 use Exception;
@@ -38,8 +39,11 @@ final class EloquentPersistenceTest extends TestCase
             $table->integer('status');
             $table->string('available_at');
             $table->string('claimed_at')->nullable();
+            $table->string('lease_until')->nullable();
+            $table->string('claim_token')->nullable();
             $table->string('published_at')->nullable();
             $table->string('created_at');
+            $table->integer('attempt_count')->default(0);
         });
     }
 
@@ -136,16 +140,26 @@ final class EloquentPersistenceTest extends TestCase
             ]);
         }
         $repo = new OutboxRepository($this->pdo);
-        $this->assertSame(['1', '3'], array_column($repo->claimPending(), 'id'));
+        /** @var list<OutboxClaim> $claims1 */
+        $claims1 = $repo->claimPending();
+        $this->assertSame(['1', '3'], array_map(static fn (OutboxClaim $c): string => $c->record->id, $claims1));
         $this->assertSame([], $repo->claimPending());
-        $repo->markFailed('1', 0);
-        $this->assertSame(['1'], array_column($repo->claimPending(), 'id'));
-        $repo->markPublished('1');
-        $this->assertSame(['2'], array_column($repo->claimPending(), 'id'));
+        $firstClaim = $claims1[0] ?? null;
+        $this->assertNotNull($firstClaim);
+        $repo->markFailed($firstClaim, 0);
+        /** @var list<OutboxClaim> $claims2 */
+        $claims2 = $repo->claimPending();
+        $this->assertSame(['1'], array_map(static fn (OutboxClaim $c): string => $c->record->id, $claims2));
+        $retryClaim = $claims2[0] ?? null;
+        $this->assertNotNull($retryClaim);
+        $repo->markPublished($retryClaim);
+        /** @var list<OutboxClaim> $claims3 */
+        $claims3 = $repo->claimPending();
+        $this->assertSame(['2'], array_map(static fn (OutboxClaim $c): string => $c->record->id, $claims3));
 
-        $model->newQuery()->whereIn('id', ['2', '3'])->update(['claimed_at' => '2020-01-01 00:00:00']);
+        $model->newQuery()->whereIn('id', ['2', '3'])->update(['lease_until' => '2020-01-01 00:00:00']);
         $this->assertSame(2, $repo->releaseStaleClaims());
-        $this->assertSame(['2', '3'], array_column($repo->claimPending(2), 'id'));
+        $this->assertSame(['2', '3'], array_map(static fn (OutboxClaim $c): string => $c->record->id, $repo->claimPending(2)));
         $this->assertFalse($this->pdo->inTransaction());
     }
 }

@@ -9,6 +9,7 @@ use Contracts\Gen\Chat\V1\GetConversationMemberSnapshotRequest;
 use Contracts\Gen\Chat\V1\GetConversationMemberSnapshotResponse;
 use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\UnaryGrpcClient;
+use Packages\GrpcCommon\OperationBudget;
 use Services\MessageService\Domain\ChatMemberSnapshotClient;
 
 /** Calls ChatService for the authenticated member's immutable session snapshot. */
@@ -25,7 +26,11 @@ final class GrpcChatMemberSnapshotClient implements ChatMemberSnapshotClient
         $this->client = $client;
     }
 
-    public function getConversationMemberSnapshot(string $trustedUserId, string $conversationId): array
+    public function getConversationMemberSnapshot(
+        string $trustedUserId,
+        string $conversationId,
+        ?OperationBudget $budget = null,
+    ): array
     {
         /** @var GetConversationMemberSnapshotResponse $response */
         $response = $this->call(
@@ -35,6 +40,7 @@ final class GrpcChatMemberSnapshotClient implements ChatMemberSnapshotClient
             ]),
             GetConversationMemberSnapshotResponse::class,
             ['x-user-id' => [$trustedUserId]],
+            $budget,
         );
         $member = $response->getMember();
 
@@ -61,10 +67,17 @@ final class GrpcChatMemberSnapshotClient implements ChatMemberSnapshotClient
      * @param array<string, array<string>> $metadata
      * @return T
      */
-    private function call(string $method, Message $request, string $responseClass, array $metadata = []): Message
+    private function call(
+        string $method,
+        Message $request,
+        string $responseClass,
+        array $metadata = [],
+        ?OperationBudget $budget = null,
+    ): Message
     {
         $client = $this->client ??= new UnaryGrpcClient($this->target, $this->serviceToken);
 
-        return $client->call($method, $request, $responseClass, $this->timeoutMs, $metadata);
+        $timeout = $budget === null ? $this->timeoutMs : min($this->timeoutMs, $budget->remainingMilliseconds(100));
+        return $client->call($method, $request, $responseClass, $timeout, $metadata);
     }
 }

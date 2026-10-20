@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone mysql-ready redis-ready seed e2e e2e-social latency-probe logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone postgres-ready mongo-ready redis-ready seed e2e e2e-social latency-probe logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -34,8 +34,8 @@ test-integration:
 	@vendor/bin/phpunit --testsuite Integration --fail-on-skipped
 
 infra-up:
-	docker compose up -d mysql redis rabbitmq
-	$(MAKE) mysql-ready redis-ready
+	docker compose up -d postgres mongo mongo-init redis rabbitmq
+	$(MAKE) postgres-ready mongo-ready redis-ready
 	$(MAKE) broker-init
 
 broker-init:
@@ -48,7 +48,7 @@ storage-up:
 app-up:
 	docker compose up -d auth-service user-service user-outbox-relay message-outbox-relay chat-message-consumer content-service social-service chat-service message-service api-gateway realtime-gateway
 
-# 标准开发入口: 镜像校验/构建 -> 启动基础设施 -> 等待 MySQL 就绪 -> 迁移数据库 -> 启动应用服务
+# 标准开发入口: 镜像校验/构建 -> 启动基础设施 -> 等待 PostgreSQL / MongoDB 就绪 -> 迁移数据库 -> 启动应用服务
 up:
 	@if ! docker image inspect $(PHP_RUNTIME_IMAGE) >/dev/null 2>&1; then \
 		echo ">>> $(PHP_RUNTIME_IMAGE) 不存在,先构建 PHP runtime..."; \
@@ -58,10 +58,10 @@ up:
 		echo ">>> $(GATEWAY_IMAGE) 不存在,先构建 realtime gateway..."; \
 		docker compose build realtime-gateway; \
 	fi
-	@echo ">>> 启动基础设施 (MySQL / Redis / RabbitMQ)..."
-	docker compose up -d mysql redis rabbitmq
+	@echo ">>> 启动基础设施 (PostgreSQL / MongoDB / Redis / RabbitMQ)..."
+	docker compose up -d postgres mongo mongo-init redis rabbitmq
 	@$(MAKE) broker-init
-	@$(MAKE) mysql-ready redis-ready
+	@$(MAKE) postgres-ready mongo-ready redis-ready
 	@echo ">>> 执行数据库基线与增量迁移..."
 	@$(MAKE) migrate
 	@echo ">>> 启动业务应用与网关服务..."
@@ -83,21 +83,27 @@ rebuild-runtime:
 migrate:
 	@echo "Applying database migrations with Phinx..."
 	bash scripts/run_migrations.sh
+	docker compose run --rm --no-deps mongodb-migrate
 
-mysql-ready:
-	@echo ">>> 等待 MySQL SQL readiness..."
+postgres-ready:
+	@echo ">>> Waiting for PostgreSQL SQL readiness..."
 	@ready=0; \
 	for i in $$(seq 1 60); do \
-		if docker compose exec -T mysql sh -c 'mysql -h 127.0.0.1 -uroot -p"$$MYSQL_ROOT_PASSWORD" -e "SELECT 1" >/dev/null 2>&1'; then \
+		if docker compose exec -T postgres sh -ec 'export PGPASSWORD="$$POSTGRES_PASSWORD"; psql -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -c "SELECT 1" >/dev/null 2>&1'; then \
 			ready=1; \
 			break; \
 		fi; \
 		sleep 1; \
 	done; \
 	if [ "$$ready" -ne 1 ]; then \
-		echo ">>> 错误: MySQL SQL readiness 等待超时"; \
+		echo ">>> PostgreSQL SQL readiness timed out"; \
 		exit 1; \
 	fi
+
+mongo-ready:
+	docker compose up -d mongo-init
+	@container_id=$$(docker compose ps -aq mongo-init); \
+		test -n "$$container_id" && test "$$(docker wait "$$container_id")" = 0
 
 redis-ready:
 	@echo ">>> 等待 Redis readiness..."
@@ -134,7 +140,7 @@ e2e:
 e2e-social:
 	bash scripts/social_e2e_test.sh
 
-# 针对运行中的服务栈，报告真实社交登录调用链（网关 -> gRPC -> OAuth/MySQL/Redis -> user-service）的 P50/P95/P99。
+# 针对运行中的服务栈，报告真实社交登录调用链（网关 -> gRPC -> OAuth/PostgreSQL / MongoDB/Redis -> user-service）的 P50/P95/P99。
 latency-probe:
 	bash scripts/auth_latency_probe.sh
 

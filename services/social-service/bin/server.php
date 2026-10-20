@@ -14,6 +14,7 @@ use Contracts\Gen\Social\V1\SocialServiceInterface;
 use Contracts\Gen\Social\V1\UnblockRequest;
 use Contracts\Gen\Social\V1\UnlikeRequest;
 use Packages\Database\EloquentConnection;
+use Packages\Database\PostgresConnectionFactory;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Packages\GrpcCommon\LeaseMaintainingRelay;
@@ -34,33 +35,18 @@ use Spiral\RoadRunner\GRPC\Server;
 MetricsHttpServer::startInBackground();
 
 $logger = new JsonLogger('social-service', getenv('SERVICE_INSTANCE_ID') ?: 'social-01');
-$mysqlHost = getenv('MYSQL_HOST') ?: '127.0.0.1';
-$mysqlPort = getenv('MYSQL_PORT') ?: '3306';
-$mysqlUser = getenv('MYSQL_USER') ?: 'social_runtime';
-$mysqlPass = getenv('MYSQL_PASSWORD') ?: '';
-$mysqlDb = getenv('SOCIAL_DB_NAME') ?: 'social_db';
-
 $pdo = null;
 for ($attempt = 0; $attempt < 15; $attempt++) {
     try {
-        $pdo = new PDO(
-            "mysql:host=$mysqlHost;port=$mysqlPort;dbname=$mysqlDb;charset=utf8mb4",
-            $mysqlUser,
-            $mysqlPass,
-            [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::ATTR_EMULATE_PREPARES => false,
-            ],
-        );
+        $pdo = PostgresConnectionFactory::fromEnvironment();
         break;
     } catch (Throwable $e) {
-        $logger->warning('Waiting for MySQL (' . $mysqlDb . ')... ' . $e->getMessage());
+        $logger->warning('Waiting for PostgreSQL', ['exception' => $e::class]);
         sleep(2);
     }
 }
 if (!$pdo instanceof PDO) {
-    $logger->error('Could not connect to MySQL after retries, exiting.');
+    $logger->error('Could not connect to PostgreSQL after retries, exiting.');
     exit(1);
 }
 

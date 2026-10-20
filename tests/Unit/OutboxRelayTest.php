@@ -8,6 +8,7 @@ use Packages\Outbox\EventPublisher;
 use Packages\Outbox\OutboxRecord;
 use Packages\Outbox\OutboxRelay;
 use Packages\Outbox\OutboxRelayStore;
+use Packages\Outbox\OutboxClaim;
 use RuntimeException;
 use Tests\TestCase;
 
@@ -58,14 +59,14 @@ final class FakeOutboxRelayStore implements OutboxRelayStore
     /** @var list<string> */
     public array $failed = [];
 
-    public function releaseStaleClaims(int $olderThanSeconds = 300): int { return 0; }
+    public function releaseStaleClaims(): int { return 0; }
 
     public function claimPending(int $limit = 50): array
     {
-        return [new OutboxRecord('event-1', 'user', 'user-1', 'user.registered.v1', 1, [], 'user-1', 'trace-1', id: 'event-1')];
+        return [new OutboxClaim(new OutboxRecord('event-1', 'user', 'user-1', 'user.registered.v1', 1, [], 'user-1', 'trace-1', id: 'event-1'), 'claim-token', '2026-10-20 00:00:00.000')];
     }
 
-    public function markPublished(string $id): void { $this->published[] = $id; }
+    public function markPublished(OutboxClaim $claim): bool { $this->published[] = $claim->record->eventId; return true; }
 
-    public function markFailed(string $id, int $retryDelaySeconds = 10): void { $this->failed[] = $id; }
+    public function markFailed(OutboxClaim $claim, int $retryDelaySeconds = 10): bool { $this->failed[] = $claim->record->eventId; return true; }
 }

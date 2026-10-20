@@ -15,6 +15,7 @@ use Contracts\Gen\Message\V1\SyncMessagesRequest;
 use Contracts\Gen\Message\V1\SyncMessagesResponse;
 use Packages\GrpcCommon\ErrorStatusMapper;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\OperationBudget;
 use Packages\Observability\Span;
 use Packages\Observability\Tracer;
 use Packages\Tracing\TraceContext;
@@ -38,6 +39,7 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
     public function SendMessage(ContextInterface $ctx, PublicSendMessageRequest $in): SendMessageResponse
     {
         return $this->call($ctx, 'SendMessage', function () use ($ctx, $in): SendMessageResponse {
+            $budget = $this->operationBudget();
             $message = $this->messages->sendMessage(
                 $this->trustedUserId($ctx),
                 [
@@ -46,6 +48,7 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
                     'type' => $in->getType(),
                     'content' => $in->getContent(),
                 ],
+                $budget,
             );
 
             return new SendMessageResponse(['message' => $message]);
@@ -55,11 +58,13 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
     public function SyncMessages(ContextInterface $ctx, SyncMessagesRequest $in): SyncMessagesResponse
     {
         return $this->call($ctx, 'SyncMessages', function () use ($ctx, $in): SyncMessagesResponse {
+            $budget = $this->operationBudget();
             $result = $this->messages->syncMessages(
                 $this->trustedUserId($ctx),
                 $this->id($in->getConversationId(), 'conversation_id'),
                 $this->uint($in->getAfterSeq(), 'after_seq'),
                 $in->getLimit(),
+                $budget,
             );
 
             return new SyncMessagesResponse([
@@ -73,12 +78,14 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
     public function GetMessages(ContextInterface $ctx, GetMessagesRequest $in): GetMessagesResponse
     {
         return $this->call($ctx, 'GetMessages', function () use ($ctx, $in): GetMessagesResponse {
+            $budget = $this->operationBudget();
             $pagination = $in->getPagination();
             $result = $this->messages->getMessages(
                 $this->trustedUserId($ctx),
                 $this->id($in->getConversationId(), 'conversation_id'),
                 $pagination?->getPageSize() ?? 50,
                 $pagination?->getCursor() ?: null,
+                $budget,
             );
 
             return new GetMessagesResponse([
@@ -179,5 +186,15 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
         }
 
         return is_scalar($value) && (string)$value !== '' ? (string)$value : null;
+    }
+
+    /**
+     * RoadRunner's GRPC Context exposes metadata but not the transport deadline.
+     * Use a bounded in-process deadline and keep it below the gateway's default
+     * message RPC timeout; callers can lower it to match their configured route.
+     */
+    private function operationBudget(): OperationBudget
+    {
+        return OperationBudget::fromEnvironment('MESSAGE_OPERATION_BUDGET_MS', 600);
     }
 }

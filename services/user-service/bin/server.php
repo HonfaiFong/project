@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../../vendor/autoload.php';
 
 use Packages\Database\EloquentConnection;
+use Packages\Database\PostgresConnectionFactory;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Packages\GrpcCommon\LeaseMaintainingRelay;
@@ -36,13 +37,6 @@ MetricsHttpServer::startInBackground();
 
 $logger = new JsonLogger('user-service', getenv('SERVICE_INSTANCE_ID') ?: 'user-01');
 
-// 数据库连接
-$mysqlHost = getenv('MYSQL_HOST') ?: '127.0.0.1';
-$mysqlPort = getenv('MYSQL_PORT') ?: '3306';
-$mysqlUser = getenv('MYSQL_USER') ?: 'user_runtime';
-$mysqlPass = getenv('MYSQL_PASSWORD') ?: '';
-$mysqlDb   = getenv('USER_DB_NAME') ?: 'user_db';
-
 // 启动重试循环有意沿用其他服务的工作进程启动方式，使每个服务都能独立部署。
 /** @noinspection DuplicatedCode */
 $maxRetries = 15;
@@ -50,21 +44,17 @@ $pdo = null;
 
 for ($i = 0; $i < $maxRetries; $i++) {
     try {
-        $dsn = "mysql:host=$mysqlHost;port=$mysqlPort;dbname=$mysqlDb;charset=utf8mb4";
-        $pdo = new PDO($dsn, $mysqlUser, $mysqlPass, [
-            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        ]);
-        $logger->info("Connected to MySQL successfully: $mysqlDb");
+        $pdo = PostgresConnectionFactory::fromEnvironment();
+        $logger->info('Connected to PostgreSQL', ['schema' => getenv('PG_SCHEMA') ?: 'user_db']);
         break;
     } catch (Throwable $e) {
-        $logger->warning("Waiting for MySQL ($mysqlDb)... " . $e->getMessage());
+        $logger->warning('Waiting for PostgreSQL', ['exception' => $e::class]);
         sleep(2);
     }
 }
 
 if (!$pdo) {
-    $logger->error("Could not connect to MySQL after retries, exiting.");
+    $logger->error('Could not connect to PostgreSQL after retries, exiting.');
     exit(1);
 }
 

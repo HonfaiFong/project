@@ -7,6 +7,7 @@ namespace Services\UserService\Infrastructure\Repository;
 use Contracts\Errors\ErrorCode;
 use Illuminate\Database\QueryException;
 use Packages\Database\EloquentConnection;
+use Packages\Database\PostgresErrorClassifier;
 use PDO;
 use Services\UserService\Domain\Entity\User;
 use Services\UserService\Domain\Exception\DuplicateUserException;
@@ -77,14 +78,14 @@ final readonly class EloquentUserRepository implements UserRepositoryInterface
     ): User {
         $now = gmdate('Y-m-d H:i:s.v');
         try {
-            return $this->model->newQuery()->create([
+            return $this->model->getConnection()->transaction(fn () => $this->model->newQuery()->create([
                 'id' => $id, 'status' => 1, 'phone' => $phone, 'email' => $email,
                 'register_channel' => $registerChannel, 'risk_level' => $riskLevel,
                 'social_registration_key' => $socialRegistrationKey,
                 'created_at' => $now, 'updated_at' => $now,
-            ])->toDomain();
+            ])->toDomain());
         } catch (QueryException $exception) {
-            $this->throwDuplicateUser($exception);
+            $this->throwDuplicateUser($exception, $phone, $email, $socialRegistrationKey);
         }
     }
 
@@ -98,9 +99,11 @@ final readonly class EloquentUserRepository implements UserRepositoryInterface
             $attributes['email'] = $email;
         }
         try {
-            $this->model->newQuery()->whereKey($id)->update($attributes);
+            $this->model->getConnection()->transaction(
+                fn () => $this->model->newQuery()->whereKey($id)->update($attributes),
+            );
         } catch (QueryException $exception) {
-            $this->throwDuplicateUser($exception);
+            $this->throwDuplicateUser($exception, $attributes['phone'] ?? null, $attributes['email'] ?? null, null, $id);
         }
 
         return $this->findById($id);
@@ -113,14 +116,37 @@ final readonly class EloquentUserRepository implements UserRepositoryInterface
             ->update(['last_login_at' => $now, 'last_active_at' => $now]);
     }
 
-    private function throwDuplicateUser(QueryException $exception): never
+    private function throwDuplicateUser(
+        QueryException $exception,
+        ?string $phone = null,
+        ?string $email = null,
+        ?string $registrationKey = null,
+        ?string $exceptId = null,
+    ): never
     {
-        if ($exception->getCode() === '23000' || (int)($exception->errorInfo[1] ?? 0) === 1062) {
+        if (PostgresErrorClassifier::isUniqueViolation($exception)
+            && ($phone !== null || $email !== null || $registrationKey !== null)) {
+            $query = $this->model->newQueryWithoutScopes()->where(function ($builder) use ($phone, $email, $registrationKey): void {
+                if ($phone !== null) {
+                    $builder->orWhere('phone', $phone);
+                }
+                if ($email !== null) {
+                    $builder->orWhere('email', $email);
+                }
+                if ($registrationKey !== null) {
+                    $builder->orWhere('social_registration_key', $registrationKey);
+                }
+            });
+            if ($exceptId !== null) {
+                $query->where('id', '<>', $exceptId);
+            }
+            if ($query->exists()) {
             throw new DuplicateUserException(
                 'User already exists with the same phone, email or registration key',
                 ErrorCode::USER_ALREADY_EXISTS->value,
                 $exception,
             );
+            }
         }
 
         throw $exception;

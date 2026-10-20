@@ -8,45 +8,39 @@ use RuntimeException;
 use Tests\TestCase;
 
 /**
- * Deployment contract for the MySQL account boundary.
+ * Deployment contract for PostgreSQL and MongoDB account boundaries.
  *
  * These checks deliberately inspect the compose and init artifacts instead of
- * connecting as root. The opt-in integration suite exercises the same grants
- * against a real MySQL instance when MYSQL_PRIVILEGE_TEST=1 is configured.
+ * connecting as superuser.
  */
 final class MySqlLeastPrivilegeConfigTest extends TestCase
 {
-    /** @var array<string, array{user: string, password: string, database: string}> */
-    private const RUNTIME_ACCOUNTS = [
+    /** @var array<string, array{user: string, password: string, schema: string}> */
+    private const PG_RUNTIME_ACCOUNTS = [
         'auth-service' => [
             'user' => 'auth_runtime',
-            'password' => 'MYSQL_AUTH_RUNTIME_PASSWORD',
-            'database' => 'auth_db',
+            'password' => 'PG_AUTH_RUNTIME_PASSWORD',
+            'schema' => 'auth_db',
         ],
         'user-service' => [
             'user' => 'user_runtime',
-            'password' => 'MYSQL_USER_RUNTIME_PASSWORD',
-            'database' => 'user_db',
+            'password' => 'PG_USER_RUNTIME_PASSWORD',
+            'schema' => 'user_db',
         ],
         'content-service' => [
             'user' => 'content_runtime',
-            'password' => 'MYSQL_CONTENT_RUNTIME_PASSWORD',
-            'database' => 'content_db',
+            'password' => 'PG_CONTENT_RUNTIME_PASSWORD',
+            'schema' => 'content_db',
         ],
         'social-service' => [
             'user' => 'social_runtime',
-            'password' => 'MYSQL_SOCIAL_RUNTIME_PASSWORD',
-            'database' => 'social_db',
+            'password' => 'PG_SOCIAL_RUNTIME_PASSWORD',
+            'schema' => 'social_db',
         ],
         'chat-service' => [
             'user' => 'chat_runtime',
-            'password' => 'MYSQL_CHAT_RUNTIME_PASSWORD',
-            'database' => 'chat_db',
-        ],
-        'message-service' => [
-            'user' => 'message_runtime',
-            'password' => 'MYSQL_MESSAGE_RUNTIME_PASSWORD',
-            'database' => 'message_db',
+            'password' => 'PG_CHAT_RUNTIME_PASSWORD',
+            'schema' => 'chat_db',
         ],
     ];
 
@@ -54,16 +48,18 @@ final class MySqlLeastPrivilegeConfigTest extends TestCase
     {
         $compose = $this->read('compose.yaml');
 
-        self::assertStringNotContainsString('MYSQL_USER: root', $compose);
-        self::assertStringNotContainsString('MYSQL_USER=root', $compose);
-        self::assertStringNotContainsString('MYSQL_PASSWORD: ${MYSQL_PASSWORD', $compose);
-        self::assertStringNotContainsString('MYSQL_PASSWORD=${MYSQL_PASSWORD', $compose);
+        self::assertStringNotContainsString('PG_USER: postgres', $compose);
+        self::assertStringNotContainsString('PG_USER=postgres', $compose);
+        self::assertStringNotContainsString('PG_USER: root', $compose);
+        self::assertStringNotContainsString('PG_USER=root', $compose);
+        self::assertStringNotContainsString('PG_PASSWORD: ${POSTGRES_ADMIN_PASSWORD', $compose);
+        self::assertStringNotContainsString('PG_PASSWORD=${POSTGRES_ADMIN_PASSWORD', $compose);
 
         $users = [];
-        foreach (self::RUNTIME_ACCOUNTS as $service => $account) {
+        foreach (self::PG_RUNTIME_ACCOUNTS as $service => $account) {
             $section = $this->serviceSection($compose, $service);
             self::assertMatchesRegularExpression(
-                '/MYSQL_USER[=:] ?' . preg_quote($account['user'], '/') . '/',
+                '/PG_USER[=:] ?' . preg_quote($account['user'], '/') . '/',
                 $section,
                 $service . ' must use its own runtime account',
             );
@@ -72,55 +68,70 @@ final class MySqlLeastPrivilegeConfigTest extends TestCase
                 $section,
                 $service . ' must receive only its own password variable',
             );
-            self::assertStringNotContainsString('${MYSQL_PASSWORD', $section);
+            self::assertStringNotContainsString('${POSTGRES_ADMIN_PASSWORD', $section);
             self::assertUnique($users, $account['user'], 'runtime account names must be unique');
             $users[] = $account['user'];
         }
 
         $relay = $this->serviceSection($compose, 'user-outbox-relay');
-        self::assertStringContainsString('MYSQL_USER: user_outbox_relay', $relay);
-        self::assertStringContainsString('MYSQL_USER_OUTBOX_RELAY_PASSWORD', $relay);
+        self::assertStringContainsString('PG_USER: user_outbox_relay', $relay);
+        self::assertStringContainsString('PG_USER_OUTBOX_RELAY_PASSWORD', $relay);
 
         $migration = $this->serviceSection($compose, 'database-migrate');
-        self::assertStringContainsString('MYSQL_USER: migration_ddl', $migration);
-        self::assertStringContainsString('MYSQL_MIGRATION_PASSWORD', $migration);
+        self::assertStringContainsString('PG_USER: migration_ddl', $migration);
+        self::assertStringContainsString('PG_MIGRATION_PASSWORD', $migration);
+
+        $messageService = $this->serviceSection($compose, 'message-service');
+        self::assertStringContainsString('MONGODB_URI', $messageService);
+        self::assertStringContainsString('MONGODB_DATABASE', $messageService);
+        self::assertStringContainsString('MONGODB_USER=message_runtime', $messageService);
+        self::assertStringContainsString('MONGODB_RUNTIME_PASSWORD', $messageService);
+
+        $messageRelay = $this->serviceSection($compose, 'message-outbox-relay');
+        self::assertStringContainsString('MONGODB_URI', $messageRelay);
+        self::assertStringContainsString('MONGODB_DATABASE', $messageRelay);
+        self::assertStringContainsString('MONGODB_USER: message_outbox_relay', $messageRelay);
+        self::assertStringContainsString('MONGODB_RELAY_PASSWORD', $messageRelay);
+
+        $mongoMigrate = $this->serviceSection($compose, 'mongodb-migrate');
+        self::assertStringContainsString('MONGODB_URI', $mongoMigrate);
+        self::assertStringContainsString('MONGODB_DATABASE', $mongoMigrate);
+        self::assertStringContainsString('MONGODB_USER: message_migration', $mongoMigrate);
+        self::assertStringContainsString('MONGODB_MIGRATION_PASSWORD', $mongoMigrate);
     }
 
     public function testEnvironmentTemplatesDeclareEveryCredentialSeparately(): void
     {
         foreach (['.env.example', '.env.production.example'] as $path) {
             $env = $this->read($path);
-            self::assertStringContainsString('MYSQL_PASSWORD=', $env, $path);
+            self::assertStringContainsString('POSTGRES_ADMIN_PASSWORD=', $env, $path);
 
-            foreach (self::RUNTIME_ACCOUNTS as $account) {
+            foreach (self::PG_RUNTIME_ACCOUNTS as $account) {
                 self::assertMatchesRegularExpression('/^' . $account['password'] . '=/m', $env, $path);
             }
-            self::assertMatchesRegularExpression('/^MYSQL_USER_OUTBOX_RELAY_PASSWORD=/m', $env, $path);
-            self::assertMatchesRegularExpression('/^MYSQL_MIGRATION_PASSWORD=/m', $env, $path);
+            self::assertMatchesRegularExpression('/^PG_USER_OUTBOX_RELAY_PASSWORD=/m', $env, $path);
+            self::assertMatchesRegularExpression('/^PG_MIGRATION_PASSWORD=/m', $env, $path);
+            self::assertMatchesRegularExpression('/^MONGODB_URI=/m', $env, $path);
+            self::assertMatchesRegularExpression('/^MONGODB_DATABASE=/m', $env, $path);
+            foreach (['ADMIN', 'RUNTIME', 'RELAY', 'MIGRATION'] as $role) {
+                self::assertMatchesRegularExpression('/^MONGODB_' . $role . '_PASSWORD=/m', $env, $path);
+            }
         }
     }
 
     public function testInitSeparatesRuntimeDmlFromMigrationDdl(): void
     {
-        $baseline = $this->read('infra/docker/mysql/init/01-databases.sql');
-        $accounts = $this->read('infra/docker/mysql/init/02-runtime-accounts.sh');
+        $accounts = $this->read('infra/docker/postgresql/init/01-create-roles.sh');
 
-        self::assertStringNotContainsString("GRANT ALL PRIVILEGES ON *.* TO 'root'@'%'", $baseline);
-        self::assertStringContainsString('CREATE USER IF NOT EXISTS', $accounts);
-        self::assertStringContainsString('REVOKE ALL PRIVILEGES, GRANT OPTION', $accounts);
-        self::assertStringContainsString('GRANT SELECT, INSERT, UPDATE, DELETE ON \\`${database}\\`.* TO \'${user}\'@\'%\';', $accounts);
-        foreach (self::RUNTIME_ACCOUNTS as $account) {
-            self::assertStringContainsString(
-                'create_runtime_user ' . $account['user'] . ' ' . $account['database'],
-                $accounts,
-            );
+        self::assertStringContainsString('CREATE ROLE migration_ddl', $accounts);
+        foreach (self::PG_RUNTIME_ACCOUNTS as $account) {
+            self::assertStringContainsString('CREATE ROLE ' . $account['user'], $accounts);
+            self::assertStringContainsString('GRANT USAGE ON SCHEMA ' . $account['schema'], $accounts);
+            self::assertStringContainsString('ALTER DEFAULT PRIVILEGES FOR ROLE migration_ddl IN SCHEMA ' . $account['schema'], $accounts);
         }
-        self::assertStringContainsString("GRANT SELECT, UPDATE ON \\`\${database}\\`.\\`outbox_events\\` TO '\${user}'", $accounts);
-        self::assertStringContainsString('create_relay_user user_outbox_relay user_db', $accounts);
-        self::assertStringContainsString('create_relay_user message_outbox_relay message_db', $accounts);
-        self::assertStringContainsString("ON \\`%_db\\`.* TO 'migration_ddl'", $accounts);
-        self::assertStringContainsString("ON \\`%meta\\`.* TO 'migration_ddl'", $accounts);
-        self::assertStringNotContainsString("'migration_ddl'@'%' WITH GRANT OPTION", $accounts);
+        self::assertStringContainsString('CREATE ROLE user_outbox_relay', $accounts);
+        self::assertStringContainsString('GRANT USAGE ON SCHEMA user_db TO user_runtime, user_outbox_relay', $accounts);
+        self::assertStringNotContainsString('SUPERUSER', $accounts);
     }
 
     public function testRuntimeBootstrapDefaultsCannotFallBackToRoot(): void
@@ -133,11 +144,15 @@ final class MySqlLeastPrivilegeConfigTest extends TestCase
             'services/chat-service/bin/server.php',
             'services/message-service/bin/server.php',
             'services/user-service/bin/outbox-relay.php',
+            'services/message-service/bin/outbox-relay.php',
             'phinx.php',
         ];
 
         foreach ($files as $file) {
-            self::assertStringNotContainsString("getenv('MYSQL_USER') ?: 'root'", $this->read($file), $file);
+            $content = $this->read($file);
+            self::assertStringNotContainsString("getenv('PG_USER') ?: 'postgres'", $content, $file);
+            self::assertStringNotContainsString("getenv('PG_USER') ?: 'root'", $content, $file);
+            self::assertStringNotContainsString("getenv('MYSQL_USER') ?: 'root'", $content, $file);
         }
     }
 

@@ -8,6 +8,7 @@ require_once __DIR__ . '/../../../vendor/autoload.php';
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Contracts\Gen\Content\V1\ContentServiceInterface;
 use Packages\Database\EloquentConnection;
+use Packages\Database\PostgresConnectionFactory;
 use Packages\GrpcCommon\Health\RoadRunnerHealthService;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Packages\GrpcCommon\LeaseMaintainingRelay;
@@ -30,29 +31,19 @@ use Spiral\RoadRunner\GRPC\Server;
 MetricsHttpServer::startInBackground();
 
 $logger = new JsonLogger('content-service', getenv('SERVICE_INSTANCE_ID') ?: 'content-01');
-$mysqlHost = getenv('MYSQL_HOST') ?: '127.0.0.1';
-$mysqlPort = getenv('MYSQL_PORT') ?: '3306';
-$mysqlUser = getenv('MYSQL_USER') ?: 'content_runtime';
-$mysqlPass = getenv('MYSQL_PASSWORD') ?: '';
-$mysqlDb = getenv('CONTENT_DB_NAME') ?: 'content_db';
 $pdo = null;
 
 for ($attempt = 0; $attempt < 15; $attempt++) {
     try {
-        $pdo = new PDO(
-            "mysql:host=$mysqlHost;port=$mysqlPort;dbname=$mysqlDb;charset=utf8mb4",
-            $mysqlUser,
-            $mysqlPass,
-            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC],
-        );
+        $pdo = PostgresConnectionFactory::fromEnvironment();
         break;
     } catch (Throwable $e) {
-        $logger->warning('Waiting for MySQL (' . $mysqlDb . ')...', ['exception' => $e::class]);
+        $logger->warning('Waiting for PostgreSQL...', ['exception' => $e::class]);
         sleep(2);
     }
 }
 if (!$pdo instanceof PDO) {
-    $logger->error('Could not connect to MySQL after retries');
+    $logger->error('Could not connect to PostgreSQL after retries');
     exit(1);
 }
 

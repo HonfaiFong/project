@@ -80,6 +80,11 @@ final class UserOutboxTransactionTest extends TestCase
             $table->integer('status');
             $table->string('available_at');
             $table->string('created_at');
+            $table->integer('attempt_count')->default(0);
+            $table->string('claimed_at')->nullable();
+            $table->string('lease_until')->nullable();
+            $table->string('claim_token')->nullable();
+            $table->string('published_at')->nullable();
         });
 
         $this->users = EloquentConnection::model(UserModel::class, $this->pdo);

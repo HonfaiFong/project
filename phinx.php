@@ -2,67 +2,74 @@
 
 declare(strict_types=1);
 
-// 咨询锁与 Phinx 共用同一 PDO 会话；MySQL DDL 会隐式提交，因此事务无法串行化整个迁移批次。
-$prefixValue = getenv('MYSQL_SCHEMA_PREFIX');
+use Packages\Database\PostgresConnectionFactory;
+
+$prefixValue = getenv('PG_SCHEMA_PREFIX');
 $prefix = $prefixValue === false ? '' : $prefixValue;
-if (!preg_match('/\A[a-zA-Z0-9_]*\z/', $prefix) || strlen($prefix) > 54) {
-    throw new RuntimeException('MYSQL_SCHEMA_PREFIX must contain only letters, digits and underscores (maximum 54 characters)');
+if (preg_match('/\A[a-zA-Z0-9_]*\z/', $prefix) !== 1 || strlen($prefix) > 53) {
+    throw new RuntimeException('PG_SCHEMA_PREFIX must contain ASCII letters, digits and underscores (maximum 53 bytes)');
 }
-$timeoutValue = getenv('MYSQL_MIGRATION_LOCK_TIMEOUT');
+$timeoutValue = getenv('PG_MIGRATION_LOCK_TIMEOUT');
 $lockTimeout = filter_var($timeoutValue === false ? '30' : $timeoutValue, FILTER_VALIDATE_INT, [
     'options' => ['min_range' => 0, 'max_range' => 300],
 ]);
 if ($lockTimeout === false) {
-    throw new RuntimeException('MYSQL_MIGRATION_LOCK_TIMEOUT must be between 0 and 300 seconds');
+    throw new RuntimeException('PG_MIGRATION_LOCK_TIMEOUT must be between 0 and 300 seconds');
 }
+$migrationUser = getenv('PG_MIGRATION_USER') ?: 'migration_ddl';
+$migrationPassword = getenv('PG_MIGRATION_PASSWORD');
+if ($migrationPassword === false) {
+    throw new RuntimeException('PG_MIGRATION_PASSWORD is required');
+}
+$database = getenv('PG_DATABASE') ?: 'social_backend';
+$metaSchema = $prefix . 'meta';
+$pdo = PostgresConnectionFactory::fromEnvironment([
+    'PG_DATABASE' => $database,
+    'PG_USER' => $migrationUser,
+    'PG_PASSWORD' => $migrationPassword,
+    'PG_SCHEMA' => $metaSchema,
+    'PG_APPLICATION_NAME' => 'social-backend-migrations',
+    'PG_STATEMENT_TIMEOUT_MS' => getenv('PG_MIGRATION_STATEMENT_TIMEOUT_MS') ?: '60000',
+    'PG_LOCK_TIMEOUT_MS' => getenv('PG_MIGRATION_LOCK_TIMEOUT_MS') ?: '10000',
+]);
 
-$password = getenv('MYSQL_MIGRATION_PASSWORD');
-if ($password === false) {
-    // Compose passes the migration secret as MYSQL_PASSWORD for Phinx; direct
-    // invocations can use the explicit MYSQL_MIGRATION_PASSWORD name instead.
-    $password = getenv('MYSQL_PASSWORD');
-}
-$pdo = new PDO(
-    sprintf('mysql:host=%s;port=%d;charset=utf8mb4', getenv('MYSQL_HOST') ?: '127.0.0.1', (int)(getenv('MYSQL_PORT') ?: 3306)),
-    getenv('MYSQL_USER') ?: 'migration_ddl',
-    $password === false ? '' : $password,
-    [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_EMULATE_PREPARES => false,
-        PDO::ATTR_PERSISTENT => false,
-        PDO::ATTR_TIMEOUT => 10,
-        PDO::MYSQL_ATTR_MULTI_STATEMENTS => true,
-    ],
-);
-$lockName = 'social_migrations_' . substr(hash('sha256', $prefix), 0, 40);
-$lock = $pdo->prepare('SELECT GET_LOCK(:name, :timeout)');
-$lock->execute(['name' => $lockName, 'timeout' => $lockTimeout]);
-if ((int)$lock->fetchColumn() !== 1) {
-    throw new RuntimeException('Could not acquire the database migration lock; another migration may be running');
-}
-register_shutdown_function(static function () use ($pdo, $lockName): void {
+// Session-level PostgreSQL advisory lock survives Phinx's transactional DDL and
+// is released automatically if this process exits or loses its connection.
+$lockInput = $database . ':' . $prefix;
+$lockKey = (string)hexdec(substr(hash('sha256', $lockInput), 0, 15));
+$deadline = hrtime(true) + ($lockTimeout * 1_000_000_000);
+$lock = $pdo->prepare('SELECT pg_try_advisory_lock(CAST(:key AS BIGINT))');
+do {
+    $lock->execute(['key' => $lockKey]);
+    $acquired = $lock->fetchColumn();
+    $isAcquired = $acquired !== false && $acquired !== null && $acquired !== 'f' && $acquired !== '0' && $acquired !== 0 && $acquired !== '';
+    if ($isAcquired) {
+        break;
+    }
+    if (hrtime(true) >= $deadline) {
+        throw new RuntimeException('Could not acquire the PostgreSQL migration advisory lock');
+    }
+    usleep(100_000);
+} while (true);
+register_shutdown_function(static function () use ($pdo, $lockKey): void {
     try {
-        $release = $pdo->prepare('SELECT RELEASE_LOCK(:name)');
-        $release->execute(['name' => $lockName]);
+        $release = $pdo->prepare('SELECT pg_advisory_unlock(CAST(:key AS BIGINT))');
+        $release->execute(['key' => $lockKey]);
     } catch (Throwable) {
-        // 关闭非持久 PDO 连接也会释放此锁。
+        // Closing the non-persistent PDO also releases the session lock.
     }
 });
 
-// 此处仅初始化迁移记录数据库，标识符已在上方校验；所有业务表结构变更均应通过版本化迁移完成。
-$metaDatabase = $prefix . 'meta';
-$pdo->exec("CREATE DATABASE IF NOT EXISTS `$metaDatabase` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-$pdo->exec("USE `$metaDatabase`");
-
 return [
-    'paths' => ['migrations' => __DIR__ . '/database/migrations'],
+    'paths' => ['migrations' => __DIR__ . '/database/postgresql/migrations'],
     'environments' => [
         'default_environment' => 'default',
         'default' => [
-            'adapter' => 'mysql',
-            'name' => $metaDatabase,
+            'adapter' => 'pgsql',
+            'name' => $database,
             'connection' => $pdo,
-            'migration_table' => $metaDatabase . '.phinxlog',
+            'schema' => $metaSchema,
+            'migration_table' => 'phinxlog',
             'schema_prefix' => $prefix,
         ],
     ],

@@ -6,12 +6,12 @@ namespace Packages\Outbox;
 
 interface OutboxRelayStore
 {
-    public function releaseStaleClaims(int $olderThanSeconds = 300): int;
+    public function releaseStaleClaims(): int;
 
-    /** @return array<OutboxRecord> */
+    /** @return list<OutboxClaim> */
     public function claimPending(int $limit = 50): array;
 
-    public function markPublished(string $id): void;
+    public function markPublished(OutboxClaim $claim): bool;
 
-    public function markFailed(string $id, int $retryDelaySeconds = 10): void;
+    public function markFailed(OutboxClaim $claim, int $retryDelaySeconds = 10): bool;
 }

@@ -17,11 +17,12 @@ use Services\ChatService\Domain\IdGenerator as ChatIdGenerator;
 use Services\ChatService\Domain\Identity\UserIdentityClient;
 use Services\ChatService\Domain\Social\AllowAllBlockStatusResolver;
 use Services\ChatService\Infrastructure\PdoChatRepository;
+use Packages\GrpcCommon\OperationBudget;
 use Services\MessageService\Application\MessageApplicationService;
 use Services\MessageService\Domain\ChatMemberSnapshotClient;
 use Services\MessageService\Domain\Exception\MessageException;
 use Services\MessageService\Domain\IdGenerator as MessageIdGenerator;
-use Services\MessageService\Infrastructure\PdoMessageRepository;
+use Tests\Support\InMemoryMessageStore;
 use Tests\TestCase;
 
 final class ChatMessagePersistenceTest extends TestCase
@@ -105,14 +106,12 @@ final class ChatMessagePersistenceTest extends TestCase
             {
             }
 
-            public function getConversationMemberSnapshot(string $trustedUserId, string $conversationId): array
+            public function getConversationMemberSnapshot(string $trustedUserId, string $conversationId, ?OperationBudget $budget = null): array
             {
                 return $this->chat->getConversationMemberSnapshot($trustedUserId, $conversationId);
             }
         };
-        $messagePdo = new PDO('sqlite::memory:');
-        $messageRepository = new PdoMessageRepository($messagePdo);
-        $messageRepository->ensureSchema();
+        $messageStore = new InMemoryMessageStore();
         $messageIds = new class implements MessageIdGenerator {
             private int $next = 1200;
 
@@ -122,7 +121,8 @@ final class ChatMessagePersistenceTest extends TestCase
             }
         };
         $messages = new MessageApplicationService(
-            repository: $messageRepository,
+            repository: $messageStore,
+            transactions: $messageStore,
             chat: $chatClient,
             ids: $messageIds,
             clock: static fn (): string => '2026-10-11 00:00:00.000',
@@ -157,12 +157,12 @@ final class ChatMessagePersistenceTest extends TestCase
             }
         };
         $handler = new MessageCreatedHandler($chatRepository, $chat, $realtime);
-        $eventRow = $messagePdo->query('SELECT * FROM outbox_events')->fetch(PDO::FETCH_ASSOC);
+        $eventRow = $messageStore->outbox[0];
         $event = new EventEnvelope(
             eventId: (string)$eventRow['event_id'], eventType: EventTypes::MESSAGE_CREATED,
             eventVersion: 1, occurredAt: '2026-10-11T00:00:00Z', traceId: '',
             producer: 'message-service', key: $conversationId,
-            payload: json_decode((string)$eventRow['payload'], true, 512, JSON_THROW_ON_ERROR),
+            payload: (array)$eventRow['payload'],
         );
         try {
             $handler->handle($event);

@@ -6,6 +6,7 @@ require_once __DIR__ . '/../../../vendor/autoload.php';
 
 use Packages\Outbox\OutboxRelay;
 use Packages\Database\EloquentConnection;
+use Packages\Database\PostgresConnectionFactory;
 use Packages\Outbox\OutboxRepository;
 use Packages\Outbox\RabbitMqEventPublisher;
 use Packages\Observability\MetricsHttpServer;
@@ -15,14 +16,7 @@ MetricsHttpServer::startInBackground();
 
 for (;;) {
     try {
-        $pdo = new PDO(sprintf(
-            'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
-            getenv('MYSQL_HOST') ?: 'mysql',
-            getenv('MYSQL_PORT') ?: '3306',
-            getenv('OUTBOX_DB_NAME') ?: (getenv('USER_DB_NAME') ?: 'user_db'),
-        ), getenv('MYSQL_USER') ?: 'user_outbox_relay', getenv('MYSQL_PASSWORD') ?: '', [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        ]);
+        $pdo = PostgresConnectionFactory::fromEnvironment();
         $connection = new AMQPStreamConnection(
             getenv('RABBITMQ_HOST') ?: 'rabbitmq',
             (int)(getenv('RABBITMQ_PORT') ?: 5672),
@@ -30,7 +24,7 @@ for (;;) {
             getenv('RABBITMQ_PASSWORD') ?: '',
         );
         $channel = $connection->channel();
-        $relay = new OutboxRelay(new OutboxRepository($pdo), new RabbitMqEventPublisher($channel, getenv('OUTBOX_PRODUCER') ?: 'user-service'));
+        $relay = new OutboxRelay(new OutboxRepository($pdo), new RabbitMqEventPublisher($channel, 'user-service'));
         for (;;) {
             if ($relay->runOnce() === 0) {
                 usleep(500_000);

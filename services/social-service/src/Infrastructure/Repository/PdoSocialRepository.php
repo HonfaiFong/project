@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Services\SocialService\Infrastructure\Repository;
 
 use PDO;
-use PDOException;
 use Services\SocialService\Domain\Repository\SocialRepositoryInterface;
 
 final readonly class PdoSocialRepository implements SocialRepositoryInterface
@@ -40,41 +39,25 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function insertLike(string $id, string $personaId, int $targetType, string $targetId): bool
     {
         $statement = $this->pdo->prepare(
-            'INSERT INTO `likes` (`id`, `persona_id`, `target_type`, `target_id`, `created_at`) '
-            . 'VALUES (:id, :persona_id, :target_type, :target_id, :created_at)',
+            'INSERT INTO likes (id, persona_id, target_type, target_id, created_at) '
+            . 'VALUES (:id, :persona_id, :target_type, :target_id, :created_at) '
+            . 'ON CONFLICT (persona_id, target_type, target_id) DO NOTHING RETURNING id',
         );
-
-        try {
-            $statement->execute([
-                'id' => $id,
-                'persona_id' => $personaId,
-                'target_type' => $targetType,
-                'target_id' => $targetId,
-                'created_at' => $this->now(),
-            ]);
-        } catch (PDOException $exception) {
-            // 1062 covers the business unique key and the primary key alike.
-            // Only a business-key duplicate is an idempotent replay: confirm
-            // the row with a current read (a plain read can return the stale
-            // REPEATABLE READ snapshot), otherwise the original error must
-            // propagate (for example, a primary key id collision).
-            if ($this->isDuplicateEntry($exception)
-                && $this->likeExistsForCurrentRead($personaId, $targetType, $targetId)
-            ) {
-                return false;
-            }
-
-            throw $exception;
-        }
-
-        return true;
+        $statement->execute([
+            'id' => $id,
+            'persona_id' => $personaId,
+            'target_type' => $targetType,
+            'target_id' => $targetId,
+            'created_at' => $this->now(),
+        ]);
+        return $statement->fetchColumn() !== false;
     }
 
     public function deleteLike(string $personaId, int $targetType, string $targetId): void
     {
         $statement = $this->pdo->prepare(
-            'DELETE FROM `likes` WHERE `persona_id` = :persona_id '
-            . 'AND `target_type` = :target_type AND `target_id` = :target_id',
+            'DELETE FROM likes WHERE persona_id = :persona_id '
+            . 'AND target_type = :target_type AND target_id = :target_id',
         );
         $statement->execute([
             'persona_id' => $personaId,
@@ -86,8 +69,8 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function hasLike(string $personaId, int $targetType, string $targetId): bool
     {
         $statement = $this->pdo->prepare(
-            'SELECT 1 FROM `likes` WHERE `persona_id` = :persona_id '
-            . 'AND `target_type` = :target_type AND `target_id` = :target_id LIMIT 1',
+            'SELECT 1 FROM likes WHERE persona_id = :persona_id '
+            . 'AND target_type = :target_type AND target_id = :target_id LIMIT 1',
         );
         $statement->execute([
             'persona_id' => $personaId,
@@ -110,8 +93,8 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
 
         $placeholders = implode(', ', array_fill(0, count($targetIds), '?'));
         $statement = $this->pdo->prepare(
-            'SELECT `target_id` FROM `likes` WHERE `persona_id` = ? '
-            . 'AND `target_type` = ? AND `target_id` IN (' . $placeholders . ')',
+            'SELECT target_id FROM likes WHERE persona_id = ? '
+            . 'AND target_type = ? AND target_id IN (' . $placeholders . ')',
         );
         $parameters = [$personaId, $targetType, ...array_values($targetIds)];
         $statement->execute($parameters);
@@ -128,8 +111,8 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function hasFollow(string $followerPersonaId, string $followeePersonaId): bool
     {
         $statement = $this->pdo->prepare(
-            'SELECT 1 FROM `follows` WHERE `follower_persona_id` = :follower '
-            . 'AND `followee_persona_id` = :followee LIMIT 1',
+            'SELECT 1 FROM follows WHERE follower_persona_id = :follower '
+            . 'AND followee_persona_id = :followee LIMIT 1',
         );
         $statement->execute(['follower' => $followerPersonaId, 'followee' => $followeePersonaId]);
 
@@ -139,7 +122,7 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function insertFollow(string $id, string $followerPersonaId, string $followeePersonaId): void
     {
         $statement = $this->pdo->prepare(
-            'INSERT INTO `follows` (`id`, `follower_persona_id`, `followee_persona_id`, `created_at`) '
+            'INSERT INTO follows (id, follower_persona_id, followee_persona_id, created_at) '
             . 'VALUES (:id, :follower, :followee, :created_at)',
         );
         $statement->execute([
@@ -153,8 +136,8 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function deleteFollow(string $followerPersonaId, string $followeePersonaId): void
     {
         $statement = $this->pdo->prepare(
-            'DELETE FROM `follows` WHERE `follower_persona_id` = :follower '
-            . 'AND `followee_persona_id` = :followee',
+            'DELETE FROM follows WHERE follower_persona_id = :follower '
+            . 'AND followee_persona_id = :followee',
         );
         $statement->execute(['follower' => $followerPersonaId, 'followee' => $followeePersonaId]);
     }
@@ -162,8 +145,8 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function hasBlock(string $blockerUserId, string $blockedUserId): bool
     {
         $statement = $this->pdo->prepare(
-            'SELECT 1 FROM `blocks` WHERE `blocker_user_id` = :blocker '
-            . 'AND `blocked_user_id` = :blocked LIMIT 1',
+            'SELECT 1 FROM blocks WHERE blocker_user_id = :blocker '
+            . 'AND blocked_user_id = :blocked LIMIT 1',
         );
         $statement->execute(['blocker' => $blockerUserId, 'blocked' => $blockedUserId]);
 
@@ -173,9 +156,9 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function insertBlock(string $id, string $blockerUserId, string $blockedUserId): void
     {
         $statement = $this->pdo->prepare(
-            'INSERT INTO `blocks` (`id`, `blocker_user_id`, `blocked_user_id`, `created_at`) '
+            'INSERT INTO blocks (id, blocker_user_id, blocked_user_id, created_at) '
             . 'VALUES (:id, :blocker, :blocked, :created_at) '
-            . 'ON DUPLICATE KEY UPDATE `id` = `id`',
+            . 'ON CONFLICT (blocker_user_id, blocked_user_id) DO NOTHING',
         );
         $statement->execute([
             'id' => $id,
@@ -188,8 +171,8 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function deleteBlock(string $blockerUserId, string $blockedUserId): void
     {
         $statement = $this->pdo->prepare(
-            'DELETE FROM `blocks` WHERE `blocker_user_id` = :blocker '
-            . 'AND `blocked_user_id` = :blocked',
+            'DELETE FROM blocks WHERE blocker_user_id = :blocker '
+            . 'AND blocked_user_id = :blocked',
         );
         $statement->execute(['blocker' => $blockerUserId, 'blocked' => $blockedUserId]);
     }
@@ -197,13 +180,10 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
     public function hasBidirectionalBlock(string $userIdA, string $userIdB): bool
     {
         $statement = $this->pdo->prepare(
-            'SELECT 1 FROM `blocks` WHERE '
-            . '(`blocker_user_id` = ? AND `blocked_user_id` = ?) '
-            . 'OR (`blocker_user_id` = ? AND `blocked_user_id` = ?) LIMIT 1',
+            'SELECT 1 FROM blocks WHERE '
+            . '(blocker_user_id = ? AND blocked_user_id = ?) '
+            . 'OR (blocker_user_id = ? AND blocked_user_id = ?) LIMIT 1',
         );
-        // MySQL native prepares reject reusing a named placeholder in the
-        // same statement. Positional parameters keep both directions bound
-        // explicitly and work with ATTR_EMULATE_PREPARES=false.
         $statement->execute([$userIdA, $userIdB, $userIdB, $userIdA]);
 
         return $statement->fetchColumn() !== false;
@@ -214,37 +194,4 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
         return gmdate('Y-m-d H:i:s.v');
     }
 
-    /**
-     * ER_DUP_ENTRY (1062) only. Matching SQLSTATE 23000 alone would also
-     * swallow CHECK/foreign-key violations, and rowCount() cannot be used
-     * instead because PDO::MYSQL_ATTR_FOUND_ROWS reports an existing,
-     * unchanged row as affected too.
-     */
-    private function isDuplicateEntry(PDOException $exception): bool
-    {
-        return (int)($exception->errorInfo[1] ?? 0) === 1062;
-    }
-
-    /**
-     * Current read of the business key. The duplicate error is raised by the
-     * latest committed row while a REPEATABLE READ snapshot can predate it,
-     * so the confirmation must be a locking read. FOR SHARE, not FOR UPDATE:
-     * a failed duplicate INSERT retains a shared lock on the row, so several
-     * concurrent losers upgrading S to X deadlock (observed 40001); FOR
-     * SHARE stays compatible with those shared locks.
-     */
-    private function likeExistsForCurrentRead(string $personaId, int $targetType, string $targetId): bool
-    {
-        $statement = $this->pdo->prepare(
-            'SELECT 1 FROM `likes` WHERE `persona_id` = :persona_id '
-            . 'AND `target_type` = :target_type AND `target_id` = :target_id LIMIT 1 FOR SHARE',
-        );
-        $statement->execute([
-            'persona_id' => $personaId,
-            'target_type' => $targetType,
-            'target_id' => $targetId,
-        ]);
-
-        return $statement->fetchColumn() !== false;
-    }
 }

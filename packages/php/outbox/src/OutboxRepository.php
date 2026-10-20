@@ -4,26 +4,27 @@ declare(strict_types=1);
 
 namespace Packages\Outbox;
 
-use PDO;
+use DateTimeImmutable;
+use DateTimeInterface;
+use DateTimeZone;
 use Exception;
-use Throwable;
-use Packages\IdGenerator\Snowflake;
-use Packages\Database\EloquentConnection;
-use Packages\Outbox\Model\OutboxEvent;
 use Illuminate\Database\Query\Builder;
+use Packages\Database\EloquentConnection;
+use Packages\IdGenerator\Snowflake;
+use Packages\Outbox\Model\OutboxEvent;
+use PDO;
+use Throwable;
 
 final readonly class OutboxRepository implements EventOutboxInterface, OutboxRelayStore
 {
     private OutboxEvent $model;
 
-    public function __construct(
-        PDO $pdo,
-        private ?Snowflake $snowflake = null
-    ) {
+    public function __construct(PDO $pdo, private ?Snowflake $snowflake = null)
+    {
         $this->model = EloquentConnection::model(OutboxEvent::class, $pdo);
     }
 
-    /** @throws Exception 安全随机数生成、JSON 编码或持久化失败时抛出。 */
+    /** @throws Exception */
     public function recordEvent(
         string $eventId,
         string $aggregateType,
@@ -32,49 +33,36 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
         int $eventVersion,
         array $payload,
         string $eventKey,
-        string $traceId
+        string $traceId,
     ): string {
         $id = $this->snowflake ? $this->snowflake->nextId() : (string)(time() * 1000 + random_int(100, 999));
         $now = gmdate('Y-m-d H:i:s.v');
         $jsonPayload = json_encode($payload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-
         $this->model->newQuery()->create([
-            'id'             => $id,
-            'event_id'       => $eventId,
+            'id' => $id,
+            'event_id' => $eventId,
             'aggregate_type' => $aggregateType,
-            'aggregate_id'   => $aggregateId,
-            'event_key'      => $eventKey,
-            'trace_id'       => $traceId,
-            'event_type'     => $eventType,
-            'event_version'  => $eventVersion,
-            'payload'        => $jsonPayload,
-            'status'         => 0,
-            'available_at'   => $now,
-            'created_at'     => $now,
+            'aggregate_id' => $aggregateId,
+            'event_key' => $eventKey,
+            'trace_id' => $traceId,
+            'event_type' => $eventType,
+            'event_version' => $eventVersion,
+            'payload' => $jsonPayload,
+            'status' => 0,
+            'available_at' => $now,
+            'created_at' => $now,
+            'attempt_count' => 0,
         ]);
-
         return $id;
     }
 
-    /**
-     * 为当前工作进程原子领取待发布事件。
-     *
-     * 在事务内执行 SELECT ... FOR UPDATE SKIP LOCKED，并在提交前将领取行改为 status=2，确保并发工作进程不会领取同一
-     * 行。崩溃进程会留下已领取行，由 releaseStaleClaims() 重新放回队列。
-     * 相同消息代理 event_key 下更早的未发布行会阻止领取，即使它们的聚合类型和 ID 不同。
-     *
-     * 状态：0 = 待发布，1 = 已发布，2 = 已领取（处理中）。
-     *
-     * @throws Throwable 领取事务失败时抛出。
-     * @return array<OutboxRecord>
-     */
+    /** @return list<OutboxClaim> @throws Throwable */
     public function claimPending(int $limit = 50): array
     {
+        $limit = max(1, min(500, $limit));
         return $this->model->getConnection()->transaction(function () use ($limit): array {
-            $query = $this->model->newQuery();
-            $query->from('outbox_events as candidate')
-                ->select('candidate.*')
-                ->where('candidate.status', 0)
+            $query = $this->model->newQuery()->from('outbox_events as candidate')
+                ->select('candidate.*')->where('candidate.status', 0)
                 ->where('candidate.available_at', '<=', gmdate('Y-m-d H:i:s.v'))
                 ->whereNotExists(function (Builder $query): void {
                     $query->select('earlier.id')->from('outbox_events as earlier')
@@ -85,63 +73,104 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
                 ->orderBy('candidate.id')->limit($limit)
                 ->lock('FOR UPDATE SKIP LOCKED');
             $rows = $query->get();
-
-            if ($rows->isNotEmpty()) {
-                $this->model->newQuery()->whereIn('id', $rows->modelKeys())->where('status', 0)
-                    ->update(['status' => 2, 'claimed_at' => gmdate('Y-m-d H:i:s.v')]);
+            $claims = [];
+            $connection = $this->model->getConnection();
+            foreach ($rows as $event) {
+                $rawId = $event->id ?? null;
+                if ($rawId === null) {
+                    continue;
+                }
+                $id = (string) $rawId;
+                $token = bin2hex(random_bytes(24));
+                $leaseUntil = $connection->getDriverName() === 'pgsql'
+                    ? $connection->raw("CURRENT_TIMESTAMP + INTERVAL '90 seconds'")
+                    : gmdate('Y-m-d H:i:s.v', time() + 90);
+                $updated = $this->model->newQuery()->where('id', $id)->where('status', 0)->update([
+                    'status' => 2,
+                    'claim_token' => $token,
+                    'claimed_at' => $connection->raw('CURRENT_TIMESTAMP'),
+                    'lease_until' => $leaseUntil,
+                    'attempt_count' => $connection->raw('attempt_count + 1'),
+                ]);
+                if ($updated !== 1) {
+                    continue;
+                }
+                $claimed = $this->model->newQuery()->where('id', $id)->where('claim_token', $token)->firstOrFail();
+                $row = $claimed->getAttributes();
+                $claims[] = new OutboxClaim($this->record($row), $token, $this->dateString($row['lease_until']));
             }
-
-            return $rows->map(static function (OutboxEvent $event): OutboxRecord {
-                $row = $event->getAttributes();
-
-                return new OutboxRecord(
-                    eventId: (string)$row['event_id'],
-                    aggregateType: (string)$row['aggregate_type'],
-                    aggregateId: (string)$row['aggregate_id'],
-                    eventType: (string)$row['event_type'],
-                    eventVersion: (int)$row['event_version'],
-                    payload: json_decode((string)$row['payload'], true) ?: [],
-                    eventKey: (string)$row['event_key'],
-                    traceId: (string)$row['trace_id'],
-                    status: 2,
-                    availableAt: (string)$row['available_at'],
-                    publishedAt: $row['published_at'] ? (string)$row['published_at'] : null,
-                    createdAt: (string)$row['created_at'],
-                    id: (string)$row['id'],
-                );
-            })->all();
+            return $claims;
         });
     }
 
-    /**
-     * 将领取时间早于 $olderThanSeconds 秒之前的行放回待发布队列，用于恢复发布中途崩溃的工作进程留下的事件。
-     *
-     * @return int 已释放的行数
-     */
-    public function releaseStaleClaims(int $olderThanSeconds = 300): int
+    public function releaseStaleClaims(): int
     {
-        $cutoff = gmdate('Y-m-d H:i:s.v', time() - $olderThanSeconds);
-        return $this->model->newQuery()->where('status', 2)->whereNotNull('claimed_at')
-            ->where('claimed_at', '<', $cutoff)->update(['status' => 0, 'claimed_at' => null]);
+        return $this->model->newQuery()->where('status', 2)->whereNotNull('lease_until')
+            ->where('lease_until', '<', $this->model->getConnection()->raw('CURRENT_TIMESTAMP'))
+            ->update(['status' => 0, 'claimed_at' => null, 'lease_until' => null, 'claim_token' => null]);
     }
 
-    /** Number of unpublished events, including rows currently claimed by a relay. */
     public function backlogDepth(): int
     {
         return (int)$this->model->newQuery()->whereIn('status', [0, 2])->count();
     }
 
-    public function markPublished(string $id): void
+    public function markPublished(OutboxClaim $claim): bool
     {
-        $now = gmdate('Y-m-d H:i:s.v');
-        $this->model->newQuery()->whereKey($id)->where('status', 2)
-            ->update(['status' => 1, 'published_at' => $now, 'claimed_at' => null]);
+        return $this->model->newQuery()->where('event_id', $claim->record->eventId)->where('status', 2)
+            ->where('claim_token', $claim->claimToken)->update([
+                'status' => 1,
+                'published_at' => $this->model->getConnection()->raw('CURRENT_TIMESTAMP'),
+                'claimed_at' => null,
+                'lease_until' => null,
+                'claim_token' => null,
+            ]) === 1;
     }
 
-    public function markFailed(string $id, int $retryDelaySeconds = 10): void
+    public function markFailed(OutboxClaim $claim, int $retryDelaySeconds = 10): bool
     {
-        $nextAvailable = gmdate('Y-m-d H:i:s.v', time() + $retryDelaySeconds);
-        $this->model->newQuery()->whereKey($id)->where('status', 2)
-            ->update(['status' => 0, 'claimed_at' => null, 'available_at' => $nextAvailable]);
+        $delay = max(0, min(86400, $retryDelaySeconds));
+        $connection = $this->model->getConnection();
+        $availableAt = $connection->getDriverName() === 'pgsql'
+            ? $connection->raw("CURRENT_TIMESTAMP + INTERVAL '{$delay} seconds'")
+            : gmdate('Y-m-d H:i:s.v', time() + $delay);
+        return $this->model->newQuery()->where('event_id', $claim->record->eventId)->where('status', 2)
+            ->where('claim_token', $claim->claimToken)->update([
+                'status' => 0,
+                'claimed_at' => null,
+                'lease_until' => null,
+                'claim_token' => null,
+                'available_at' => $availableAt,
+            ]) === 1;
+    }
+
+    /** @param array<string,mixed> $row */
+    private function record(array $row): OutboxRecord
+    {
+        return new OutboxRecord(
+            eventId: (string)$row['event_id'],
+            aggregateType: (string)$row['aggregate_type'],
+            aggregateId: (string)$row['aggregate_id'],
+            eventType: (string)$row['event_type'],
+            eventVersion: (int)$row['event_version'],
+            payload: json_decode((string)$row['payload'], true, flags: JSON_THROW_ON_ERROR) ?: [],
+            eventKey: (string)$row['event_key'],
+            traceId: (string)$row['trace_id'],
+            status: 2,
+            availableAt: $this->dateString($row['available_at']),
+            publishedAt: isset($row['published_at']) ? $this->dateString($row['published_at']) : null,
+            createdAt: $this->dateString($row['created_at']),
+            id: (string)$row['id'],
+        );
+    }
+
+    private function dateString(mixed $value): string
+    {
+        if ($value instanceof DateTimeInterface) {
+            return DateTimeImmutable::createFromInterface($value)
+                ->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.v');
+        }
+        return (new DateTimeImmutable((string)$value, new DateTimeZone('UTC')))
+            ->setTimezone(new DateTimeZone('UTC'))->format('Y-m-d H:i:s.v');
     }
 }

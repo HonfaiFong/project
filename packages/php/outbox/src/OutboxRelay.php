@@ -24,14 +24,20 @@ final readonly class OutboxRelay
         }
         $events = $this->outbox->claimPending(1);
         MetricsRegistry::instance()->inc('outbox_events_claimed_total', [], (float)count($events));
-        foreach ($events as $event) {
+        foreach ($events as $claim) {
             try {
-                $this->publisher->publish($event);
-                $this->outbox->markPublished((string)$event->id);
-                MetricsRegistry::instance()->inc('outbox_events_published_total');
+                $this->publisher->publish($claim->record);
+                if ($this->outbox->markPublished($claim)) {
+                    MetricsRegistry::instance()->inc('outbox_events_published_total');
+                } else {
+                    MetricsRegistry::instance()->inc('outbox_claims_lost_total');
+                }
             } catch (Throwable $exception) {
-                $this->outbox->markFailed((string)$event->id);
-                MetricsRegistry::instance()->inc('outbox_publish_failures_total');
+                if ($this->outbox->markFailed($claim)) {
+                    MetricsRegistry::instance()->inc('outbox_publish_failures_total');
+                } else {
+                    MetricsRegistry::instance()->inc('outbox_claims_lost_total');
+                }
                 throw $exception;
             }
         }

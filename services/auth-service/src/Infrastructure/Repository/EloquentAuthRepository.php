@@ -9,6 +9,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use Packages\IdGenerator\Snowflake;
 use Packages\Database\EloquentConnection;
+use Packages\Database\PostgresErrorClassifier;
 use PDO;
 use PDOException;
 use RuntimeException;
@@ -79,7 +80,7 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
 
         $id = $this->snowflake->nextId();
         try {
-            $this->device->newQuery()->create([
+            $this->device->getConnection()->transaction(fn () => $this->device->newQuery()->create([
                 'id' => $id,
                 'user_id' => $userId,
                 'device_uuid' => $deviceUuid,
@@ -89,7 +90,7 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
                 'last_active_at' => $now,
                 'created_at' => $now,
                 'updated_at' => $now,
-            ]);
+            ]));
         } catch (QueryException $exception) {
             if (!$this->isUniqueConstraintViolation($exception)) {
                 throw $exception;
@@ -312,12 +313,6 @@ final readonly class EloquentAuthRepository implements AuthRepositoryInterface
      */
     private function isUniqueConstraintViolation(QueryException $exception): bool
     {
-        $previous = $exception->getPrevious();
-        if (!$previous instanceof PDOException) {
-            return false;
-        }
-
-        return $previous->getCode() === '23000'
-            || (isset($previous->errorInfo[1]) && (int)$previous->errorInfo[1] === 1062);
+        return PostgresErrorClassifier::isUniqueViolation($exception);
     }
 }

@@ -8,6 +8,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\ConnectionResolver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\MySqlConnection;
+use Illuminate\Database\PostgresConnection;
 use Illuminate\Database\SQLiteConnection;
 use Illuminate\Database\QueryException;
 use Closure;
@@ -30,6 +31,12 @@ final class EloquentConnection
             $connection = match ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME)) {
                 // 这些 PDO 由服务启动流程管理；保留失败结果，不通过 Laravel 连接工厂重放写入。
                 'mysql' => new class($pdo, config: ['name' => $name]) extends MySqlConnection {
+                    protected function handleQueryException(QueryException $e, $query, $bindings, Closure $callback)
+                    {
+                        throw $e;
+                    }
+                },
+                'pgsql' => new class($pdo, config: ['name' => $name]) extends PostgresConnection {
                     protected function handleQueryException(QueryException $e, $query, $bindings, Closure $callback)
                     {
                         throw $e;

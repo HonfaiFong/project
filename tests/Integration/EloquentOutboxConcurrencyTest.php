@@ -7,6 +7,7 @@ namespace Tests\Integration;
 use Illuminate\Database\Schema\Blueprint;
 use Packages\Database\EloquentConnection;
 use Packages\Outbox\Model\OutboxEvent;
+use Packages\Outbox\OutboxClaim;
 use Packages\Outbox\OutboxRepository;
 use PDO;
 use Throwable;
@@ -43,8 +44,11 @@ final class EloquentOutboxConcurrencyTest extends TestCase
             $table->integer('status');
             $table->dateTime('available_at', 3);
             $table->dateTime('claimed_at', 3)->nullable();
+            $table->dateTime('lease_until', 3)->nullable();
+            $table->string('claim_token', 64)->nullable();
             $table->dateTime('published_at', 3)->nullable();
             $table->dateTime('created_at', 3);
+            $table->integer('attempt_count')->default(0);
             $table->index(['event_key', 'id', 'status']);
         });
         foreach (['9223372036854775808' => 'same', '9223372036854775809' => 'same', '9223372036854775810' => 'other'] as $id => $key) {
@@ -77,15 +81,16 @@ final class EloquentOutboxConcurrencyTest extends TestCase
             EloquentConnection::model(OutboxEvent::class, $other)->newQuery()
                 ->whereKey('9223372036854775808')->lockForUpdate()->first();
             $claimed = (new OutboxRepository($this->pdo))->claimPending();
-            $this->assertSame(['9223372036854775810'], array_column($claimed, 'id'));
-            $this->assertSame('2020-01-01 00:00:00.123', $claimed[0]->createdAt);
+            $this->assertSame(['9223372036854775810'], array_map(static fn (OutboxClaim $c): string => $c->record->id, $claimed));
+            $this->assertSame('2020-01-01 00:00:00.123', $claimed[0]->record->createdAt);
         } finally {
             $blocker->rollBack();
             EloquentConnection::forget($other);
         }
         $repo = new OutboxRepository($this->pdo);
-        $this->assertSame(['9223372036854775808'], array_column($repo->claimPending(), 'id'));
-        $repo->markFailed('9223372036854775808', 60);
+        $pending = $repo->claimPending();
+        $this->assertSame(['9223372036854775808'], array_map(static fn (OutboxClaim $c): string => $c->record->id, $pending));
+        $repo->markFailed($pending[0], 60);
         $this->assertSame([], $repo->claimPending());
     }
 
