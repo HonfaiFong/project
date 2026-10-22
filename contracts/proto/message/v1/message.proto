@@ -85,6 +85,14 @@ message GetMessagesResponse {
   common.v1.PaginationResponse pagination = 2;
 }
 
+message GetConversationLatestSequenceRequest {
+  uint64 conversation_id = 1;
+}
+
+message GetConversationLatestSequenceResponse {
+  uint64 latest_seq = 1;
+}
+
 service MessageService {
   // PublicSendMessageRequest is intentionally explicit at this boundary;
   // keep the RPC name stable for existing MessageService clients.
@@ -92,4 +100,6 @@ service MessageService {
   rpc SendMessage(PublicSendMessageRequest) returns (SendMessageResponse);
   rpc SyncMessages(SyncMessagesRequest) returns (SyncMessagesResponse);
   rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse);
+  // Internal ChatService validation for read cursors ahead of its async summary.
+  rpc GetConversationLatestSequence(GetConversationLatestSequenceRequest) returns (GetConversationLatestSequenceResponse);
 }

@@ -32,7 +32,7 @@ final class MongoMessageRepository implements MessageRepositoryInterface
         $this->checkBudget($budget);
         $document = $this->messages->findOne(
             ['sender_user_id' => $this->mapper->int64($senderUserId, 'sender_user_id', false), 'client_message_id' => $clientMessageId],
-            ['collation' => ['locale' => 'simple'], 'maxTimeMS' => MongoConnectionFactory::RPC_IO_TIMEOUT_MS],
+            ['collation' => ['locale' => 'simple'], 'maxTimeMS' => MongoConnectionFactory::rpcQueryTimeoutMs($budget)],
         );
         return $document === null ? null : $this->mapper->toDomain($document);
     }
@@ -56,7 +56,7 @@ final class MongoMessageRepository implements MessageRepositoryInterface
             'seq' => ['$gt' => $this->mapper->int64($afterSeq, 'after_seq')],
         ], [
             'sort' => ['seq' => 1],
-            'maxTimeMS' => MongoConnectionFactory::RPC_IO_TIMEOUT_MS,
+            'maxTimeMS' => MongoConnectionFactory::rpcQueryTimeoutMs($budget),
             'limit' => $limit + 1,
             'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
         ]);
@@ -73,12 +73,12 @@ final class MongoMessageRepository implements MessageRepositoryInterface
         $this->checkBudget($budget);
         $filter = ['conversation_id' => $this->mapper->int64($conversationId, 'conversation_id', false)];
         if ($cursor !== null && $cursor !== '') {
-            $filter['_id'] = ['$lt' => $this->mapper->int64($cursor, 'cursor', false)];
+            $filter['seq'] = ['$lt' => $this->mapper->int64($cursor, 'cursor', false)];
         }
         $rows = [];
         foreach ($this->messages->find($filter, [
-            'sort' => ['_id' => -1],
-            'maxTimeMS' => MongoConnectionFactory::RPC_IO_TIMEOUT_MS,
+            'sort' => ['seq' => -1],
+            'maxTimeMS' => MongoConnectionFactory::rpcQueryTimeoutMs($budget),
             'limit' => $limit + 1,
             'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
         ]) as $document) {
@@ -95,7 +95,7 @@ final class MongoMessageRepository implements MessageRepositoryInterface
             ['conversation_id' => $this->mapper->int64($conversationId, 'conversation_id', false)],
             [
                 'projection' => ['seq' => 1],
-                'maxTimeMS' => MongoConnectionFactory::RPC_IO_TIMEOUT_MS,
+                'maxTimeMS' => MongoConnectionFactory::rpcQueryTimeoutMs($budget),
                 'sort' => ['seq' => -1],
                 'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
             ],
@@ -103,16 +103,8 @@ final class MongoMessageRepository implements MessageRepositoryInterface
         return $document === null ? '0' : $this->mapper->decimal($document['seq'], 'seq');
     }
 
-    public function countForConversation(string $conversationId, ?OperationBudget $budget = null): string
-    {
-        $this->checkBudget($budget);
-        return (string)$this->messages->countDocuments([
-            'conversation_id' => $this->mapper->int64($conversationId, 'conversation_id', false),
-        ], ['maxTimeMS' => MongoConnectionFactory::RPC_IO_TIMEOUT_MS]);
-    }
-
     private function checkBudget(?OperationBudget $budget): void
     {
-        $budget?->remainingMilliseconds(MongoConnectionFactory::RPC_IO_RESERVE_MS);
+        $budget?->remainingMilliseconds(MongoConnectionFactory::rpcReserveMs());
     }
 }

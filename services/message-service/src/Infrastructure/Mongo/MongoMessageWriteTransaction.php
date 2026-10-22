@@ -25,6 +25,7 @@ final class MongoMessageWriteTransaction implements MessageWriteTransactionInter
         private readonly Session $session,
         private readonly MessageDocumentMapper $mapper = new MessageDocumentMapper(),
         private readonly ?OperationBudget $budget = null,
+        private readonly int $commitTimeoutMs = 0,
     ) {
         $this->messages = $client->selectCollection($database, 'messages', [
             'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
@@ -45,7 +46,7 @@ final class MongoMessageWriteTransaction implements MessageWriteTransactionInter
             'client_message_id' => $clientMessageId,
         ], [
             'session' => $this->session,
-            'maxTimeMS' => MongoConnectionFactory::RPC_IO_TIMEOUT_MS,
+            'maxTimeMS' => MongoConnectionFactory::rpcQueryTimeoutMs($this->budget, $this->commitTimeoutMs),
             'collation' => ['locale' => 'simple'],
         ]);
         return $document === null ? null : $this->mapper->toDomain($document);
@@ -61,7 +62,7 @@ final class MongoMessageWriteTransaction implements MessageWriteTransactionInter
                 'upsert' => true,
                 'returnDocument' => FindOneAndUpdate::RETURN_DOCUMENT_AFTER,
                 'session' => $this->session,
-                'maxTimeMS' => MongoConnectionFactory::RPC_IO_TIMEOUT_MS,
+                'maxTimeMS' => MongoConnectionFactory::rpcQueryTimeoutMs($this->budget, $this->commitTimeoutMs),
             ],
         );
         $document = $updated === null ? null : (is_array($updated) ? $updated : get_object_vars($updated));
@@ -118,6 +119,6 @@ final class MongoMessageWriteTransaction implements MessageWriteTransactionInter
 
     private function checkBudget(): void
     {
-        $this->budget?->remainingMilliseconds(MongoConnectionFactory::RPC_IO_RESERVE_MS);
+        $this->budget?->remainingMilliseconds(MongoConnectionFactory::rpcReserveMs() + $this->commitTimeoutMs);
     }
 }

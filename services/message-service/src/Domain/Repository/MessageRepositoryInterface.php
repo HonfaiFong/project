@@ -17,10 +17,8 @@ interface MessageRepositoryInterface
     /** @return list<array<string,mixed>> */
     public function listAfter(string $conversationId, string $afterSeq, int $limit, ?OperationBudget $budget = null): array;
 
-    /** @return list<array<string,mixed>> */
+    /** Returns newest messages first; cursor is an exclusive conversation seq bound. @return list<array<string,mixed>> */
     public function listPage(string $conversationId, int $limit, ?string $cursor, ?OperationBudget $budget = null): array;
 
     public function latestSequence(string $conversationId, ?OperationBudget $budget = null): string;
-
-    public function countForConversation(string $conversationId, ?OperationBudget $budget = null): string;
 }

@@ -5,28 +5,68 @@ declare(strict_types=1);
 namespace Packages\Database;
 
 use MongoDB\Client;
+use Packages\GrpcCommon\OperationBudget;
 use RuntimeException;
 
 final class MongoConnectionFactory
 {
-    // PHP's driver has no per-operation client-side deadline API. Keep each
-    // transport phase short for RPC clients; repositories reserve three such
-    // phases before issuing I/O and check the shared deadline between calls.
-    public const RPC_IO_TIMEOUT_MS = 50;
-    public const RPC_IO_RESERVE_MS = 150;
+    private const RPC_CONNECT_TIMEOUT_MS = 250;
+    private const RPC_SERVER_SELECTION_TIMEOUT_MS = 250;
+    private const RPC_SOCKET_TIMEOUT_MS = 500;
+    private const RPC_QUERY_TIMEOUT_MS = 300;
+    private const RPC_WRITE_TIMEOUT_MS = 250;
+    private const RPC_COMMIT_TIMEOUT_MS = 150;
+    private const RPC_IO_RESERVE_MS = 100;
+    private const RPC_RETRY_DELAY_MS = 10;
+    private const RPC_MAX_TRANSACTION_ATTEMPTS = 3;
 
     public static function forRpc(): Client
     {
-        $overrides = [];
-        foreach (['MONGODB_CONNECT_TIMEOUT_MS', 'MONGODB_SERVER_SELECTION_TIMEOUT_MS', 'MONGODB_SOCKET_TIMEOUT_MS'] as $name) {
-            $configured = getenv($name);
-            $milliseconds = $configured === false ? self::RPC_IO_TIMEOUT_MS : filter_var($configured, FILTER_VALIDATE_INT);
-            if (!is_int($milliseconds) || $milliseconds < 1) {
-                throw new RuntimeException($name . ' must be a positive integer');
-            }
-            $overrides[$name] = min($milliseconds, self::RPC_IO_TIMEOUT_MS);
-        }
+        $overrides = [
+            'MONGODB_CONNECT_TIMEOUT_MS' => (string) self::setting('MONGODB_RPC_CONNECT_TIMEOUT_MS', self::RPC_CONNECT_TIMEOUT_MS, 1, 60000),
+            'MONGODB_SERVER_SELECTION_TIMEOUT_MS' => (string) self::setting('MONGODB_RPC_SERVER_SELECTION_TIMEOUT_MS', self::RPC_SERVER_SELECTION_TIMEOUT_MS, 1, 60000),
+            'MONGODB_SOCKET_TIMEOUT_MS' => (string) self::setting('MONGODB_RPC_SOCKET_TIMEOUT_MS', self::RPC_SOCKET_TIMEOUT_MS, 1, 120000),
+        ];
         return self::fromEnvironment($overrides);
+    }
+
+    public static function rpcQueryTimeoutMs(?OperationBudget $budget, int $additionalReserveMs = 0): int
+    {
+        $configured = self::setting('MONGODB_RPC_QUERY_TIMEOUT_MS', self::RPC_QUERY_TIMEOUT_MS, 1, 120000);
+        return $budget === null
+            ? $configured
+            : min($configured, $budget->remainingMilliseconds(self::rpcReserveMs() + $additionalReserveMs));
+    }
+
+    public static function rpcWriteTimeoutMs(?OperationBudget $budget, int $additionalReserveMs = 0): int
+    {
+        $configured = self::setting('MONGODB_RPC_WRITE_TIMEOUT_MS', self::RPC_WRITE_TIMEOUT_MS, 1, 120000);
+        return $budget === null
+            ? $configured
+            : min($configured, $budget->remainingMilliseconds(self::rpcReserveMs() + $additionalReserveMs));
+    }
+
+    public static function rpcCommitTimeoutMs(?OperationBudget $budget): int
+    {
+        $configured = self::setting('MONGODB_RPC_COMMIT_TIMEOUT_MS', self::RPC_COMMIT_TIMEOUT_MS, 1, 120000);
+        return $budget === null
+            ? $configured
+            : min($configured, $budget->remainingMilliseconds(self::rpcReserveMs()));
+    }
+
+    public static function rpcReserveMs(): int
+    {
+        return self::setting('MONGODB_RPC_BUDGET_RESERVE_MS', self::RPC_IO_RESERVE_MS, 1, 120000);
+    }
+
+    public static function rpcRetryDelayMs(): int
+    {
+        return self::setting('MONGODB_RPC_RETRY_DELAY_MS', self::RPC_RETRY_DELAY_MS, 0, 1000);
+    }
+
+    public static function rpcMaxTransactionAttempts(): int
+    {
+        return self::setting('MONGODB_RPC_MAX_TRANSACTION_ATTEMPTS', self::RPC_MAX_TRANSACTION_ATTEMPTS, 1, 10);
     }
 
     /** @param array<string, scalar|null> $overrides */
@@ -75,6 +115,16 @@ final class MongoConnectionFactory
     private static function boundedInteger(string $value, string $name, int $min, int $max): int
     {
         $parsed = filter_var($value, FILTER_VALIDATE_INT);
+        if ($parsed === false || $parsed < $min || $parsed > $max) {
+            throw new RuntimeException($name . ' is outside its supported range');
+        }
+        return $parsed;
+    }
+
+    private static function setting(string $name, int $default, int $min, int $max): int
+    {
+        $value = getenv($name);
+        $parsed = filter_var($value === false ? (string) $default : $value, FILTER_VALIDATE_INT);
         if ($parsed === false || $parsed < $min || $parsed > $max) {
             throw new RuntimeException($name . ' is outside its supported range');
         }

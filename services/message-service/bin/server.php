@@ -6,6 +6,7 @@ require_once __DIR__ . '/../../../vendor/autoload.php';
 
 use Contracts\Gen\Common\V1\HealthServiceInterface;
 use Contracts\Gen\Message\V1\GetMessagesRequest;
+use Contracts\Gen\Message\V1\GetConversationLatestSequenceRequest;
 use Contracts\Gen\Message\V1\MessageServiceInterface;
 use Contracts\Gen\Message\V1\PublicSendMessageRequest;
 use Contracts\Gen\Message\V1\SyncMessagesRequest;
@@ -69,10 +70,12 @@ $application = new MessageApplicationService(
 );
 
 $gatewayToken = trim((string)(getenv('INTERNAL_RPC_GATEWAY_MESSAGE_TOKEN') ?: ''));
+$chatToken = trim((string)(getenv('INTERNAL_RPC_CHAT_MESSAGE_TOKEN') ?: ''));
 $authorizer = new InternalRpcAuthorizer(
-    callerTokens: ['api-gateway' => $gatewayToken],
+    callerTokens: ['api-gateway' => $gatewayToken, 'chat-service' => $chatToken],
     allowedMethodsByCaller: [
         'api-gateway' => ['SendMessage', 'SyncMessages', 'GetMessages'],
+        'chat-service' => ['GetConversationLatestSequence'],
     ],
 );
 $grpc = new RoadRunnerMessageService($application, $logger, $authorizer);
@@ -80,6 +83,7 @@ $grpc = new RoadRunnerMessageService($application, $logger, $authorizer);
 (new PublicSendMessageRequest())->serializeToString();
 (new SyncMessagesRequest())->serializeToString();
 (new GetMessagesRequest())->serializeToString();
+(new GetConversationLatestSequenceRequest())->serializeToString();
 
 $server = new Server(new Invoker());
 $server->registerService(MessageServiceInterface::class, $grpc);

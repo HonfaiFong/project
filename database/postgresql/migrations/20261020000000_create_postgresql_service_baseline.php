@@ -13,11 +13,10 @@ final class CreatePostgresqlServiceBaseline extends AbstractMigration
 
     public function up(): void
     {
-        $prefix = $this->schemaPrefix();
         /** @var \PDO $pdo */
         $pdo = $this->getAdapter()->getConnection();
         foreach (self::SCHEMAS as $schema) {
-            $name = $prefix . $schema;
+            $name = $schema;
             if (strlen($name) > 63) {
                 throw new RuntimeException('PostgreSQL schema name exceeds 63 bytes: ' . $name);
             }
@@ -29,11 +28,11 @@ final class CreatePostgresqlServiceBaseline extends AbstractMigration
             }
         }
 
-        $auth = $this->id($prefix . 'auth_db');
-        $user = $this->id($prefix . 'user_db');
-        $content = $this->id($prefix . 'content_db');
-        $social = $this->id($prefix . 'social_db');
-        $chat = $this->id($prefix . 'chat_db');
+        $auth = $this->id('auth_db');
+        $user = $this->id('user_db');
+        $content = $this->id('content_db');
+        $social = $this->id('social_db');
+        $chat = $this->id('chat_db');
 
         // ICU level-1 equality preserves the previous case/accent-insensitive email uniqueness
         // explicitly. Identity and protocol keys below use deterministic C collation instead.
@@ -215,15 +214,6 @@ final class CreatePostgresqlServiceBaseline extends AbstractMigration
             claim_token VARCHAR(64) COLLATE \"C\", published_at TIMESTAMPTZ(3), created_at TIMESTAMPTZ(3) NOT NULL,
             attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0), CONSTRAINT uniq_event_id UNIQUE (event_id)
         )";
-    }
-
-    private function schemaPrefix(): string
-    {
-        $prefix = $this->getAdapter()->getOption('schema_prefix') ?? '';
-        if (!is_string($prefix) || preg_match('/\A[a-zA-Z0-9_]*\z/', $prefix) !== 1) {
-            throw new RuntimeException('schema_prefix must contain only ASCII letters, digits, and underscores.');
-        }
-        return $prefix;
     }
 
     private function id(string $identifier): string

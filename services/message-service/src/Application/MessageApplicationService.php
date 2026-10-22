@@ -206,7 +206,7 @@ final class MessageApplicationService
         ];
     }
 
-    /** @return array{messages:list<PublicMessage>,has_more:bool,next_cursor:string,total:string} */
+    /** @return array{messages:list<PublicMessage>,has_more:bool,next_cursor:string} */
     public function getMessages(
         string $trustedUserId,
         string $conversationId,
@@ -236,9 +236,16 @@ final class MessageApplicationService
         return [
             'messages' => array_map(fn (array $row): PublicMessage => $this->publicMessage($row), $rows),
             'has_more' => $hasMore,
-            'next_cursor' => $hasMore && $rows !== [] ? (string)$rows[array_key_last($rows)]['message_id'] : '',
-            'total' => $this->repository->countForConversation($conversationId, $budget),
+            'next_cursor' => $hasMore && $rows !== [] ? (string)$rows[array_key_last($rows)]['seq'] : '',
         ];
+    }
+
+    /** Internal ChatService read used to validate read cursors against committed messages. */
+    public function getConversationLatestSequence(string $conversationId, ?OperationBudget $budget = null): string
+    {
+        $budget ??= new OperationBudget(600);
+
+        return $this->repository->latestSequence($this->id($conversationId, 'conversation_id'), $budget);
     }
 
     /**

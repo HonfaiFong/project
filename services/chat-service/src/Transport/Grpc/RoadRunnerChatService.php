@@ -21,7 +21,9 @@ use Contracts\Gen\Chat\V1\MarkReadRequest;
 use Contracts\Gen\Chat\V1\MarkReadResponse;
 use Contracts\Gen\Common\V1\PaginationResponse;
 use Packages\GrpcCommon\ErrorStatusMapper;
+use Packages\GrpcCommon\DeadlineContext;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
+use Packages\GrpcCommon\OperationBudget;
 use Packages\Observability\Span;
 use Packages\Observability\Tracer;
 use Packages\Tracing\TraceContext;
@@ -119,6 +121,7 @@ final readonly class RoadRunnerChatService implements ChatServiceInterface
                 $this->trustedUserId($ctx),
                 $this->id($in->getConversationId(), 'conversation_id'),
                 $this->uint($in->getSeq(), 'seq'),
+                $this->operationBudget(),
             );
 
             return new MarkReadResponse(['success' => $success]);
@@ -162,6 +165,8 @@ final readonly class RoadRunnerChatService implements ChatServiceInterface
     private function call(ContextInterface $ctx, string $method, callable $operation): mixed
     {
         $this->authorizer?->authorize($ctx, $method);
+        $deadline = $this->metadataValue($ctx, 'x-deadline-unix-ms');
+        DeadlineContext::setCurrent($deadline !== null && ctype_digit($deadline) ? (int)$deadline : null);
         $trace = TraceContext::create(
             requestId: $this->metadataValue($ctx, 'x-request-id'),
             traceId: $this->metadataValue($ctx, 'x-trace-id'),
@@ -203,6 +208,7 @@ final readonly class RoadRunnerChatService implements ChatServiceInterface
         } finally {
             $scope->close();
             TraceContext::reset();
+            DeadlineContext::reset();
         }
     }
 
@@ -243,5 +249,10 @@ final readonly class RoadRunnerChatService implements ChatServiceInterface
         }
 
         return is_scalar($value) && (string)$value !== '' ? (string)$value : null;
+    }
+
+    private function operationBudget(): OperationBudget
+    {
+        return OperationBudget::fromEnvironment('CHAT_OPERATION_BUDGET_MS', 600);
     }
 }

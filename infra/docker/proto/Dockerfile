@@ -15,7 +15,7 @@ ARG PROTOC_GEN_PHP_GRPC_SHA256_ARM64=b440f130da766b9d9881b5a277f49c09894f4fb00d7
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates unzip && rm -rf /var/lib/apt/lists/*
 
 # protoc 从官方 release 安装并校验 SHA256，避免 apt 包版本漂移改变生成输出。
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 RUN set -eux; \
     case "${TARGETARCH}" in \
         amd64) protoc_arch=x86_64; protoc_sha="${PROTOC_SHA256_X86_64}"; php_grpc_arch=amd64; php_grpc_sha="${PROTOC_GEN_PHP_GRPC_SHA256_AMD64}" ;; \

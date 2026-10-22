@@ -20,6 +20,7 @@ use Packages\Observability\MetricsHttpServer;
 use Services\ChatService\Application\ChatApplicationService;
 use Services\ChatService\Infrastructure\GrpcBlockStatusResolver;
 use Services\ChatService\Infrastructure\GrpcContentTargetResolver;
+use Services\ChatService\Infrastructure\GrpcMessageSequenceReader;
 use Services\ChatService\Infrastructure\PdoChatRepository;
 use Services\ChatService\Infrastructure\SnowflakeIdGenerator;
 use Services\ChatService\Infrastructure\UserIdentityDirectoryAdapter;
@@ -71,6 +72,11 @@ if ($anonymousKey === '') {
 $application = new ChatApplicationService(
     repository: $repository,
     users: new UserIdentityDirectoryAdapter($userDirectory),
+    messageSequences: new GrpcMessageSequenceReader(
+        target: getenv('GRPC_MESSAGE_SERVICE') ?: 'message-service:50056',
+        serviceToken: trim((string)(getenv('GRPC_MESSAGE_SERVICE_TOKEN') ?: '')) ?: null,
+        timeoutMs: (int)(getenv('GRPC_MESSAGE_SEQUENCE_TIMEOUT_MS') ?: 250),
+    ),
     targets: $contentResolver,
     blocks: $blockResolver,
     references: new AnonymousReferenceFactory($anonymousKey),

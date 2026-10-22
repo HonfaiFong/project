@@ -37,4 +37,13 @@ interface MessageServiceInterface extends GRPC\ServiceInterface
     * @throws GRPC\Exception\InvokeException
     */
     public function GetMessages(GRPC\ContextInterface $ctx, GetMessagesRequest $in): GetMessagesResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
+    * @param GetConversationLatestSequenceRequest $in
+    * @return GetConversationLatestSequenceResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function GetConversationLatestSequence(GRPC\ContextInterface $ctx, GetConversationLatestSequenceRequest $in): GetConversationLatestSequenceResponse;
 }

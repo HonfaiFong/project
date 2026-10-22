@@ -64,31 +64,20 @@ final class InMemoryMessageStore implements MessageRepositoryInterface, MessageT
 
     public function listPage(string $conversationId, int $limit, ?string $cursor, ?OperationBudget $budget = null): array
     {
-        $cursorSeq = $cursor !== null ? (int)$cursor : null;
+        $cursorSeq = $cursor !== null ? self::normalizeUnsigned($cursor) : null;
         $matched = array_values(array_filter($this->messages, static function (array $msg) use ($conversationId, $cursorSeq): bool {
             if ((string)$msg['conversation_id'] !== $conversationId) {
                 return false;
             }
-            return $cursorSeq === null || (int)$msg['seq'] < $cursorSeq;
+            return $cursorSeq === null || self::compareUnsigned((string)$msg['seq'], $cursorSeq) < 0;
         }));
-        usort($matched, static fn (array $a, array $b): int => (int)$b['seq'] <=> (int)$a['seq']);
+        usort($matched, static fn (array $a, array $b): int => self::compareUnsigned((string)$b['seq'], (string)$a['seq']));
         return array_slice($matched, 0, $limit + 1);
     }
 
     public function latestSequence(string $conversationId, ?OperationBudget $budget = null): string
     {
         return (string)($this->sequences[$conversationId] ?? 0);
-    }
-
-    public function countForConversation(string $conversationId, ?OperationBudget $budget = null): string
-    {
-        $count = 0;
-        foreach ($this->messages as $msg) {
-            if ((string)$msg['conversation_id'] === $conversationId) {
-                $count++;
-            }
-        }
-        return (string)$count;
     }
 
     /**
@@ -157,5 +146,17 @@ final class InMemoryMessageStore implements MessageRepositoryInterface, MessageT
                 return;
             }
         }
+    }
+
+    private static function compareUnsigned(string $left, string $right): int
+    {
+        $left = self::normalizeUnsigned($left);
+        $right = self::normalizeUnsigned($right);
+        return strlen($left) <=> strlen($right) ?: strcmp($left, $right);
+    }
+
+    private static function normalizeUnsigned(string $value): string
+    {
+        return ltrim($value, '0') ?: '0';
     }
 }

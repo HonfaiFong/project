@@ -12,6 +12,7 @@ use PHPUnit\Framework\MockObject\MockObject;
 use Services\ChatService\Application\ChatApplicationService;
 use Services\ChatService\Domain\IdGenerator;
 use Services\ChatService\Domain\Identity\UserIdentityClient;
+use Services\ChatService\Domain\MessageSequenceReader;
 use Services\ChatService\Domain\Social\AllowAllBlockStatusResolver;
 use Services\ChatService\Domain\Social\BlockStatusResolver;
 use Services\ChatService\Domain\Target\ContentTargetResolver;
@@ -350,6 +351,7 @@ final class ChatConversationSecurityTest extends TestCase
         return new ChatApplicationService(
             repository: $repository,
             users: $users,
+            messageSequences: $this->createMock(MessageSequenceReader::class),
             targets: $targets,
             blocks: $blocks ?? new AllowAllBlockStatusResolver(),
             references: new AnonymousReferenceFactory(str_repeat('k', 32)),

@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MessageService_SendMessage_FullMethodName  = "/message.v1.MessageService/SendMessage"
-	MessageService_SyncMessages_FullMethodName = "/message.v1.MessageService/SyncMessages"
-	MessageService_GetMessages_FullMethodName  = "/message.v1.MessageService/GetMessages"
+	MessageService_SendMessage_FullMethodName                   = "/message.v1.MessageService/SendMessage"
+	MessageService_SyncMessages_FullMethodName                  = "/message.v1.MessageService/SyncMessages"
+	MessageService_GetMessages_FullMethodName                   = "/message.v1.MessageService/GetMessages"
+	MessageService_GetConversationLatestSequence_FullMethodName = "/message.v1.MessageService/GetConversationLatestSequence"
 )
 
 // MessageServiceClient is the client API for MessageService service.
@@ -34,6 +35,8 @@ type MessageServiceClient interface {
 	SendMessage(ctx context.Context, in *PublicSendMessageRequest, opts ...grpc.CallOption) (*SendMessageResponse, error)
 	SyncMessages(ctx context.Context, in *SyncMessagesRequest, opts ...grpc.CallOption) (*SyncMessagesResponse, error)
 	GetMessages(ctx context.Context, in *GetMessagesRequest, opts ...grpc.CallOption) (*GetMessagesResponse, error)
+	// Internal ChatService validation for read cursors ahead of its async summary.
+	GetConversationLatestSequence(ctx context.Context, in *GetConversationLatestSequenceRequest, opts ...grpc.CallOption) (*GetConversationLatestSequenceResponse, error)
 }
 
 type messageServiceClient struct {
@@ -74,6 +77,16 @@ func (c *messageServiceClient) GetMessages(ctx context.Context, in *GetMessagesR
 	return out, nil
 }
 
+func (c *messageServiceClient) GetConversationLatestSequence(ctx context.Context, in *GetConversationLatestSequenceRequest, opts ...grpc.CallOption) (*GetConversationLatestSequenceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetConversationLatestSequenceResponse)
+	err := c.cc.Invoke(ctx, MessageService_GetConversationLatestSequence_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MessageServiceServer is the server API for MessageService service.
 // All implementations must embed UnimplementedMessageServiceServer
 // for forward compatibility.
@@ -84,6 +97,8 @@ type MessageServiceServer interface {
 	SendMessage(context.Context, *PublicSendMessageRequest) (*SendMessageResponse, error)
 	SyncMessages(context.Context, *SyncMessagesRequest) (*SyncMessagesResponse, error)
 	GetMessages(context.Context, *GetMessagesRequest) (*GetMessagesResponse, error)
+	// Internal ChatService validation for read cursors ahead of its async summary.
+	GetConversationLatestSequence(context.Context, *GetConversationLatestSequenceRequest) (*GetConversationLatestSequenceResponse, error)
 	mustEmbedUnimplementedMessageServiceServer()
 }
 
@@ -102,6 +117,9 @@ func (UnimplementedMessageServiceServer) SyncMessages(context.Context, *SyncMess
 }
 func (UnimplementedMessageServiceServer) GetMessages(context.Context, *GetMessagesRequest) (*GetMessagesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMessages not implemented")
+}
+func (UnimplementedMessageServiceServer) GetConversationLatestSequence(context.Context, *GetConversationLatestSequenceRequest) (*GetConversationLatestSequenceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetConversationLatestSequence not implemented")
 }
 func (UnimplementedMessageServiceServer) mustEmbedUnimplementedMessageServiceServer() {}
 func (UnimplementedMessageServiceServer) testEmbeddedByValue()                        {}
@@ -178,6 +196,24 @@ func _MessageService_GetMessages_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MessageService_GetConversationLatestSequence_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetConversationLatestSequenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MessageServiceServer).GetConversationLatestSequence(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MessageService_GetConversationLatestSequence_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MessageServiceServer).GetConversationLatestSequence(ctx, req.(*GetConversationLatestSequenceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MessageService_ServiceDesc is the grpc.ServiceDesc for MessageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -196,6 +232,10 @@ var MessageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMessages",
 			Handler:    _MessageService_GetMessages_Handler,
+		},
+		{
+			MethodName: "GetConversationLatestSequence",
+			Handler:    _MessageService_GetConversationLatestSequence_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

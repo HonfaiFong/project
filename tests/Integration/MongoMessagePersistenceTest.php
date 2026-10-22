@@ -47,7 +47,7 @@ final class MongoMessagePersistenceTest extends TestCase
         $this->database->selectCollection('schema_migrations')->deleteMany([]);
         $this->migrate();
         $this->migrate();
-        self::assertSame(2, $this->database->selectCollection('schema_migrations')->countDocuments());
+        self::assertSame(3, $this->database->selectCollection('schema_migrations')->countDocuments());
         self::assertSame(0, $this->database->selectCollection('schema_migration_locks')->countDocuments());
         $this->write('101', '1', 'first');
         $claims = (new MongoOutboxRelayStore($this->client, $this->databaseName))->claimPending(1);
@@ -70,9 +70,129 @@ final class MongoMessagePersistenceTest extends TestCase
         } catch (RuntimeException $exception) {
             self::assertSame('abort transaction', $exception->getMessage());
         }
-        self::assertSame('2', $repo->countForConversation('1'));
+        self::assertSame(2, $this->database->selectCollection('messages')->countDocuments());
         self::assertSame('2', (string)$this->database->selectCollection('conversation_sequences')->findOne(['_id' => new Int64('1')])['last_seq']);
         self::assertSame(2, $this->database->selectCollection('outbox_events')->countDocuments());
+    }
+
+    public function testConcurrentTransactionsAllocateDistinctConversationSequences(): void
+    {
+        if (!function_exists('pcntl_fork')) {
+            self::markTestSkipped('pcntl is required for concurrent MongoDB transaction coverage');
+        }
+
+        $children = [];
+        $gates = [];
+        foreach ([['101', 'first'], ['102', 'second']] as [$id, $clientId]) {
+            $sockets = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+            self::assertIsArray($sockets);
+            $pid = pcntl_fork();
+            if ($pid === -1) {
+                self::fail('Could not fork a MongoDB transaction worker');
+            }
+            if ($pid === 0) {
+                fclose($sockets[0]);
+                fread($sockets[1], 1);
+                fclose($sockets[1]);
+                try {
+                    $client = MongoConnectionFactory::fromEnvironment();
+                    $manager = new MongoMessageTransactionManager($client, $this->databaseName);
+                    $manager->transaction(
+                        fn (MessageWriteTransactionInterface $tx) => $this->writeIn($tx, $id, '77', $clientId),
+                        new OperationBudget(5000),
+                    );
+                    exit(0);
+                } catch (\Throwable) {
+                    exit(1);
+                }
+            }
+            fclose($sockets[1]);
+            $children[] = $pid;
+            $gates[] = $sockets[0];
+        }
+
+        foreach ($gates as $gate) {
+            fwrite($gate, '1');
+            fclose($gate);
+        }
+        foreach ($children as $pid) {
+            $status = 0;
+            self::assertSame($pid, pcntl_waitpid($pid, $status));
+            self::assertTrue(pcntl_wifexited($status));
+            self::assertSame(0, pcntl_wexitstatus($status));
+        }
+
+        $messages = (new MongoMessageRepository($this->client, $this->databaseName))->listAfter('77', '0', 10);
+        self::assertSame(['1', '2'], array_column($messages, 'seq'));
+        self::assertSame(2, $this->database->selectCollection('outbox_events')->countDocuments());
+    }
+
+    public function testHistoryPagesFollowConversationSequenceAndUseItsIndex(): void
+    {
+        $this->write('900', '1', 'first');
+        $this->write('800', '1', 'second');
+        $repository = new MongoMessageRepository($this->client, $this->databaseName);
+
+        $firstPage = $repository->listPage('1', 1, null);
+        self::assertSame(['2', '1'], array_column($firstPage, 'seq'));
+        self::assertSame(['800', '900'], array_column($firstPage, 'message_id'));
+        $secondPage = $repository->listPage('1', 1, '2');
+        self::assertSame(['1'], array_column($secondPage, 'seq'));
+        self::assertSame(['900'], array_column($secondPage, 'message_id'));
+
+        $explain = $this->database->command([
+            'explain' => [
+                'find' => 'messages',
+                'filter' => ['conversation_id' => new Int64('1'), 'seq' => ['$lt' => new Int64('2')]],
+                'sort' => ['seq' => -1],
+                'limit' => 2,
+            ],
+            'verbosity' => 'queryPlanner',
+        ])->toArray();
+        self::assertStringContainsString('uniq_conversation_seq', json_encode($explain, JSON_THROW_ON_ERROR));
+    }
+
+    public function testRecordedMigrationValidatorDriftFailsWithoutRepair(): void
+    {
+        $this->database->command([
+            'collMod' => 'outbox_events',
+            'validator' => ['$jsonSchema' => ['bsonType' => 'object']],
+        ]);
+
+        try {
+            [$exitCode, $output] = $this->runMigration();
+            self::assertNotSame(0, $exitCode);
+            self::assertStringContainsString('validator drift', $output);
+        } finally {
+            $this->database->selectCollection('schema_migrations')->deleteOne([
+                '_id' => '20261020000200_outbox_claimed_at_date',
+            ]);
+            $this->database->selectCollection('schema_migrations')->deleteOne([
+                '_id' => '20261020000300_drop_message_id_paging_index',
+            ]);
+            $this->migrate();
+        }
+    }
+
+    public function testRecordedMigrationMissingIndexFailsWithoutRepair(): void
+    {
+        $this->database->selectCollection('messages')->dropIndex('uniq_conversation_seq');
+
+        try {
+            [$exitCode, $output] = $this->runMigration();
+            self::assertNotSame(0, $exitCode);
+            self::assertStringContainsString('index set drift', $output);
+            $indexNames = array_map(
+                static fn ($index): string => (string)$index->getName(),
+                iterator_to_array($this->database->selectCollection('messages')->listIndexes(), false),
+            );
+            self::assertNotContains('uniq_conversation_seq', $indexNames, 'A recorded migration must not silently repair a dropped index');
+        } finally {
+            $this->database->selectCollection('messages')->createIndex(
+                ['conversation_id' => 1, 'seq' => 1],
+                ['name' => 'uniq_conversation_seq', 'unique' => true],
+            );
+        }
     }
 
     public function testExpiredCallbackCannotCommitWrites(): void
@@ -207,12 +327,20 @@ final class MongoMessagePersistenceTest extends TestCase
 
     private function migrate(): void
     {
+        [$exitCode, $output] = $this->runMigration();
+        self::assertSame(0, $exitCode, $output);
+    }
+
+    /** @return array{0:int,1:string} */
+    private function runMigration(): array
+    {
         $process = proc_open([PHP_BINARY, dirname(__DIR__, 2) . '/scripts/migrate_mongodb.php'], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
         self::assertIsResource($process);
         $stdout = stream_get_contents($pipes[1]);
         $stderr = stream_get_contents($pipes[2]);
         fclose($pipes[1]);
         fclose($pipes[2]);
-        self::assertSame(0, proc_close($process), (string)$stdout . (string)$stderr);
+
+        return [proc_close($process), (string)$stdout . (string)$stderr];
     }
 }

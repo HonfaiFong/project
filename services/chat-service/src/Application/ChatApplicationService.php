@@ -12,10 +12,12 @@ use Contracts\Gen\Common\V1\IdentityMode;
 use Contracts\Gen\Common\V1\PublicAuthor;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousReferenceFactory;
+use Packages\GrpcCommon\OperationBudget;
 use PDOException;
 use Services\ChatService\Domain\Exception\ChatException;
 use Services\ChatService\Domain\IdGenerator;
 use Services\ChatService\Domain\Identity\UserIdentityClient;
+use Services\ChatService\Domain\MessageSequenceReader;
 use Services\ChatService\Domain\Social\BlockStatusResolver;
 use Services\ChatService\Domain\Social\RejectingBlockStatusResolver;
 use Services\ChatService\Domain\Target\ContentTargetResolver;
@@ -35,6 +37,7 @@ final class ChatApplicationService
     public function __construct(
         private readonly PdoChatRepository $repository,
         private readonly UserIdentityClient $users,
+        private readonly MessageSequenceReader $messageSequences,
         ?ContentTargetResolver $targets = null,
         ?BlockStatusResolver $blocks = null,
         ?AnonymousReferenceFactory $references = null,
@@ -204,13 +207,32 @@ final class ChatApplicationService
         return !$this->blocks->isBlockedEitherWay($trustedUserId, $recipientUserId);
     }
 
-    public function markRead(string $trustedUserId, string $conversationId, string $seq): bool
+    public function markRead(
+        string $trustedUserId,
+        string $conversationId,
+        string $seq,
+        ?OperationBudget $budget = null,
+    ): bool
     {
+        $budget ??= new OperationBudget(600);
         $trustedUserId = $this->id($trustedUserId, 'user_id');
         $conversationId = $this->id($conversationId, 'conversation_id');
         $seq = $this->uint($seq, 'seq');
-        if ($this->repository->findMember($conversationId, $trustedUserId) === null) {
+        $member = $this->repository->findMember($conversationId, $trustedUserId);
+        if ($member === null) {
             throw ChatException::notMember();
+        }
+
+        if ($this->compareUnsigned($seq, $this->uint($member['last_read_seq'], 'last_read_seq')) <= 0) {
+            return $this->repository->markRead($conversationId, $trustedUserId, $seq);
+        }
+
+        $summarySeq = $this->uint($this->repository->latestMessageSequence($conversationId), 'last_message_seq');
+        if ($this->compareUnsigned($seq, $summarySeq) > 0) {
+            $latestSeq = $this->uint($this->messageSequences->latestSequence($conversationId, $budget), 'latest_seq');
+            if ($this->compareUnsigned($seq, $latestSeq) > 0) {
+                throw ChatException::invalid('seq exceeds the latest persisted message');
+            }
         }
 
         return $this->repository->markRead($conversationId, $trustedUserId, $seq);
@@ -535,11 +557,17 @@ final class ChatApplicationService
     private function uint(int|string $value, string $field): string
     {
         $value = trim((string)$value);
-        if ($value === '' || preg_match('/\A[0-9]+\z/', $value) !== 1) {
+        if ($value === '' || preg_match('/\A[0-9]+\z/', $value) !== 1
+            || strlen($value) > 19 || (strlen($value) === 19 && strcmp($value, '9223372036854775807') > 0)) {
             throw ChatException::invalid($field . ' is invalid');
         }
 
-        return $value;
+        return ltrim($value, '0') ?: '0';
+    }
+
+    private function compareUnsigned(string $left, string $right): int
+    {
+        return strlen($left) <=> strlen($right) ?: strcmp($left, $right);
     }
 
     private function scope(string $value, string $field): string

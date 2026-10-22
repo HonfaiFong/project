@@ -94,4 +94,22 @@ final class InternalRpcAuthorizerTest extends TestCase
         $this->expectExceptionCode(StatusCode::PERMISSION_DENIED);
         $authorizer->authorize($context, 'ValidatePersonaOwnership');
     }
+
+    public function testChatServiceSequenceReaderAllowListStaysReadOnly(): void
+    {
+        $authorizer = new InternalRpcAuthorizer(
+            callerTokens: ['chat-service' => self::TOKEN],
+            allowedMethodsByCaller: ['chat-service' => ['GetConversationLatestSequence']],
+        );
+        $context = new Context([
+            'metadata' => [
+                'x-service-name' => ['chat-service'],
+                'x-service-token' => [self::TOKEN],
+            ],
+        ]);
+
+        $authorizer->authorize($context, 'GetConversationLatestSequence');
+        $this->expectExceptionCode(StatusCode::PERMISSION_DENIED);
+        $authorizer->authorize($context, 'SendMessage');
+    }
 }

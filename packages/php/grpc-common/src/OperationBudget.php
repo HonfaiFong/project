@@ -27,7 +27,7 @@ final class OperationBudget
         if (!is_int($milliseconds) || $milliseconds < 1 || $milliseconds > 120_000) {
             throw new RuntimeException($name . ' must be between 1 and 120000 milliseconds');
         }
-        return new self($milliseconds);
+        return new self(DeadlineContext::clampHopBudgetMs($milliseconds) ?? 0);
     }
 
     public function remainingMilliseconds(int $reserveMilliseconds = 0): int

@@ -240,22 +240,31 @@ final class PdoChatRepository
 
     public function markRead(string $conversationId, string $userId, string $seq): bool
     {
-        $latest = $this->pdo->prepare('SELECT last_message_seq FROM conversations WHERE id = :id');
-        $latest->execute(['id' => $conversationId]);
-        $latestSeq = $latest->fetchColumn();
-        $seq = ltrim($seq, '0') ?: '0';
-        $maximum = (string)($latestSeq === false ? '0' : $latestSeq);
-        if (strlen($seq) > strlen($maximum) || (strlen($seq) === strlen($maximum) && strcmp($seq, $maximum) > 0)) {
-            throw ChatException::invalid('seq exceeds the latest confirmed message; retry after synchronization');
-        }
         $statement = $this->pdo->prepare(
             'UPDATE conversation_members SET last_read_seq = CASE '
             . 'WHEN last_read_seq < :compare_seq THEN :seq ELSE last_read_seq END '
             . 'WHERE conversation_id = :conversation_id AND user_id = :user_id AND left_at IS NULL',
         );
-        $statement->execute(['compare_seq' => $seq, 'seq' => $seq, 'conversation_id' => $conversationId, 'user_id' => $userId]);
+        $statement->execute([
+            'compare_seq' => $seq,
+            'seq' => $seq,
+            'conversation_id' => $conversationId,
+            'user_id' => $userId,
+        ]);
 
         return $this->findMember($conversationId, $userId) !== null;
+    }
+
+    public function latestMessageSequence(string $conversationId): string
+    {
+        $statement = $this->pdo->prepare('SELECT last_message_seq FROM conversations WHERE id = :id');
+        $statement->execute(['id' => $conversationId]);
+        $sequence = $statement->fetchColumn();
+        if ($sequence === false) {
+            throw ChatException::notFound();
+        }
+
+        return (string)$sequence;
     }
 
     /** Apply only newer sequences; duplicate and out-of-order events cannot regress the summary. */

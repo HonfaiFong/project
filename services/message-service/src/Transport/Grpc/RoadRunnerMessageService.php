@@ -6,6 +6,8 @@ namespace Services\MessageService\Transport\Grpc;
 
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Common\V1\PaginationResponse;
+use Contracts\Gen\Message\V1\GetConversationLatestSequenceRequest;
+use Contracts\Gen\Message\V1\GetConversationLatestSequenceResponse;
 use Contracts\Gen\Message\V1\GetMessagesRequest;
 use Contracts\Gen\Message\V1\GetMessagesResponse;
 use Contracts\Gen\Message\V1\MessageServiceInterface;
@@ -14,6 +16,7 @@ use Contracts\Gen\Message\V1\SendMessageResponse;
 use Contracts\Gen\Message\V1\SyncMessagesRequest;
 use Contracts\Gen\Message\V1\SyncMessagesResponse;
 use Packages\GrpcCommon\ErrorStatusMapper;
+use Packages\GrpcCommon\DeadlineContext;
 use Packages\GrpcCommon\InternalRpcAuthorizer;
 use Packages\GrpcCommon\OperationBudget;
 use Packages\Observability\Span;
@@ -98,6 +101,20 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
         });
     }
 
+    public function GetConversationLatestSequence(
+        ContextInterface $ctx,
+        GetConversationLatestSequenceRequest $in,
+    ): GetConversationLatestSequenceResponse {
+        return $this->call($ctx, 'GetConversationLatestSequence', function () use ($in): GetConversationLatestSequenceResponse {
+            $latestSeq = $this->messages->getConversationLatestSequence(
+                $this->id($in->getConversationId(), 'conversation_id'),
+                $this->operationBudget(),
+            );
+
+            return new GetConversationLatestSequenceResponse(['latest_seq' => $latestSeq]);
+        });
+    }
+
     /**
      * @param callable():mixed $operation
      * @return mixed
@@ -105,6 +122,8 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
     private function call(ContextInterface $ctx, string $method, callable $operation): mixed
     {
         $this->authorizer?->authorize($ctx, $method);
+        $deadline = $this->metadataValue($ctx, 'x-deadline-unix-ms');
+        DeadlineContext::setCurrent($deadline !== null && ctype_digit($deadline) ? (int)$deadline : null);
         $trace = TraceContext::create(
             requestId: $this->metadataValue($ctx, 'x-request-id'),
             traceId: $this->metadataValue($ctx, 'x-trace-id'),
@@ -146,6 +165,7 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
         } finally {
             $scope->close();
             TraceContext::reset();
+            DeadlineContext::reset();
         }
     }
 
@@ -189,9 +209,8 @@ final readonly class RoadRunnerMessageService implements MessageServiceInterface
     }
 
     /**
-     * RoadRunner's GRPC Context exposes metadata but not the transport deadline.
-     * Use a bounded in-process deadline and keep it below the gateway's default
-     * message RPC timeout; callers can lower it to match their configured route.
+     * The authenticated caller's propagated deadline can only shorten the
+     * configured operation budget; RoadRunner does not expose the transport deadline.
      */
     private function operationBudget(): OperationBudget
     {

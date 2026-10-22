@@ -8,7 +8,7 @@
 
 ## 2. Owned Data
 - Logical Database: `message_db`
-- Tables:
+- Collections:
   - `messages`
   - `conversation_sequences`
   - `outbox_events`
@@ -17,6 +17,11 @@
 - `message.v1.MessageService/SendMessage`
 - `message.v1.MessageService/SyncMessages`
 - `message.v1.MessageService/GetMessages`
+- `message.v1.MessageService/GetConversationLatestSequence` (authenticated ChatService-only validation)
+
+`GetMessages` returns the newest messages first. Its `next_cursor` is the last
+returned conversation `seq`; the next page uses that value as an exclusive
+upper bound. It does not issue a total-count query.
 
 ## 4. Consumed Events
 - None.
@@ -27,7 +32,7 @@
   Idempotent retries return the stored message without creating another event.
 
 ## 6. Dependencies
-- MySQL (`message_db`)
+- MongoDB (`message_db`)
 - ChatService (internal membership, block, and identity snapshot RPC)
 - RabbitMQ (Outbox relay); ChatService consumes events to update summaries and fan out online pushes.
 
@@ -48,7 +53,6 @@ asks ChatService for the authenticated member snapshot, so the request body
 cannot select a different persona or identity. Stored display and anonymous
 references are projected from the write-time snapshot; current User/Persona
 rows are never read by this service. JSON message payloads are compared by
-canonical value for idempotency because MySQL JSON columns normalize
-whitespace when they are read back. Apply migration `20261011000300` before
-starting the worker. The worker intentionally does not run production DDL;
-SQLite schema setup is available only to isolated tests.
+canonical value for idempotency, independent of whitespace and object key
+ordering. Run `scripts/migrate_mongodb.php` before starting the worker. The
+worker intentionally does not run production DDL.

@@ -60,23 +60,25 @@ if ($lock === null || (string)($lock['claim_token'] ?? '') !== $token) {
     throw new RuntimeException('Could not acquire the MongoDB migration lease');
 }
 
-$migrationId = '20261020000100_message_collections_v1';
 $definition = migrationDefinition();
-$checksum = hash('sha256', json_encode($definition, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
 $ledger = $database->selectCollection('schema_migrations');
 try {
+    $migrationId = '20261020000100_message_collections_v1';
+    $checksum = hash('sha256', json_encode($definition, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
     $existing = $ledger->findOne(['_id' => $migrationId]);
     if ($existing !== null) {
         if ((string)($existing['checksum'] ?? '') !== $checksum) {
             throw new RuntimeException('MongoDB migration checksum drift detected for ' . $migrationId);
         }
-        verifyCollections($database, $definition);
-        fwrite(STDOUT, "MongoDB schema is current.\n");
-        // Do not exit: finally must release the lease, and databases with v1
-        // must also receive the newer migrations below.
     } else {
+        if ($ledger->findOne(['_id' => ['$in' => [
+            '20261020000200_outbox_claimed_at_date',
+            '20261020000300_drop_message_id_paging_index',
+        ]]]) !== null) {
+            throw new RuntimeException('MongoDB migration ledger is out of order before ' . $migrationId);
+        }
         installCollections($database, $definition);
-        verifyIndexes($database, $definition);
+        verifySchema($database, $definition);
         $ledger->insertOne([
             '_id' => $migrationId,
             'checksum' => $checksum,
@@ -85,7 +87,6 @@ try {
         fwrite(STDOUT, "Applied MongoDB migration {$migrationId}.\n");
     }
 
-    // Keep the v1 definition/checksum immutable for databases already migrated.
     $migrationId = '20261020000200_outbox_claimed_at_date';
     $validator = $definition['outbox_events']['validator'];
     $validator['$jsonSchema']['properties']['claimed_at'] = ['bsonType' => ['date', 'null']];
@@ -94,15 +95,39 @@ try {
     if ($existing !== null && (string)($existing['checksum'] ?? '') !== $checksum) {
         throw new RuntimeException('MongoDB migration checksum drift detected for ' . $migrationId);
     }
-    // Idempotent collMod also repairs validator drift on subsequent runs.
-    $database->command([
-        'collMod' => 'outbox_events', 'validator' => $validator,
-        'validationLevel' => 'strict', 'validationAction' => 'error',
-    ]);
     if ($existing === null) {
+        if ($ledger->findOne(['_id' => '20261020000300_drop_message_id_paging_index']) !== null) {
+            throw new RuntimeException('MongoDB migration ledger is out of order before ' . $migrationId);
+        }
+        $database->command([
+            'collMod' => 'outbox_events', 'validator' => $validator,
+            'validationLevel' => 'strict', 'validationAction' => 'error',
+        ]);
         $ledger->insertOne(['_id' => $migrationId, 'checksum' => $checksum, 'applied_at' => new UTCDateTime()]);
         fwrite(STDOUT, "Applied MongoDB migration {$migrationId}.\n");
     }
+
+    $migrationId = '20261020000300_drop_message_id_paging_index';
+    $migration = ['collection' => 'messages', 'drop_index' => 'idx_conversation_message_id_desc'];
+    $checksum = hash('sha256', json_encode($migration, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES));
+    $existing = $ledger->findOne(['_id' => $migrationId]);
+    if ($existing !== null && (string)($existing['checksum'] ?? '') !== $checksum) {
+        throw new RuntimeException('MongoDB migration checksum drift detected for ' . $migrationId);
+    }
+    if ($existing === null) {
+        dropIndexIfPresent($database->selectCollection('messages'), $migration['drop_index']);
+        $ledger->insertOne(['_id' => $migrationId, 'checksum' => $checksum, 'applied_at' => new UTCDateTime()]);
+        fwrite(STDOUT, "Applied MongoDB migration {$migrationId}.\n");
+    }
+
+    $expected = $definition;
+    $expected['outbox_events']['validator'] = $validator;
+    $expected['messages']['indexes'] = array_values(array_filter(
+        $expected['messages']['indexes'],
+        static fn (array $index): bool => $index['name'] !== $migration['drop_index'],
+    ));
+    verifySchema($database, $expected);
+    fwrite(STDOUT, "MongoDB schema is current.\n");
 } finally {
     $lockCollection->deleteOne(['_id' => 'message-schema-migrations', 'claim_token' => $token]);
 }
@@ -234,20 +259,99 @@ function installCollections(MongoDB\Database $database, array $definition): void
 }
 
 /** @param array<string,array{validator:array<string,mixed>,indexes:list<array<string,mixed>>}> $definition */
-function verifyCollections(MongoDB\Database $database, array $definition): void
+function verifySchema(MongoDB\Database $database, array $definition): void
 {
     foreach ($definition as $name => $config) {
-        $collection = $database->selectCollection($name);
+        $info = null;
+        foreach ($database->listCollections(['filter' => ['name' => $name]]) as $candidate) {
+            $info = $candidate;
+            break;
+        }
+        if ($info === null || $info->getType() !== 'collection') {
+            throw new RuntimeException('MongoDB collection is missing or has the wrong type: ' . $name);
+        }
+
+        $options = normalizeBsonDocument($info->getOptions());
+        if (canonicalSchemaJson($options['validator'] ?? null) !== canonicalSchemaJson($config['validator'])
+            || ($options['validationLevel'] ?? null) !== 'strict'
+            || ($options['validationAction'] ?? null) !== 'error') {
+            throw new RuntimeException('MongoDB collection validator drift detected for ' . $name);
+        }
+
+        $expectedIndexes = ['_id_' => ['key' => ['_id' => 1], 'unique' => true]];
         foreach ($config['indexes'] as $index) {
-            // createIndexes is idempotent for an identical definition and fails with an index
-            // options/key conflict if the same name has drifted.
-            $collection->createIndexes([$index]);
+            $expectedIndexes[$index['name']] = $index;
+        }
+        $actualIndexes = [];
+        foreach ($database->selectCollection($name)->listIndexes() as $index) {
+            $actualIndexes[$index->getName()] = $index;
+        }
+        if (array_diff_key($expectedIndexes, $actualIndexes) !== []
+            || array_diff_key($actualIndexes, $expectedIndexes) !== []) {
+            throw new RuntimeException('MongoDB index set drift detected for ' . $name);
+        }
+
+        foreach ($expectedIndexes as $indexName => $expected) {
+            $actual = $actualIndexes[$indexName];
+            if ($actual->getKey() !== $expected['key']
+                || ($indexName !== '_id_' && $actual->isUnique() !== (bool)($expected['unique'] ?? false))) {
+                throw new RuntimeException('MongoDB index definition drift detected for ' . $name . '.' . $indexName);
+            }
+            foreach (['sparse' => false, 'hidden' => false, 'partialFilterExpression' => null, 'expireAfterSeconds' => null] as $option => $default) {
+                if (canonicalSchemaJson($actual[$option] ?? $default) !== canonicalSchemaJson($expected[$option] ?? $default)) {
+                    throw new RuntimeException('MongoDB index option drift detected for ' . $name . '.' . $indexName . ': ' . $option);
+                }
+            }
+            $actualCollation = normalizeBsonDocument($actual['collation'] ?? ['locale' => 'simple']);
+            $expectedCollation = $expected['collation'] ?? ['locale' => 'simple'];
+            // ICU's implementation version is server metadata, not an index option.
+            unset($actualCollation['version'], $expectedCollation['version']);
+            if (canonicalSchemaJson($actualCollation) !== canonicalSchemaJson($expectedCollation)) {
+                throw new RuntimeException('MongoDB index collation drift detected for ' . $name . '.' . $indexName);
+            }
         }
     }
 }
 
-/** @param array<string,array{validator:array<string,mixed>,indexes:list<array<string,mixed>>}> $definition */
-function verifyIndexes(MongoDB\Database $database, array $definition): void
+function dropIndexIfPresent(MongoDB\Collection $collection, string $name): void
 {
-    verifyCollections($database, $definition);
+    foreach ($collection->listIndexes() as $index) {
+        if ($index->getName() === $name) {
+            $collection->dropIndex($name);
+            return;
+        }
+    }
+}
+
+/** @return array<string,mixed> */
+function normalizeBsonDocument(mixed $value): array
+{
+    $normalized = json_decode(json_encode($value, JSON_THROW_ON_ERROR), true, 512, JSON_THROW_ON_ERROR);
+    if (!is_array($normalized)) {
+        throw new RuntimeException('MongoDB schema metadata returned an invalid document');
+    }
+    return $normalized;
+}
+
+function canonicalSchemaJson(mixed $value): string
+{
+    return json_encode(canonicalSchemaValue($value), JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+}
+
+function canonicalSchemaValue(mixed $value): mixed
+{
+    if (is_object($value)) {
+        $value = normalizeBsonDocument($value);
+    }
+    if (!is_array($value)) {
+        return $value;
+    }
+    if (array_is_list($value)) {
+        return array_map('canonicalSchemaValue', $value);
+    }
+    ksort($value);
+    foreach ($value as $key => $child) {
+        $value[$key] = canonicalSchemaValue($child);
+    }
+    return $value;
 }

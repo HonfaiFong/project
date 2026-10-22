@@ -25,32 +25,44 @@ final class MongoMessageTransactionManager implements MessageTransactionManagerI
     public function transaction(callable $operation, ?OperationBudget $budget = null): mixed
     {
         $budget ??= new OperationBudget(600);
-        for ($attempt = 0; $attempt < 3; $attempt++) {
+        $maxAttempts = MongoConnectionFactory::rpcMaxTransactionAttempts();
+        $retryDelayMs = MongoConnectionFactory::rpcRetryDelayMs();
+        for ($attempt = 0; $attempt < $maxAttempts; $attempt++) {
             $session = $this->client->startSession();
             $active = false;
             $commitUnknown = false;
             try {
-                $budget->remainingMilliseconds(MongoConnectionFactory::RPC_IO_RESERVE_MS);
+                $commitTimeoutMs = MongoConnectionFactory::rpcCommitTimeoutMs($budget);
+                $writeTimeoutMs = MongoConnectionFactory::rpcWriteTimeoutMs($budget, $commitTimeoutMs);
+                $budget->remainingMilliseconds(MongoConnectionFactory::rpcReserveMs() + $commitTimeoutMs);
                 $session->startTransaction([
                     'readPreference' => new ReadPreference(ReadPreference::PRIMARY),
                     'readConcern' => new ReadConcern(ReadConcern::SNAPSHOT),
-                    'writeConcern' => new WriteConcern(WriteConcern::MAJORITY, MongoConnectionFactory::RPC_IO_TIMEOUT_MS, true),
-                    'maxCommitTimeMS' => MongoConnectionFactory::RPC_IO_TIMEOUT_MS,
+                    'writeConcern' => new WriteConcern(WriteConcern::MAJORITY, $writeTimeoutMs, true),
+                    'maxCommitTimeMS' => $commitTimeoutMs,
                 ]);
                 $active = true;
-                $transaction = new MongoMessageWriteTransaction($this->client, $this->database, $session, budget: $budget);
+                $transaction = new MongoMessageWriteTransaction(
+                    $this->client,
+                    $this->database,
+                    $session,
+                    budget: $budget,
+                    commitTimeoutMs: $commitTimeoutMs,
+                );
                 $result = $operation($transaction);
                 while (true) {
                     try {
-                        $budget->remainingMilliseconds(MongoConnectionFactory::RPC_IO_RESERVE_MS);
+                        $budget->remainingMilliseconds(MongoConnectionFactory::rpcReserveMs() + $commitTimeoutMs);
                         $session->commitTransaction();
                         $active = false;
                         return $result;
                     } catch (Throwable $exception) {
                         if ($this->hasErrorLabel($exception, 'UnknownTransactionCommitResult')) {
                             $commitUnknown = true;
-                            if ($budget->hasTime(MongoConnectionFactory::RPC_IO_RESERVE_MS + 10)) {
-                                usleep(10_000);
+                            if ($budget->hasTime(MongoConnectionFactory::rpcReserveMs() + $commitTimeoutMs + $retryDelayMs)) {
+                                if ($retryDelayMs > 0) {
+                                    usleep($retryDelayMs * 1000);
+                                }
                                 continue;
                             }
                         }
@@ -65,9 +77,11 @@ final class MongoMessageTransactionManager implements MessageTransactionManagerI
                         // Preserve the original database error and discard this session.
                     }
                 }
-                if (!$commitUnknown && $attempt < 2 && $this->hasErrorLabel($exception, 'TransientTransactionError')
-                    && $budget->hasTime(MongoConnectionFactory::RPC_IO_RESERVE_MS + 25)) {
-                    usleep(10_000 * ($attempt + 1));
+                if (!$commitUnknown && $attempt + 1 < $maxAttempts && $this->hasErrorLabel($exception, 'TransientTransactionError')
+                    && $budget->hasTime(MongoConnectionFactory::rpcReserveMs() + $commitTimeoutMs + $retryDelayMs * ($attempt + 1))) {
+                    if ($retryDelayMs > 0) {
+                        usleep($retryDelayMs * ($attempt + 1) * 1000);
+                    }
                     continue;
                 }
                 if ($commitUnknown) {

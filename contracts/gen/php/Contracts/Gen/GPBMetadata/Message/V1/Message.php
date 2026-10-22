@@ -18,7 +18,7 @@ class Message
         \Contracts\Gen\GPBMetadata\Common\V1\Identity::initOnce();
         $pool->internalAddGeneratedFile(
             '
-ñ
+õ
 message/v1/message.proto
 message.v1common/v1/identity.proto"Ì
 Message
@@ -80,11 +80,17 @@ pagination (2.common.v1.PaginationRequest"u
 GetMessagesResponse+
 messages (2.message.v1.PublicMessage1
 
-pagination (2.common.v1.PaginationResponse2â
+pagination (2.common.v1.PaginationResponse"?
+$GetConversationLatestSequenceRequest
+conversation_id (";
+%GetConversationLatestSequenceResponse
+
+latest_seq (2ê
 MessageServiceT
 SendMessage$.message.v1.PublicSendMessageRequest.message.v1.SendMessageResponseQ
 SyncMessages.message.v1.SyncMessagesRequest .message.v1.SyncMessagesResponseN
-GetMessages.message.v1.GetMessagesRequest.message.v1.GetMessagesResponseBxZ4social-backend/contracts/gen/go/message/v1;messagev1 Contracts\\Gen\\Message\\V1‚$Contracts\\Gen\\GPBMetadata\\Message\\V1bproto3'
+GetMessages.message.v1.GetMessagesRequest.message.v1.GetMessagesResponseÑ
+GetConversationLatestSequence0.message.v1.GetConversationLatestSequenceRequest1.message.v1.GetConversationLatestSequenceResponseBxZ4social-backend/contracts/gen/go/message/v1;messagev1 Contracts\\Gen\\Message\\V1‚$Contracts\\Gen\\GPBMetadata\\Message\\V1bproto3'
         , true);
 
         static::$is_initialized = true;

@@ -31,6 +31,9 @@ final class PostgresConnectionFactory
         $user = $value('PG_USER');
         $password = $value('PG_PASSWORD');
         $schema = $value('PG_SCHEMA');
+        if ($value('PG_SCHEMA_PREFIX') !== '') {
+            throw new RuntimeException('PG_SCHEMA_PREFIX is unsupported; PostgreSQL schemas use fixed service names');
+        }
         if ($user === '' || $schema === '') {
             throw new RuntimeException('PG_USER and PG_SCHEMA are required');
         }

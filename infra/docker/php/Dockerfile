@@ -21,7 +21,7 @@ COPY --from=ghcr.io/mlocati/php-extension-installer:2 \
 # 编译型扩展(grpc)只在这一层发生;业务代码变动不会触发本镜像重建
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    install-php-extensions \
+    IPE_PROCESSOR_COUNT=1 install-php-extensions \
         pdo_mysql \
         pdo_pgsql \
         mongodb \

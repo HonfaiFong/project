@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone postgres-ready mongo-ready redis-ready seed e2e e2e-social latency-probe logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration test-postgres test-mongodb test-database-failover up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone postgres-ready mongo-ready redis-ready seed e2e e2e-social latency-probe logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -32,6 +32,19 @@ test-unit:
 test-integration:
 	@echo "Running PHP Integration Tests..."
 	@vendor/bin/phpunit --testsuite Integration --fail-on-skipped
+
+test-postgres:
+	@echo "Running PostgreSQL integration tests..."
+	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 --entrypoint php database-migrate vendor/bin/phpunit tests/Integration/PostgresMigrationRuntimeTest.php tests/Integration/EloquentPersistenceTest.php tests/Integration/UserOutboxTransactionTest.php --fail-on-skipped
+
+test-mongodb:
+	@echo "Running MongoDB integration tests..."
+	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 -e MONGODB_TEST_RUNTIME_PASSWORD=replace-with-random-local-mongo-runtime-password -e MONGODB_TEST_RELAY_PASSWORD=replace-with-random-local-mongo-relay-password --entrypoint php mongodb-migrate vendor/bin/phpunit tests/Integration/MongoMessagePersistenceTest.php --fail-on-skipped
+
+test-database-failover:
+	@echo "Running Database failover and recovery tests..."
+	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 -e MONGODB_TEST_RUNTIME_PASSWORD=replace-with-random-local-mongo-runtime-password -e MONGODB_TEST_RELAY_PASSWORD=replace-with-random-local-mongo-relay-password --entrypoint php mongodb-migrate vendor/bin/phpunit tests/Integration/MongoTransactionFailoverTest.php --fail-on-skipped
+	bash scripts/redis_revocation_persistence_test.sh
 
 infra-up:
 	docker compose up -d postgres mongo mongo-init redis rabbitmq
@@ -72,9 +85,10 @@ down:
 
 restart: down up
 
-# 仅当 PHP 版本 / 扩展 / RoadRunner / Dockerfile 变化时才需要
+# 仅当 PHP 版本 / 扩展 / RoadRunner / Dockerfile 变化时才需要;顺序构建避免内存争抢
 build-runtime:
-	docker compose build php-runtime realtime-gateway
+	docker compose build realtime-gateway
+	docker compose build php-runtime
 
 # 缓存全弃用,排查 Dockerfile 问题时用
 rebuild-runtime:

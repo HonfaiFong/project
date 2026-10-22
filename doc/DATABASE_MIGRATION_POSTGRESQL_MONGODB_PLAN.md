@@ -53,11 +53,11 @@ flowchart LR
 
 | 当前位置 | 已确认的实现 | 迁移要求 |
 | --- | --- | --- |
-| `composer.json` | illuminate/database 12.x、Phinx 0.16，尚无 MongoDB PHP Library | 使用现有 Eloquent 的 PostgreSQL 能力；MessageService 使用官方 MongoDB Library |
+| `composer.json` | illuminate/database 12.x、Phinx 0.16、MongoDB PHP Library 2.1+ | 使用现有 Eloquent 的 PostgreSQL 能力；MessageService 直接使用官方 MongoDB Library |
 | `packages/php/database/src/EloquentConnection.php` | 仅注册 MySqlConnection、SQLiteConnection；复用服务 PDO | 增加 PostgresConnection，保留共享事务与禁止隐式重放写入的策略 |
-| `services/message-service/src/Application/MessageApplicationService.php` | 构造参数依赖具体 PdoMessageRepository，直接 begin/commit/rollback | 抽取消息仓储与事务边界，应用层不再接触 PDO |
-| 同上 | getMessages 的总数查询直接执行 SQL | 将 countForConversation 纳入仓储接口 |
-| `services/message-service/src/Infrastructure/PdoMessageRepository.php` | MySQL/SQLite 分支，序号加锁递增，两个业务唯一键 | 新建 MongoDB 仓储、类型映射、索引、事务内序号分配 |
+| `services/message-service/src/Application/MessageApplicationService.php` | 使用消息仓储和事务管理器接口，不直接持有 PDO | 保持应用层与存储边界分离 |
+| 同上 | GetMessages 已按 conversation seq 游标分页，无总数查询 | 保持无 COUNT 的分页契约 |
+| `services/message-service/src/Infrastructure/PdoMessageRepository.php` | 全仓调用点审计仅找到类定义 | 已删除未使用的 PDO/MySQL 消息仓储；生产只装配 MongoDB 实现 |
 | `packages/php/outbox/src/OutboxRepository.php` | Eloquent + PDO；领取时检查同 event_key 的未发布前序 | PostgreSQL 继续使用 SQL 实现；MongoDB 另做实现并保留前序阻塞语义 |
 | `packages/php/outbox/src/OutboxRelayStore.php` | 完成/失败操作只接收 id，未携带领取凭证 | 增加领取 token，防止旧 worker 修改重新领取的事件 |
 | `packages/php/outbox/src/OutboxRelay.php` | 当前每轮领取一条，先发布再标记 | 复用流程，适配带 token 的领取结果 |
@@ -127,7 +127,7 @@ Auth 的微秒字段必须单独设置 Eloquent dateFormat/cast 与 SQL 参数�
 
 - PostgreSQL 原有 JSON 列映射为 jsonb；普通帖子正文等原 TEXT 列仍保持 text。
 - MongoDB 消息 content 第一版保存为合法 JSON 字符串，沿用现有 JSON 语义规范化比较，不为了使用文档库就改写公开消息结构。
-- 将 PdoMessageRepository 的 canonicalJson/normalizeJsonValue 提取为与数据库无关的 MessageContentCodec。
+- JSON 规范化比较已由与数据库无关的 MessageContentCodec 提供。
 - `{}` 和 `[]` 必须不同；JSON 对象键顺序和空白不影响幂等；数组顺序继续有意义。数字行为以现有测试与规范化实现为基准，迁移不顺带改变数值等价规则。
 - 不使用 hash 作为唯一的请求相等判据；如增加摘要，仅作为快速比较，最终规则仍可复核。
 - sender、事件及公开投影中的大整数仍是字符串，不能因为 BSON/JSONB 转换而变成 JSON number。
@@ -158,7 +158,7 @@ social_backend
 
 保留现有逻辑库名称便于审查。PostgreSQL 中不创建消息业务 schema；`message_db` 属于 MongoDB。五个服务分别通过自己的 schema 搜索路径访问数据，运行时不跨服务查表。
 
-PG_SCHEMA_PREFIX 用于隔离 CI 的 schema，必须做白名单、长度与保留名称校验，按 UTF-8 字节长度遵守 PostgreSQL 标识符限制；不能沿用 MySQL 64 字节和旧前缀最大长度。
+PostgreSQL 运行时和迁移使用固定服务 schema（`auth_db`、`user_db`、`content_db`、`social_db`、`chat_db`、`meta`）。CI 隔离使用独立数据库，不拼接 schema 前缀；设置非空 `PG_SCHEMA_PREFIX` 会快速失败。
 
 ### 5.2 角色设计
 
@@ -226,7 +226,7 @@ PostgreSQL 索引名在 schema 内唯一。MySQL 中 posts/comments 可以各自
 
 ### 5.5 迁移锁与 DDL
 
-`phinx.php` 以同一 PDO 会话持有 PostgreSQL advisory lock。使用 pg_try_advisory_lock 配合有上限的等待循环，超时后明确失败，不无限等待。锁键稳定地对应数据库和测试前缀。
+`phinx.php` 以同一 PDO 会话持有 PostgreSQL advisory lock。使用 pg_try_advisory_lock 配合有上限的等待循环，超时后明确失败，不无限等待。锁键稳定地对应数据库；CI 用独立数据库隔离。
 
 移除 MySQL 的 GET_LOCK、RELEASE_LOCK、USE、MYSQL_ATTR_MULTI_STATEMENTS 及 CREATE DATABASE IF NOT EXISTS 逻辑。建数据库归基础设施初始化，schema 与表归各自的受控引导/迁移阶段。
 
@@ -378,8 +378,8 @@ RoadRunnerMessageService 必须从项目实际可用的 gRPC deadline/超时上�
 ### 8.2 新实现与旧实现的生命周期
 
 - 新增 MongoMessageRepository、MongoMessageTransactionManager、MongoMessageWriteTransaction、MongoOutboxRelayStore、MongoConnectionFactory。
-- MessageApplicationService 不再暴露或调用 pdo()；countForConversation 从应用层 SQL 移入仓储。
-- 原 PdoMessageRepository 在迁移分支验证期间可作对照实现，最终不能再被生产容器装配。保留它时放在明确历史/测试路径，否则在测试替换完成后移除。
+- MessageApplicationService 不再暴露或调用 pdo()；GetMessages 以 conversation seq 游标分页，不执行总数 COUNT。
+- 原 PdoMessageRepository 在调用点审计中没有调用者，已删除；旧 MySQL 迁移资料仍隔离保留。
 - 单元测试改用内存仓储/事务 fake，只证明应用规则；MongoDB 原子性由真实副本集集成测试证明。
 - 不新增生产双写开关。迁移期间运行两种实现是测试对照，不表示允许向两个事实源同时写消息。
 
@@ -675,7 +675,7 @@ MessageService 不直接读取 PostgreSQL 的会话/成员表；ChatService 不�
 
 | 类别 | 变量 |
 | --- | --- |
-| PostgreSQL 公共连接 | PG_HOST、PG_PORT、PG_DATABASE、PG_SCHEMA_PREFIX |
+| PostgreSQL 公共连接 | PG_HOST、PG_PORT、PG_DATABASE（schema 使用固定服务名称） |
 | PostgreSQL 单服务 | PG_SCHEMA、PG_USER、PG_PASSWORD，由 Compose 为每个服务分别注入 |
 | PostgreSQL 迁移 | PG_MIGRATION_USER、PG_MIGRATION_PASSWORD、PG_MIGRATION_LOCK_TIMEOUT |
 | MongoDB 应用 | MONGODB_URI、MONGODB_DATABASE、MONGODB_REPLICA_SET |

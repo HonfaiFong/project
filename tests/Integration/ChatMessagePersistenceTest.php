@@ -18,6 +18,7 @@ use Services\ChatService\Domain\Identity\UserIdentityClient;
 use Services\ChatService\Domain\Social\AllowAllBlockStatusResolver;
 use Services\ChatService\Infrastructure\PdoChatRepository;
 use Packages\GrpcCommon\OperationBudget;
+use Services\ChatService\Domain\MessageSequenceReader;
 use Services\MessageService\Application\MessageApplicationService;
 use Services\MessageService\Domain\ChatMemberSnapshotClient;
 use Services\MessageService\Domain\Exception\MessageException;
@@ -88,9 +89,29 @@ final class ChatMessagePersistenceTest extends TestCase
                 return (string)$this->next++;
             }
         };
+        $sequenceState = new class {
+            public string $latest = '0';
+            public int $calls = 0;
+            public bool $unavailable = false;
+        };
+        $messageSequences = new class ($sequenceState) implements MessageSequenceReader {
+            public function __construct(private readonly object $state)
+            {
+            }
+
+            public function latestSequence(string $conversationId, OperationBudget $budget): string
+            {
+                $this->state->calls++;
+                if ($this->state->unavailable) {
+                    throw new \RuntimeException('MessageService unavailable', \Contracts\Errors\ErrorCode::SERVICE_UNAVAILABLE->value);
+                }
+                return $this->state->latest;
+            }
+        };
         $chat = new ChatApplicationService(
             repository: $chatRepository,
             users: $users,
+            messageSequences: $messageSequences,
             blocks: new AllowAllBlockStatusResolver(),
             references: new AnonymousReferenceFactory(str_repeat('k', 32)),
             ids: $chatIds,
@@ -135,6 +156,7 @@ final class ChatMessagePersistenceTest extends TestCase
             'type' => 1,
             'content' => '{"body":"persisted"}',
         ]);
+        $sequenceState->latest = '1';
         $conversationId = (string)$conversation->getConversationId();
         $synced = $messages->syncMessages('100', $conversationId, '0', 20);
 
@@ -183,11 +205,54 @@ final class ChatMessagePersistenceTest extends TestCase
             $chat->markRead('200', $conversationId, '999999');
             self::fail('A future read cursor must be rejected');
         } catch (\Services\ChatService\Domain\Exception\ChatException $exception) {
-            self::assertStringContainsString('latest confirmed message', $exception->getMessage());
+            self::assertStringContainsString('latest persisted message', $exception->getMessage());
         }
         self::assertSame('0', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
         self::assertTrue($chat->markRead('200', $conversationId, '1'));
         self::assertTrue($chat->markRead('200', $conversationId, '1'));
+        self::assertSame(1, $sequenceState->calls, 'A cursor covered by the PostgreSQL summary skips MessageService');
+
+        $second = $messages->sendMessage('100', [
+            'client_message_id' => 'integration-2',
+            'conversation_id' => $conversationId,
+            'type' => 1,
+            'content' => '{"body":"persisted before summary"}',
+        ]);
+        self::assertSame('2', (string)$second->getSeq());
+        self::assertSame('1', $chatRepository->latestMessageSequence($conversationId));
+        $sequenceState->latest = '2';
+        self::assertTrue($chat->markRead('200', $conversationId, '2'));
+        self::assertSame('2', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
+        self::assertSame(2, $sequenceState->calls);
+
+        $sequenceState->unavailable = true;
+        $lookupCount = $sequenceState->calls;
+        self::assertTrue($chat->markRead('200', $conversationId, '2'));
+        self::assertTrue($chat->markRead('200', $conversationId, '1'));
+        self::assertSame($lookupCount, $sequenceState->calls, 'Already confirmed reads skip an unavailable MessageService');
+        self::assertSame('2', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
+        try {
+            $chat->markRead('200', $conversationId, '3');
+            self::fail('A temporary sequence lookup failure must reject the read without writing');
+        } catch (\RuntimeException $exception) {
+            self::assertSame(\Contracts\Errors\ErrorCode::SERVICE_UNAVAILABLE->value, $exception->getCode());
+        }
+        self::assertSame('2', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
+        $sequenceState->unavailable = false;
+        try {
+            $chat->markRead('200', $conversationId, '3');
+            self::fail('A cursor beyond the MongoDB sequence must be rejected');
+        } catch (\Services\ChatService\Domain\Exception\ChatException $exception) {
+            self::assertStringContainsString('latest persisted message', $exception->getMessage());
+        }
+        self::assertSame('2', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
+
+        try {
+            $chat->markRead('300', $conversationId, '1');
+            self::fail('A non-member must not update the read cursor');
+        } catch (\Services\ChatService\Domain\Exception\ChatException $exception) {
+            self::assertSame(5001002, $exception->getCode());
+        }
 
         $state->unavailable = true;
         try {
@@ -221,12 +286,27 @@ final class ChatMessagePersistenceTest extends TestCase
 
         $state->mode = 1;
         $state->active = false;
-        $this->expectException(MessageException::class);
-        $messages->sendMessage('100', [
-            'client_message_id' => 'integration-disabled',
-            'conversation_id' => $conversationId,
-            'type' => 1,
-            'content' => '{"body":"must be denied"}',
-        ]);
+        try {
+            $messages->sendMessage('100', [
+                'client_message_id' => 'integration-disabled',
+                'conversation_id' => $conversationId,
+                'type' => 1,
+                'content' => '{"body":"must be denied"}',
+            ]);
+            self::fail('A disabled persona must not send messages');
+        } catch (MessageException) {
+            self::assertCount(3, $realtime->deliveries);
+        }
+
+        $leave = $chatPdo->prepare(
+            'UPDATE conversation_members SET left_at = CURRENT_TIMESTAMP WHERE conversation_id = :conversation_id AND user_id = :user_id',
+        );
+        $leave->execute(['conversation_id' => $conversationId, 'user_id' => '200']);
+        try {
+            $chat->markRead('200', $conversationId, '2');
+            self::fail('A member who left must not update the read cursor');
+        } catch (\Services\ChatService\Domain\Exception\ChatException $exception) {
+            self::assertSame(5001002, $exception->getCode());
+        }
     }
 }

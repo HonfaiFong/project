@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Tests\Unit;
 
 use PDO;
-use Services\ChatService\Domain\Exception\ChatException;
 use Services\ChatService\Infrastructure\PdoChatRepository;
 use Tests\TestCase;
 
@@ -36,9 +35,8 @@ final class ChatActivitySummaryTest extends TestCase
         self::assertTrue($repository->markRead('100', '10', '2'));
         self::assertTrue($repository->markRead('100', '10', '1'));
         self::assertSame('2', (string)$repository->findMember('100', '10')['last_read_seq']);
+        self::assertSame('2', $repository->latestMessageSequence('100'));
         $repository->applyMessageSummary('200', '2001', '1', '2026-10-12 00:03:00.000');
         self::assertSame('200', (string)$repository->listForUser('10', 1)[0]['id']);
-        $this->expectException(ChatException::class);
-        $repository->markRead('100', '10', '999999999999999999999999999');
     }
 }

@@ -62,6 +62,47 @@ final class MessageSessionSecurityTest extends TestCase
         self::assertCount(1, $repository->outbox);
     }
 
+    public function testHistoryPagesUseConversationSequenceCursorsAndPreserveLargeIntegers(): void
+    {
+        $chat = $this->chatClient([
+            'allowed' => true,
+            'denial_reason' => '',
+            'member' => ['user_id' => '100', 'persona_id' => '101', 'identity_mode' => 1],
+        ]);
+        [$app, $repository] = $this->app($chat);
+        $repository->messages = [
+            [
+                'message_id' => '900', 'conversation_id' => '900', 'seq' => '9007199254740993',
+                'sender_user_id' => '100', 'sender_persona_id' => '101', 'sender_identity_mode' => 1,
+                'client_message_id' => 'first', 'type' => 1, 'content' => '{"body":"first"}',
+                'created_at' => '2026-10-11 00:00:00.000',
+            ],
+            [
+                'message_id' => '901', 'conversation_id' => '900', 'seq' => '9007199254740992',
+                'sender_user_id' => '100', 'sender_persona_id' => '101', 'sender_identity_mode' => 1,
+                'client_message_id' => 'second', 'type' => 1, 'content' => '{"body":"second"}',
+                'created_at' => '2026-10-11 00:00:00.000',
+            ],
+        ];
+
+        $firstPage = $app->getMessages('100', '900', 1, null);
+        self::assertSame(['9007199254740993'], array_map(
+            static fn ($message): string => (string)$message->getSeq(),
+            $firstPage['messages'],
+        ));
+        self::assertSame('9007199254740993', $firstPage['next_cursor']);
+        self::assertTrue($firstPage['has_more']);
+        self::assertArrayNotHasKey('total', $firstPage);
+
+        $secondPage = $app->getMessages('100', '900', 1, $firstPage['next_cursor']);
+        self::assertSame(['9007199254740992'], array_map(
+            static fn ($message): string => (string)$message->getSeq(),
+            $secondPage['messages'],
+        ));
+        self::assertFalse($secondPage['has_more']);
+        self::assertSame('', $secondPage['next_cursor']);
+    }
+
     public function testOutboxFailureRollsBackMessageAndSequenceAllocation(): void
     {
         $chat = $this->chatClient([
