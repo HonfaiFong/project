@@ -66,7 +66,7 @@ final readonly class ChatController
 
     private function actor(GatewayRequest $request): void
     {
-        if (trim($request->authContext['user_id']) === '') {
+        if (blank($request->authContext['user_id'])) {
             throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
     }

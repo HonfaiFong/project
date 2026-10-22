@@ -71,7 +71,7 @@ final readonly class AuthApplicationService
         $userId = $userRes['user_id'];
         $isNewUser = $userRes['is_new_user'];
 
-        if ($userId === '0' || $userId === '') {
+        if (empty($userId)) {
             throw new RuntimeException('Failed to resolve user', ErrorCode::USER_NOT_FOUND->value);
         }
 
@@ -129,7 +129,7 @@ final readonly class AuthApplicationService
             $identity->provider->value,
         );
         $userId = (string)$user['user_id'];
-        if ($userId === '' || $userId === '0') {
+        if (empty($userId)) {
             throw new RuntimeException(ErrorCode::USER_NOT_FOUND->message(), ErrorCode::USER_NOT_FOUND->value);
         }
         $this->assertUserCanAuthenticate($userId);
@@ -279,7 +279,7 @@ final readonly class AuthApplicationService
             newExpiresAt: gmdate('Y-m-d H:i:s.v', $refreshExpiresAt)
         );
 
-        if (!$record) {
+        if (empty($record)) {
             throw new RuntimeException('Token invalid or expired', ErrorCode::AUTH_TOKEN_EXPIRED->value);
         }
 
@@ -303,12 +303,12 @@ final readonly class AuthApplicationService
     {
         $tokenHash = hash('sha256', $rawRefreshToken);
         $record = $this->authRepo->findRefreshToken($tokenHash);
-        if ($record === null) {
+        if (empty($record)) {
             return false;
         }
 
         $payload = null;
-        if ($rawAccessToken !== null && $rawAccessToken !== '') {
+        if (filled($rawAccessToken)) {
             try {
                 $payload = $this->jwtCodec->decode($rawAccessToken);
             } catch (Throwable $e) {
@@ -337,7 +337,7 @@ final readonly class AuthApplicationService
             $record = $this->authRepo->findRefreshToken($tokenHash);
         }
 
-        if ($record === null || $record->loggedOutAt === null) {
+        if (empty($record) || $record->loggedOutAt === null) {
             // Rotation is not logout. The client must use its current refresh credential.
             return false;
         }
@@ -391,7 +391,7 @@ final readonly class AuthApplicationService
         }
 
         $userId = (string)($payload['sub'] ?? '');
-        if ($userId === '' || $userId === '0') {
+        if (empty($userId)) {
             return ['valid' => false];
         }
 
@@ -449,7 +449,7 @@ final readonly class AuthApplicationService
      */
     private function authenticatedSocialLogin(SocialIdentity $identity, array $deviceInfo): array
     {
-        if ($identity->userId === null || $identity->userId === '') {
+        if (blank($identity->userId)) {
             throw new RuntimeException(
                 ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->message(),
                 ErrorCode::AUTH_SOCIAL_BIND_CONFLICT->value

@@ -63,9 +63,9 @@ final class ContentApplicationService
             throw new RuntimeException('visibility is invalid', ErrorCode::INVALID_ARGUMENT->value);
         }
 
-        if ($requestKey !== null) {
+        if (filled($requestKey)) {
             $existing = $this->findByRequest('posts', $actor->userId, $requestKey);
-            if ($existing !== null) {
+            if (!empty($existing)) {
                 if (!$this->postRequestMatches($identity, $existing, $type, $content, $visibility, $this->nullableText($emotion, 32), $media, $aliasDisplayName)) {
                     throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value);
                 }
@@ -125,9 +125,9 @@ final class ContentApplicationService
                 ]);
             });
         } catch (PDOException $e) {
-            if ($requestKey !== null && $this->isUniqueViolation($e)) {
+            if (filled($requestKey) && $this->isUniqueViolation($e)) {
                 $existing = $this->findByRequest('posts', $actor->userId, $requestKey);
-                if ($existing === null) {
+                if (empty($existing)) {
                     throw $e;
                 }
                 if (!$this->postRequestMatches($identity, $existing, $type, $content, $visibility, $this->nullableText($emotion, 32), $media, $aliasDisplayName)) {
@@ -144,7 +144,7 @@ final class ContentApplicationService
     public function getPost(?BusinessActor $actor, string $postId): PublicPost
     {
         $row = $this->findPost($postId);
-        if ($row === null) {
+        if (empty($row)) {
             throw new RuntimeException(ErrorCode::CONTENT_POST_NOT_FOUND->message(), ErrorCode::CONTENT_POST_NOT_FOUND->value);
         }
         $this->assertPostReadable($row, $actor);
@@ -175,7 +175,7 @@ final class ContentApplicationService
     public function deletePost(BusinessActor $actor, string $postId, string $requestId): void
     {
         $row = $this->findPost($postId);
-        if ($row === null) {
+        if (empty($row)) {
             throw new RuntimeException(ErrorCode::CONTENT_POST_NOT_FOUND->message(), ErrorCode::CONTENT_POST_NOT_FOUND->value);
         }
         $this->assertOwner($row, $actor);
@@ -219,7 +219,7 @@ final class ContentApplicationService
             ]);
             $affected = $statement->rowCount();
             if ($affected === 0) {
-                if ($this->findPost($postId) === null) {
+                if (empty($this->findPost($postId))) {
                     throw new RuntimeException(ErrorCode::CONTENT_POST_NOT_FOUND->message(), ErrorCode::CONTENT_POST_NOT_FOUND->value);
                 }
 
@@ -246,7 +246,7 @@ final class ContentApplicationService
         string $aliasDisplayName = '',
     ): PublicComment {
         $post = $this->findPost($postId);
-        if ($post === null) {
+        if (empty($post)) {
             throw new RuntimeException(ErrorCode::CONTENT_POST_NOT_FOUND->message(), ErrorCode::CONTENT_POST_NOT_FOUND->value);
         }
         $this->assertPostReadable($post, $actor);
@@ -254,9 +254,9 @@ final class ContentApplicationService
         $this->assertRequestedPersona($requestedPersonaId, $identity);
         $content = $this->requiredText($content, 2000, 'content');
         $requestKey = $this->requestId($requestId);
-        if ($requestKey !== null) {
+        if (filled($requestKey)) {
             $existing = $this->findByRequest('comments', $actor->userId, $requestKey);
-            if ($existing !== null) {
+            if (!empty($existing)) {
                 if (!$this->commentRequestMatches($identity, $existing, $postId, $this->nullableId($parentId), $this->nullableId($replyToCommentId), $content, $aliasDisplayName)) {
                     throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value);
                 }
@@ -323,9 +323,9 @@ final class ContentApplicationService
                 ]);
             });
         } catch (PDOException $e) {
-            if ($requestKey !== null && $this->isUniqueViolation($e)) {
+            if (filled($requestKey) && $this->isUniqueViolation($e)) {
                 $existing = $this->findByRequest('comments', $actor->userId, $requestKey);
-                if ($existing === null) {
+                if (empty($existing)) {
                     throw $e;
                 }
                 if (!$this->commentRequestMatches($identity, $existing, $postId, $parentId, $replyToCommentId, $content, $aliasDisplayName)) {
@@ -343,7 +343,7 @@ final class ContentApplicationService
     public function listComments(?BusinessActor $actor, string $postId, string $parentId, ?PaginationRequest $pagination): array
     {
         $post = $this->findPost($postId);
-        if ($post === null) {
+        if (empty($post)) {
             throw new RuntimeException(ErrorCode::CONTENT_POST_NOT_FOUND->message(), ErrorCode::CONTENT_POST_NOT_FOUND->value);
         }
         $this->assertPostReadable($post, $actor);
@@ -366,7 +366,7 @@ final class ContentApplicationService
                 $sql .= ' AND "parent_id" = :parent_id';
                 $params['parent_id'] = $parentId;
             }
-            if ($rawCursor !== '') {
+            if (filled($rawCursor)) {
                 $sql .= ' AND "id" < :cursor';
                 $params['cursor'] = $rawCursor;
             }
@@ -374,7 +374,7 @@ final class ContentApplicationService
             $statement = $this->pdo->prepare($sql);
             $statement->execute($params);
             $page = $statement->fetchAll(PDO::FETCH_ASSOC);
-            if ($page === []) {
+            if (empty($page)) {
                 break;
             }
             $this->loadChainContext($page, $chainCache);
@@ -401,7 +401,7 @@ final class ContentApplicationService
         return [
             'comments' => array_map(fn (array $row): PublicComment => $this->projectComment($row), $rows),
             'pagination' => new PaginationResponse([
-                'next_cursor' => $hasMore && $rows !== [] ? (string)$rows[array_key_last($rows)]['id'] : '',
+                'next_cursor' => $hasMore && !empty($rows) ? (string)$rows[array_key_last($rows)]['id'] : '',
                 'has_more' => $hasMore,
                 'total' => $this->countComments($postId, $parentId),
             ]),
@@ -422,12 +422,12 @@ final class ContentApplicationService
         foreach ($page as $row) {
             foreach (['parent_id', 'reply_to_comment_id'] as $column) {
                 $id = trim((string)($row[$column] ?? ''));
-                if ($id !== '' && $id !== '0' && !array_key_exists($id, $cache)) {
+                if (!empty($id) && !array_key_exists($id, $cache)) {
                     $ids[$id] = $id;
                 }
             }
         }
-        if ($ids === []) {
+        if (empty($ids)) {
             return;
         }
         $list = array_values($ids);
@@ -449,7 +449,7 @@ final class ContentApplicationService
      */
     private function cachedIsBlocked(string $actorUserId, string $targetUserId, array &$cache): bool
     {
-        if ($targetUserId === '' || $targetUserId === $actorUserId) {
+        if (blank($targetUserId) || $targetUserId === $actorUserId) {
             return false;
         }
         if (array_key_exists($targetUserId, $cache)) {
@@ -469,7 +469,7 @@ final class ContentApplicationService
             throw new RuntimeException(ErrorCode::CONTENT_COMMENT_NOT_FOUND->message(), ErrorCode::CONTENT_COMMENT_NOT_FOUND->value);
         }
         $post = $this->findPost((string)$row['post_id']);
-        if ($post === null) {
+        if (empty($post)) {
             throw new RuntimeException(ErrorCode::CONTENT_POST_NOT_FOUND->message(), ErrorCode::CONTENT_POST_NOT_FOUND->value);
         }
         $this->assertPostReadable($post, $actor);
@@ -701,7 +701,7 @@ final class ContentApplicationService
             'comment' => $this->findCommentRow($resourceId),
             default => null,
         };
-        if ($row === null || ($row['deleted_at'] ?? null) !== null || (int)($row['status'] ?? 0) !== 1) {
+        if (empty($row) || ($row['deleted_at'] ?? null) !== null || (int)($row['status'] ?? 0) !== 1) {
             return $this->resourceDenied('resource_not_found');
         }
         $root = $resourceType === 'post' ? $row : $this->findPost((string)$row['post_id']);
@@ -709,13 +709,13 @@ final class ContentApplicationService
             if (!$this->isCommentChainReadable($row)) {
                 return $this->resourceDenied('parent_not_accessible');
             }
-            if ($root === null || !$this->isPostReadable($root, $actor, $checkBlocks)) {
+            if (empty($root) || !$this->isPostReadable($root, $actor, $checkBlocks)) {
                 return $this->resourceDenied('post_not_accessible');
             }
         }
         $isOwner = (string)($row['author_user_id'] ?? '') === $actor->userId;
         $allowed = match ($action) {
-            'read', 'comment', 'like' => $root !== null
+            'read', 'comment', 'like' => !empty($root)
                 && $this->isPostReadable($root, $actor, $checkBlocks)
                 && (!$checkBlocks || !$this->isBlocked($actor->userId, (string)($row['author_user_id'] ?? ''))),
             'delete', 'update', 'status' => $isOwner,
@@ -862,7 +862,7 @@ final class ContentApplicationService
 
     private function isBlocked(string $actorUserId, string $targetUserId): bool
     {
-        if ($targetUserId === '' || $targetUserId === $actorUserId) {
+        if (blank($targetUserId) || $targetUserId === $actorUserId) {
             return false;
         }
 
@@ -908,7 +908,7 @@ final class ContentApplicationService
     private function assertCommentBelongsToPost(string $commentId, string $postId): void
     {
         $row = $this->findCommentRow($commentId);
-        if ($row === null || (string)$row['post_id'] !== $postId || (int)$row['status'] !== 1 || $row['deleted_at'] !== null) {
+        if (empty($row) || (string)$row['post_id'] !== $postId || (int)$row['status'] !== 1 || $row['deleted_at'] !== null) {
             throw new RuntimeException(ErrorCode::CONTENT_COMMENT_NOT_FOUND->message(), ErrorCode::CONTENT_COMMENT_NOT_FOUND->value);
         }
     }
@@ -923,14 +923,14 @@ final class ContentApplicationService
     {
         foreach (['parent_id', 'reply_to_comment_id'] as $column) {
             $id = trim((string)($row[$column] ?? ''));
-            if ($id === '' || $id === '0') {
+            if (empty($id)) {
                 continue;
             }
             if (!array_key_exists($id, $cache)) {
                 $cache[$id] = $this->findCommentRow($id);
             }
             $parent = $cache[$id];
-            if ($parent === null || (int)($parent['status'] ?? 0) !== 1 || ($parent['deleted_at'] ?? null) !== null) {
+            if (empty($parent) || (int)($parent['status'] ?? 0) !== 1 || ($parent['deleted_at'] ?? null) !== null) {
                 return false;
             }
         }
@@ -952,12 +952,12 @@ final class ContentApplicationService
     {
         $requested = trim($requested);
 
-        return $requested === '' ? '匿名用户' : $requested;
+        return blank($requested) ? '匿名用户' : $requested;
     }
 
     private function assertRequestedPersona(string $requestedPersonaId, UserIdentity $identity): void
     {
-        if ($requestedPersonaId !== '' && $requestedPersonaId !== '0' && $requestedPersonaId !== $identity->personaId) {
+        if (!empty($requestedPersonaId) && $requestedPersonaId !== $identity->personaId) {
             throw new RuntimeException(ErrorCode::PERSONA_FORBIDDEN->message(), ErrorCode::PERSONA_FORBIDDEN->value);
         }
     }
@@ -1048,7 +1048,7 @@ final class ContentApplicationService
             eventType: $eventType,
             eventVersion: 1,
             payload: $payload,
-            eventKey: $requestId !== '' ? $requestId : $aggregateId,
+            eventKey: filled($requestId) ? $requestId : $aggregateId,
             traceId: TraceContext::current()->traceId,
         );
     }
@@ -1061,7 +1061,7 @@ final class ContentApplicationService
     private function requestId(string $value): ?string
     {
         $value = trim($value);
-        if ($value === '') {
+        if (blank($value)) {
             return null;
         }
         if ($this->length($value) > 64) {
@@ -1074,7 +1074,7 @@ final class ContentApplicationService
     private function requiredText(string $value, int $maxLength, string $field): string
     {
         $value = trim($value);
-        if ($value === '' || $this->length($value) > $maxLength) {
+        if (blank($value) || $this->length($value) > $maxLength) {
             throw new RuntimeException($field . ' is invalid', ErrorCode::INVALID_ARGUMENT->value);
         }
 
@@ -1084,7 +1084,7 @@ final class ContentApplicationService
     private function nullableText(string $value, int $maxLength): ?string
     {
         $value = trim($value);
-        if ($value === '') {
+        if (blank($value)) {
             return null;
         }
         if ($this->length($value) > $maxLength) {
@@ -1097,7 +1097,7 @@ final class ContentApplicationService
     private function nullableId(string $value): ?string
     {
         $value = trim($value);
-        if ($value === '' || $value === '0') {
+        if (empty($value)) {
             return null;
         }
         if (!$this->isPositiveId($value)) {

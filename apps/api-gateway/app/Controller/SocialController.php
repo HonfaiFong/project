@@ -60,7 +60,7 @@ final readonly class SocialController
     private function actor(GatewayRequest $request): string
     {
         $userId = trim($request->authContext['user_id']);
-        if ($userId === '') {
+        if (blank($userId)) {
             throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
         return $userId;
@@ -69,7 +69,7 @@ final readonly class SocialController
     private function personaId(GatewayRequest $request): string
     {
         $body = trim((string)$request->post('persona_id', ''));
-        if ($body !== '') {
+        if (filled($body)) {
             return $body;
         }
 
@@ -79,7 +79,7 @@ final readonly class SocialController
     private function followerPersonaId(GatewayRequest $request): string
     {
         $body = trim((string)$request->post('follower_persona_id', ''));
-        return $body !== '' ? $body : $this->personaId($request);
+        return filled($body) ? $body : $this->personaId($request);
     }
 
     private function mainMode(GatewayRequest $request): int

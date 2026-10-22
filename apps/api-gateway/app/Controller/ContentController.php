@@ -118,7 +118,7 @@ final readonly class ContentController
     private function requestedPersonaId(GatewayRequest $request, mixed $bodyPersonaId): string
     {
         $bodyPersonaId = trim((string)($bodyPersonaId ?? ''));
-        if ($bodyPersonaId !== '' && $bodyPersonaId !== '0') {
+        if (!empty($bodyPersonaId)) {
             return $bodyPersonaId;
         }
 
@@ -127,7 +127,7 @@ final readonly class ContentController
 
     private function requireActor(GatewayRequest $request): void
     {
-        if (trim($request->authContext['user_id']) === '') {
+        if (blank($request->authContext['user_id'])) {
             throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
     }

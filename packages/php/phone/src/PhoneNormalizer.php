@@ -22,7 +22,7 @@ final class PhoneNormalizer
     public function normalize(string $phone): string
     {
         $phone = trim($phone);
-        if ($phone === '') {
+        if (blank($phone)) {
             throw $this->invalidPhone();
         }
 

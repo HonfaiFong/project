@@ -62,6 +62,27 @@ final class MessageSessionSecurityTest extends TestCase
         self::assertCount(1, $repository->outbox);
     }
 
+    public function testZeroClientIdAndJsonNumberAreNotEmptyMessageText(): void
+    {
+        $chat = $this->chatClient([
+            'allowed' => true,
+            'member' => ['user_id' => '100', 'persona_id' => '101', 'identity_mode' => 1],
+        ]);
+        [$app, $repository] = $this->app($chat);
+        $request = [
+            'client_message_id' => '0', 'conversation_id' => '900',
+            'type' => 1, 'content' => '0',
+        ];
+
+        $first = $app->sendMessage('100', $request);
+        $retry = $app->sendMessage('100', $request);
+        self::assertSame('0', $first->getClientMessageId());
+        self::assertSame('0', $first->getContent());
+        self::assertSame($first->getMessageId(), $retry->getMessageId());
+        self::assertCount(1, $repository->outbox);
+        self::assertCount(1, $app->syncMessages('100', '900', '0', 10)['messages']);
+    }
+
     public function testHistoryPagesUseConversationSequenceCursorsAndPreserveLargeIntegers(): void
     {
         $chat = $this->chatClient([

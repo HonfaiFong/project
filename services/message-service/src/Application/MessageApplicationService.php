@@ -60,7 +60,7 @@ final class MessageApplicationService
         $budget ??= new OperationBudget(600);
         $trustedUserId = $this->id($trustedUserId, 'user_id');
         $clientMessageId = trim((string)($request['client_message_id'] ?? ''));
-        if ($clientMessageId === '' || strlen($clientMessageId) > 36) {
+        if (blank($clientMessageId) || strlen($clientMessageId) > 36) {
             throw MessageException::invalid('client_message_id is required and must be at most 36 bytes');
         }
         $conversationId = $this->id((string)($request['conversation_id'] ?? ''), 'conversation_id');
@@ -69,7 +69,7 @@ final class MessageApplicationService
             throw MessageException::invalid('message type is required');
         }
         $content = (string)($request['content'] ?? '');
-        if ($content === '' || strlen($content) > 65535) {
+        if (blank($content) || strlen($content) > 65535) {
             throw MessageException::invalid('message content is required or too long');
         }
         try {
@@ -87,7 +87,7 @@ final class MessageApplicationService
             'content' => $content,
         ];
         $existing = $this->repository->findBySenderClientId($trustedUserId, $clientMessageId, $budget);
-        if ($existing !== null) {
+        if (!empty($existing)) {
             if (!$this->repository->idempotencyMatches($existing, $normalized)) {
                 throw MessageException::duplicate('client_message_id was already used for a different message');
             }
@@ -116,7 +116,7 @@ final class MessageApplicationService
                 $traceId,
             ): PublicMessage {
                 $existing = $transaction->findBySenderClientId($trustedUserId, $clientMessageId);
-                if ($existing !== null) {
+                if (!empty($existing)) {
                     if (!$this->repository->idempotencyMatches($existing, $normalized)) {
                         throw MessageException::duplicate('client_message_id was already used for a different message');
                     }
@@ -164,7 +164,7 @@ final class MessageApplicationService
             // winning row is found by that business key. An _id collision is
             // deliberately allowed to propagate as an internal error.
             $existing = $this->repository->findBySenderClientId($trustedUserId, $clientMessageId, $budget);
-            if ($existing === null) {
+            if (empty($existing)) {
                 throw $exception;
             }
             if (!$this->repository->idempotencyMatches($existing, $normalized)) {
@@ -236,7 +236,7 @@ final class MessageApplicationService
         return [
             'messages' => array_map(fn (array $row): PublicMessage => $this->publicMessage($row), $rows),
             'has_more' => $hasMore,
-            'next_cursor' => $hasMore && $rows !== [] ? (string)$rows[array_key_last($rows)]['seq'] : '',
+            'next_cursor' => $hasMore && !empty($rows) ? (string)$rows[array_key_last($rows)]['seq'] : '',
         ];
     }
 
@@ -320,7 +320,7 @@ final class MessageApplicationService
     private function id(int|string $value, string $field): string
     {
         $value = trim((string)$value);
-        if ($value === '' || $value === '0' || preg_match('/\A[1-9][0-9]*\z/', $value) !== 1
+        if (empty($value) || preg_match('/\A[1-9][0-9]*\z/', $value) !== 1
             || strlen($value) > 19 || (strlen($value) === 19 && strcmp($value, '9223372036854775807') > 0)) {
             throw MessageException::invalid($field . ' is required');
         }

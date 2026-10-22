@@ -19,7 +19,7 @@ final readonly class AnonymousReferenceFactory
     public function forAlias(string $personaId, string $scopeType, string $scopeId): string
     {
         foreach ([$personaId, $scopeType, $scopeId] as $value) {
-            if ($value === '' || strlen($value) > 255) {
+            if (blank($value) || strlen($value) > 255) {
                 throw new RuntimeException('Anonymous identity scope is invalid');
             }
         }

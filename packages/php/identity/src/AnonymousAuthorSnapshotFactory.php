@@ -64,7 +64,7 @@ final readonly class AnonymousAuthorSnapshotFactory
     private function requiredText(string $value, string $field): string
     {
         $value = trim($value);
-        if ($value === '') {
+        if (blank($value)) {
             throw new \InvalidArgumentException($field . ' is required');
         }
 
@@ -106,7 +106,7 @@ final readonly class AnonymousAuthorSnapshotFactory
             throw new \InvalidArgumentException('avatar key exceeds 255 characters');
         }
 
-        return $value === '' ? null : $value;
+        return blank($value) ? null : $value;
     }
 
     private function characterLength(string $value): int

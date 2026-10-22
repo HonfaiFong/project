@@ -231,7 +231,7 @@ final readonly class SocialApplicationService
     private function id(int|string $value, string $field): string
     {
         $value = (string)$value;
-        if ($value === '' || $value === '0' || strspn($value, '0123456789') !== strlen($value)) {
+        if (empty($value) || strspn($value, '0123456789') !== strlen($value)) {
             throw $this->error(ErrorCode::INVALID_ARGUMENT, $field . ' is required');
         }
 

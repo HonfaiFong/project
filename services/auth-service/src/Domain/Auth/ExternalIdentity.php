@@ -17,11 +17,11 @@ final readonly class ExternalIdentity
 
     public function subjectType(): string
     {
-        return $this->unionId !== null && $this->unionId !== '' ? 'unionid' : 'openid';
+        return filled($this->unionId) ? 'unionid' : 'openid';
     }
 
     public function subjectId(): string
     {
-        return $this->unionId !== null && $this->unionId !== '' ? $this->unionId : $this->openId;
+        return filled($this->unionId) ? $this->unionId : $this->openId;
     }
 }

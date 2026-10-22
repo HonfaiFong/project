@@ -29,7 +29,7 @@ final readonly class AnonymousAuthorProjector
         $mode = $this->mode($snapshot);
         if ($mode === PersonaMode::MAIN) {
             $publicId = $this->publicId($snapshot);
-            if ($publicId !== null) {
+            if (filled($publicId)) {
                 return [
                     'identity_mode' => 'main',
                     'persona_id' => $publicId,
@@ -125,6 +125,6 @@ final readonly class AnonymousAuthorProjector
         }
         $value = trim($value);
 
-        return $value === '' ? null : $value;
+        return blank($value) ? null : $value;
     }
 }

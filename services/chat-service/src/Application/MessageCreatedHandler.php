@@ -27,7 +27,7 @@ final readonly class MessageCreatedHandler
             throw new RuntimeException('Unsupported message event');
         }
         $message = $event->payload['message'] ?? null;
-        if (!is_array($message) || $event->eventId === '') {
+        if (!is_array($message) || blank($event->eventId)) {
             throw new RuntimeException('Invalid message event');
         }
         foreach (['message_id', 'conversation_id', 'seq'] as $field) {
@@ -36,7 +36,7 @@ final readonly class MessageCreatedHandler
             }
         }
         $conversationId = $message['conversation_id'];
-        if ($event->key !== $conversationId || $this->repository->findById($conversationId) === null
+        if ($event->key !== $conversationId || empty($this->repository->findById($conversationId))
             || !is_string($message['created_at'] ?? null)
             || preg_match('/\A\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\z/', $message['created_at']) !== 1
         ) {
@@ -60,7 +60,7 @@ final readonly class MessageCreatedHandler
                 $recipients[] = $userId;
             }
         }
-        if ($recipients !== []) {
+        if (!empty($recipients)) {
             $this->realtime->publish($event->eventId, $recipients, $safeMessage);
         }
     }

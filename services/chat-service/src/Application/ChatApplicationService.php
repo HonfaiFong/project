@@ -98,8 +98,8 @@ final class ChatApplicationService
             try {
                 $pdo->beginTransaction();
                 $existing = $this->repository->findByPrivateKey($privateKey);
-                if ($existing !== null) {
-                    if ($this->repository->findMember((string)$existing['id'], $trustedUserId) === null) {
+                if (!empty($existing)) {
+                    if (empty($this->repository->findMember((string)$existing['id'], $trustedUserId))) {
                         // A key must never allow a caller to observe a session
                         // that does not contain the authenticated account.
                         $pdo->rollBack();
@@ -136,7 +136,7 @@ final class ChatApplicationService
                     ],
                 );
                 $created = $this->repository->findById($conversationId);
-                if ($created === null) {
+                if (empty($created)) {
                     throw ChatException::notFound('created conversation could not be reloaded');
                 }
                 $pdo->commit();
@@ -157,7 +157,7 @@ final class ChatApplicationService
                 // A concurrent creator won the unique private_key race. The
                 // next read returns its immutable snapshot.
                 $existing = $this->repository->findByPrivateKey($privateKey);
-                if ($existing !== null && $this->repository->findMember((string)$existing['id'], $trustedUserId) !== null) {
+                if (!empty($existing) && !empty($this->repository->findMember((string)$existing['id'], $trustedUserId))) {
                     return $this->publicConversation($existing);
                 }
                 $attempt++;
@@ -170,7 +170,7 @@ final class ChatApplicationService
         $trustedUserId = $this->id($trustedUserId, 'user_id');
         $conversationId = $this->id($conversationId, 'conversation_id');
         $conversation = $this->repository->findByIdForUser($conversationId, $trustedUserId);
-        if ($conversation === null) {
+        if (empty($conversation)) {
             throw ChatException::notFound();
         }
 
@@ -219,7 +219,7 @@ final class ChatApplicationService
         $conversationId = $this->id($conversationId, 'conversation_id');
         $seq = $this->uint($seq, 'seq');
         $member = $this->repository->findMember($conversationId, $trustedUserId);
-        if ($member === null) {
+        if (empty($member)) {
             throw ChatException::notMember();
         }
 
@@ -249,11 +249,11 @@ final class ChatApplicationService
         $trustedUserId = $this->id($trustedUserId, 'user_id');
         $conversationId = $this->id($conversationId, 'conversation_id');
         $conversation = $this->repository->findById($conversationId);
-        if ($conversation === null) {
+        if (empty($conversation)) {
             return ['allowed' => false, 'denial_reason' => 'conversation not found'];
         }
         $member = $this->repository->findMember($conversationId, $trustedUserId);
-        if ($member === null) {
+        if (empty($member)) {
             return ['allowed' => false, 'denial_reason' => 'user is not a member of conversation'];
         }
 
@@ -264,7 +264,7 @@ final class ChatApplicationService
                 break;
             }
         }
-        if ($peerUserId === null || $this->blocks->isBlockedEitherWay($trustedUserId, $peerUserId)) {
+        if (blank($peerUserId) || $this->blocks->isBlockedEitherWay($trustedUserId, $peerUserId)) {
             return ['allowed' => false, 'denial_reason' => 'conversation is blocked'];
         }
 
@@ -375,11 +375,11 @@ final class ChatApplicationService
         }
 
         $resolvedDisplayName = $this->nullableText($resolved['display_name'] ?? null);
-        if ($resolvedDisplayName !== null) {
+        if (filled($resolvedDisplayName)) {
             $profile['nickname'] = $resolvedDisplayName;
         }
         $resolvedAvatarKey = $this->nullableText($resolved['avatar_key'] ?? null);
-        if ($resolvedAvatarKey !== null) {
+        if (filled($resolvedAvatarKey)) {
             $profile['avatar_key'] = $resolvedAvatarKey;
         }
 
@@ -437,7 +437,7 @@ final class ChatApplicationService
     private function profile(array $response, ?string $expectedUserId, int $expectedMode): array
     {
         $profile = $response['persona'] ?? $response;
-        if (!is_array($profile) || ($profile['id'] ?? null) === null) {
+        if (!is_array($profile) || empty($profile['id'])) {
             throw ChatException::forbidden('persona is unavailable');
         }
         $profile['id'] = $this->id((string)$profile['id'], 'persona_id');
@@ -547,7 +547,7 @@ final class ChatApplicationService
     private function id(int|string $value, string $field): string
     {
         $value = trim((string)$value);
-        if ($value === '' || $value === '0' || preg_match('/\A[1-9][0-9]*\z/', $value) !== 1) {
+        if (empty($value) || preg_match('/\A[1-9][0-9]*\z/', $value) !== 1) {
             throw ChatException::invalid($field . ' is required');
         }
 
@@ -557,7 +557,7 @@ final class ChatApplicationService
     private function uint(int|string $value, string $field): string
     {
         $value = trim((string)$value);
-        if ($value === '' || preg_match('/\A[0-9]+\z/', $value) !== 1
+        if (blank($value) || preg_match('/\A[0-9]+\z/', $value) !== 1
             || strlen($value) > 19 || (strlen($value) === 19 && strcmp($value, '9223372036854775807') > 0)) {
             throw ChatException::invalid($field . ' is invalid');
         }
@@ -573,7 +573,7 @@ final class ChatApplicationService
     private function scope(string $value, string $field): string
     {
         $value = trim($value);
-        if ($value === '' || strlen($value) > 255 || preg_match('/\A[\x20-\x7E]+\z/', $value) !== 1) {
+        if (blank($value) || strlen($value) > 255 || preg_match('/\A[\x20-\x7E]+\z/', $value) !== 1) {
             throw ChatException::forbidden($field . ' is invalid');
         }
 
@@ -587,7 +587,7 @@ final class ChatApplicationService
         }
         $value = trim($value);
 
-        return $value === '' ? null : $value;
+        return blank($value) ? null : $value;
     }
 
     private function aliasDisplayName(mixed $value, int $mode): ?string
@@ -597,7 +597,7 @@ final class ChatApplicationService
         }
         $value = trim($value);
         $characters = preg_match_all('/./us', $value);
-        if ($value === '' || preg_match('//u', $value) !== 1 || $characters === false || $characters > 64) {
+        if (blank($value) || preg_match('//u', $value) !== 1 || $characters === false || $characters > 64) {
             throw ChatException::invalid('alias_display_name is invalid');
         }
 

@@ -21,7 +21,7 @@ final readonly class MemberSnapshot
         public int|string $lastReadSeq = 0,
         public ?string $joinedAt = null,
     ) {
-        if ($this->userId === '' || $this->personaId === '' || !in_array($this->identityMode, [1, 2], true)) {
+        if (blank($this->userId) || blank($this->personaId) || !in_array($this->identityMode, [1, 2], true)) {
             throw ChatException::invalid('invalid conversation member snapshot');
         }
         if ($this->identityMode === 1 && $this->anonymousRef !== null) {
@@ -73,6 +73,6 @@ final readonly class MemberSnapshot
         }
         $value = trim((string)$value);
 
-        return $value === '' ? null : $value;
+        return blank($value) ? null : $value;
     }
 }

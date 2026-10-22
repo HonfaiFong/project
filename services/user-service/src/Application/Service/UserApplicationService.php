@@ -50,13 +50,13 @@ final class UserApplicationService
         $user = $this->userRepo->findByPhone($phone);
         $isNew = false;
 
-        if (!$user) {
+        if (empty($user)) {
             try {
                 /** @var array{0: User, 1: bool} $registration */
                 $registration = $this->transaction(function () use ($phone, $registerChannel): array {
                     // 在事务内重新检查，让并发请求复用成功通过手机号唯一约束的请求所创建的用户。
                     $existing = $this->userRepo->findByPhone($phone);
-                    if ($existing) {
+                    if (!empty($existing)) {
                         return [$existing, false];
                     }
 
@@ -66,7 +66,7 @@ final class UserApplicationService
             } catch (DuplicateUserException $e) {
                 // 两个注册请求在任一事务读到行之前发生竞争时，手机号唯一约束充当串行化点。
                 $user = $this->userRepo->findByPhone($phone);
-                if ($user === null) {
+                if (empty($user)) {
                     throw new RuntimeException(
                         ErrorCode::INTERNAL_SERVER_ERROR->message(),
                         ErrorCode::INTERNAL_SERVER_ERROR->value,
@@ -103,13 +103,13 @@ final class UserApplicationService
         $user = $this->userRepo->findBySocialRegistrationKey($registrationKey);
         $isNew = false;
 
-        if (!$user) {
+        if (empty($user)) {
             try {
                 /** @var array{0: User, 1: bool} $registration */
                 $registration = $this->transaction(function () use ($registrationKey, $registerChannel): array {
                     // 在事务内重新检查，让重复或重试注册复用成功通过唯一约束的请求所创建的用户。
                     $existing = $this->userRepo->findBySocialRegistrationKey($registrationKey);
-                    if ($existing) {
+                    if (!empty($existing)) {
                         return [$existing, false];
                     }
 
@@ -127,7 +127,7 @@ final class UserApplicationService
             } catch (DuplicateUserException $e) {
                 // 两个注册请求在任一事务读到行之前发生竞争时，注册键唯一约束充当串行化点。
                 $user = $this->userRepo->findBySocialRegistrationKey($registrationKey);
-                if ($user === null) {
+                if (empty($user)) {
                     if ($this->userRepo->socialRegistrationKeyExists($registrationKey)) {
                         // 软删除账户仍占用注册键；须拒绝注册，不能恢复已删除用户。
                         throw new RuntimeException(
@@ -157,7 +157,7 @@ final class UserApplicationService
     public function getUser(string $userId): User
     {
         $user = $this->userRepo->findById($userId);
-        if (!$user) {
+        if (empty($user)) {
             throw new RuntimeException('User not found', ErrorCode::USER_NOT_FOUND->value);
         }
         return $user;
@@ -182,12 +182,12 @@ final class UserApplicationService
 
         return $this->transaction(function () use ($userId, $phone, $email): User {
             $user = $this->userRepo->findById($userId);
-            if (!$user) {
+            if (empty($user)) {
                 throw new RuntimeException('User not found', ErrorCode::USER_NOT_FOUND->value);
             }
 
             $updated = $this->userRepo->update($userId, $phone, $email);
-            if (!$updated) {
+            if (empty($updated)) {
                 throw new RuntimeException('Failed to update user', ErrorCode::INTERNAL_SERVER_ERROR->value);
             }
 
@@ -258,7 +258,7 @@ final class UserApplicationService
     {
         return $this->transaction(function () use ($userId): Persona {
             $user = $this->userRepo->findByIdForUpdate($userId);
-            if (!$user) {
+            if (empty($user)) {
                 throw new RuntimeException('User not found', ErrorCode::USER_NOT_FOUND->value);
             }
             if (!$user->isActive()) {
@@ -270,7 +270,7 @@ final class UserApplicationService
             // deleted canonical alias must be repaired explicitly rather
             // than turning a duplicate-key error into a generic 500.
             $existing = $this->personaRepo->findInternalAliasByUserIdForUpdate($userId);
-            if ($existing !== null) {
+            if (!empty($existing)) {
                 if ($existing->deletedAt !== null || $existing->status !== 1) {
                     throw new RuntimeException(
                         'The account has no usable anonymous identity; manual recovery is required',
@@ -346,7 +346,7 @@ final class UserApplicationService
         }
 
         $persona = $this->personaRepo->findById($personaId);
-        if (!$persona
+        if (empty($persona)
             || $persona->userId !== $userId
             || $persona->status !== 1
             || $persona->deletedAt !== null
@@ -375,7 +375,7 @@ final class UserApplicationService
     public function getPersona(string $personaId): Persona
     {
         $persona = $this->personaRepo->findById($personaId);
-        if (!$persona
+        if (empty($persona)
             || $persona->type !== PersonaType::MAIN->value
             || $persona->status !== 1
             || $persona->deletedAt !== null
@@ -420,7 +420,7 @@ final class UserApplicationService
             $bio = $this->normalizePersonaNullableText($bio, self::MAX_PERSONA_BIO_LENGTH, 'bio');
 
             $updated = $this->personaRepo->update($personaId, $userId, $nickname, $avatarKey, $bio);
-            if (!$updated) {
+            if (empty($updated)) {
                 throw new RuntimeException('Failed to update persona', ErrorCode::INTERNAL_SERVER_ERROR->value);
             }
 
@@ -442,7 +442,7 @@ final class UserApplicationService
     public function listPersonas(string $userId): array
     {
         $user = $this->userRepo->findById($userId);
-        if (!$user) {
+        if (empty($user)) {
             throw new RuntimeException('User not found', ErrorCode::USER_NOT_FOUND->value);
         }
         if (!$user->isActive()) {
@@ -535,13 +535,13 @@ final class UserApplicationService
     {
         $registerChannel = trim($registerChannel);
 
-        return $registerChannel !== '' ? $registerChannel : 'default';
+        return filled($registerChannel) ? $registerChannel : 'default';
     }
 
     private function normalizeRegistrationKey(string $registrationKey): string
     {
         $registrationKey = trim($registrationKey);
-        if ($registrationKey === '') {
+        if (blank($registrationKey)) {
             throw new RuntimeException('registration_key is required', ErrorCode::INVALID_ARGUMENT->value);
         }
         if (strlen($registrationKey) > self::MAX_REGISTRATION_KEY_LENGTH) {
@@ -554,7 +554,7 @@ final class UserApplicationService
     private function normalizePersonaNickname(string $nickname): string
     {
         $nickname = trim($nickname);
-        if ($nickname === '') {
+        if (blank($nickname)) {
             throw new RuntimeException('nickname is required', ErrorCode::INVALID_ARGUMENT->value);
         }
         if ($this->personaTextLength($nickname) > self::MAX_PERSONA_NICKNAME_LENGTH) {
