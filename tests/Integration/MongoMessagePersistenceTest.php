@@ -75,6 +75,35 @@ final class MongoMessagePersistenceTest extends TestCase
         self::assertSame(2, $this->database->selectCollection('outbox_events')->countDocuments());
     }
 
+    public function testUpgradeFromRecordedV2PreservesDataAndRemovesLegacyPagingIndex(): void
+    {
+        $this->write('901', '71', 'before-v3-upgrade');
+        $ledger = $this->database->selectCollection('schema_migrations');
+        $ledger->deleteOne(['_id' => '20261020000300_drop_message_id_paging_index']);
+        $this->database->selectCollection('messages')->createIndex(
+            ['conversation_id' => 1, '_id' => -1], ['name' => 'idx_conversation_message_id_desc'],
+        );
+        $previous = iterator_to_array($ledger->find([], ['sort' => ['_id' => 1]]), false);
+        self::assertCount(2, $previous);
+
+        $this->migrate();
+        $this->migrate();
+
+        foreach ($previous as $migration) {
+            self::assertSame((string)$migration['checksum'], (string)$ledger->findOne(['_id' => $migration['_id']])['checksum']);
+        }
+        self::assertSame(3, $ledger->countDocuments());
+        $indexes = $this->database->command(['listIndexes' => 'messages'], [
+            'readConcern' => new \MongoDB\Driver\ReadConcern(),
+            'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
+        ])->toArray();
+        self::assertNotContains('idx_conversation_message_id_desc', array_column($indexes, 'name'));
+        $repo = new MongoMessageRepository($this->client, $this->databaseName);
+        self::assertSame('901', $repo->findBySenderClientId('100', 'before-v3-upgrade')['message_id']);
+        self::assertSame('1', $repo->latestSequence('71'));
+        self::assertSame(1, $this->database->selectCollection('outbox_events')->countDocuments());
+    }
+
     public function testConcurrentTransactionsAllocateDistinctConversationSequences(): void
     {
         if (!function_exists('pcntl_fork')) {
@@ -182,10 +211,11 @@ final class MongoMessagePersistenceTest extends TestCase
             [$exitCode, $output] = $this->runMigration();
             self::assertNotSame(0, $exitCode);
             self::assertStringContainsString('index set drift', $output);
-            $indexNames = array_map(
-                static fn ($index): string => (string)$index->getName(),
-                iterator_to_array($this->database->selectCollection('messages')->listIndexes(), false),
-            );
+            $metadata = $this->database->command(['listIndexes' => 'messages'], [
+                'readConcern' => new \MongoDB\Driver\ReadConcern(),
+                'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
+            ])->toArray();
+            $indexNames = array_column($metadata, 'name');
             self::assertNotContains('uniq_conversation_seq', $indexNames, 'A recorded migration must not silently repair a dropped index');
         } finally {
             $this->database->selectCollection('messages')->createIndex(

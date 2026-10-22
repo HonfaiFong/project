@@ -93,6 +93,11 @@ final class ChatMessagePersistenceTest extends TestCase
             public string $latest = '0';
             public int $calls = 0;
             public bool $unavailable = false;
+
+            public function callCount(): int
+            {
+                return $this->calls;
+            }
         };
         $messageSequences = new class ($sequenceState) implements MessageSequenceReader {
             public function __construct(private readonly object $state)
@@ -210,7 +215,7 @@ final class ChatMessagePersistenceTest extends TestCase
         self::assertSame('0', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
         self::assertTrue($chat->markRead('200', $conversationId, '1'));
         self::assertTrue($chat->markRead('200', $conversationId, '1'));
-        self::assertSame(1, $sequenceState->calls, 'A cursor covered by the PostgreSQL summary skips MessageService');
+        self::assertSame(1, $sequenceState->callCount(), 'A cursor covered by the PostgreSQL summary skips MessageService');
 
         $second = $messages->sendMessage('100', [
             'client_message_id' => 'integration-2',
@@ -223,13 +228,13 @@ final class ChatMessagePersistenceTest extends TestCase
         $sequenceState->latest = '2';
         self::assertTrue($chat->markRead('200', $conversationId, '2'));
         self::assertSame('2', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
-        self::assertSame(2, $sequenceState->calls);
+        self::assertSame(2, $sequenceState->callCount());
 
         $sequenceState->unavailable = true;
-        $lookupCount = $sequenceState->calls;
+        $lookupCount = $sequenceState->callCount();
         self::assertTrue($chat->markRead('200', $conversationId, '2'));
         self::assertTrue($chat->markRead('200', $conversationId, '1'));
-        self::assertSame($lookupCount, $sequenceState->calls, 'Already confirmed reads skip an unavailable MessageService');
+        self::assertSame($lookupCount, $sequenceState->callCount(), 'Already confirmed reads skip an unavailable MessageService');
         self::assertSame('2', (string)$chatRepository->findMember($conversationId, '200')['last_read_seq']);
         try {
             $chat->markRead('200', $conversationId, '3');

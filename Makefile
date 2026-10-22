@@ -39,7 +39,7 @@ test-postgres:
 
 test-mongodb:
 	@echo "Running MongoDB integration tests..."
-	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 -e MONGODB_TEST_RUNTIME_PASSWORD=replace-with-random-local-mongo-runtime-password -e MONGODB_TEST_RELAY_PASSWORD=replace-with-random-local-mongo-relay-password --entrypoint php mongodb-migrate vendor/bin/phpunit tests/Integration/MongoMessagePersistenceTest.php --fail-on-skipped
+	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 -e MONGODB_TEST_RUNTIME_PASSWORD=replace-with-random-local-mongo-runtime-password -e MONGODB_TEST_RELAY_PASSWORD=replace-with-random-local-mongo-relay-password --entrypoint php mongodb-migrate vendor/bin/phpunit tests/Integration/MongoMessagePersistenceTest.php tests/Integration/MongoTransactionFailoverTest.php --fail-on-skipped
 
 test-database-failover:
 	@echo "Running Database failover and recovery tests..."

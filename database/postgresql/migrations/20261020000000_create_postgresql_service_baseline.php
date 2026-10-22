@@ -17,9 +17,6 @@ final class CreatePostgresqlServiceBaseline extends AbstractMigration
         $pdo = $this->getAdapter()->getConnection();
         foreach (self::SCHEMAS as $schema) {
             $name = $schema;
-            if (strlen($name) > 63) {
-                throw new RuntimeException('PostgreSQL schema name exceeds 63 bytes: ' . $name);
-            }
             $statement = $pdo->prepare('SELECT to_regnamespace(:schema)');
             $statement->execute(['schema' => $name]);
             $reg = $statement->fetchColumn();

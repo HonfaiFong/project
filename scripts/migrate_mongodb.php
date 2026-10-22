@@ -7,6 +7,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use MongoDB\BSON\UTCDateTime;
 use MongoDB\Client;
+use MongoDB\Driver\ReadConcern;
 use MongoDB\Driver\ReadPreference;
 use MongoDB\Driver\WriteConcern;
 use MongoDB\Driver\Exception\CommandException;
@@ -115,7 +116,7 @@ try {
         throw new RuntimeException('MongoDB migration checksum drift detected for ' . $migrationId);
     }
     if ($existing === null) {
-        dropIndexIfPresent($database->selectCollection('messages'), $migration['drop_index']);
+        dropIndexIfPresent($database, 'messages', $migration['drop_index']);
         $ledger->insertOne(['_id' => $migrationId, 'checksum' => $checksum, 'applied_at' => new UTCDateTime()]);
         fwrite(STDOUT, "Applied MongoDB migration {$migrationId}.\n");
     }
@@ -263,8 +264,14 @@ function verifySchema(MongoDB\Database $database, array $definition): void
 {
     foreach ($definition as $name => $config) {
         $info = null;
-        foreach ($database->listCollections(['filter' => ['name' => $name]]) as $candidate) {
-            $info = $candidate;
+        // Metadata commands reject the client's majority read concern. Explicitly
+        // clear it for these commands; data reads keep their majority guarantee.
+        $metadata = $database->command(['listCollections' => 1, 'filter' => ['name' => $name]], [
+            'readConcern' => new ReadConcern(),
+            'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
+        ])->toArray();
+        foreach ($metadata as $candidate) {
+            $info = new MongoDB\Model\CollectionInfo($candidate);
             break;
         }
         if ($info === null || $info->getType() !== 'collection') {
@@ -283,7 +290,7 @@ function verifySchema(MongoDB\Database $database, array $definition): void
             $expectedIndexes[$index['name']] = $index;
         }
         $actualIndexes = [];
-        foreach ($database->selectCollection($name)->listIndexes() as $index) {
+        foreach (schemaIndexes($database, $name) as $index) {
             $actualIndexes[$index->getName()] = $index;
         }
         if (array_diff_key($expectedIndexes, $actualIndexes) !== []
@@ -313,11 +320,21 @@ function verifySchema(MongoDB\Database $database, array $definition): void
     }
 }
 
-function dropIndexIfPresent(MongoDB\Collection $collection, string $name): void
+/** @return list<MongoDB\Model\IndexInfo> */
+function schemaIndexes(MongoDB\Database $database, string $collection): array
 {
-    foreach ($collection->listIndexes() as $index) {
+    $metadata = $database->command(['listIndexes' => $collection], [
+        'readConcern' => new ReadConcern(),
+        'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
+    ])->toArray();
+    return array_map(static fn (array $index): MongoDB\Model\IndexInfo => new MongoDB\Model\IndexInfo($index), $metadata);
+}
+
+function dropIndexIfPresent(MongoDB\Database $database, string $collection, string $name): void
+{
+    foreach (schemaIndexes($database, $collection) as $index) {
         if ($index->getName() === $name) {
-            $collection->dropIndex($name);
+            $database->selectCollection($collection)->dropIndex($name);
             return;
         }
     }

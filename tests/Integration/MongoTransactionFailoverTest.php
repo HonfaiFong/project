@@ -8,8 +8,6 @@ use Contracts\Errors\ErrorCode;
 use MongoDB\BSON\Int64;
 use MongoDB\Client;
 use MongoDB\Database;
-use MongoDB\Driver\Exception\CommandException;
-use MongoDB\Driver\Exception\ServerException;
 use Packages\Database\MongoConnectionFactory;
 use Packages\GrpcCommon\OperationBudget;
 use Packages\Identity\AnonymousAuthorProjector;
@@ -23,18 +21,14 @@ use Services\MessageService\Domain\IdGenerator;
 use Services\MessageService\Domain\Repository\MessageWriteTransactionInterface;
 use Services\MessageService\Infrastructure\Mongo\MongoMessageRepository;
 use Services\MessageService\Infrastructure\Mongo\MongoMessageTransactionManager;
-use Throwable;
+use Services\MessageService\Infrastructure\Mongo\NativeMongoTransactionSession;
+use Tests\Support\CommitAcknowledgementLostSession;
+use Tests\Support\LabeledMongoException;
 
 /**
- * 验证 MongoDB 故障切换、未知提交恢复与事务幂等。
- *
- * 覆盖：
- * 1. 副本集写主节点状态探测与多数派写保障
- * 2. 事务执行期间遇到瞬态故障（TransientTransactionError，如切主/重选举）时的全量事务重试与成功恢复
- * 3. 提交阶段遇到未知提交结果（UnknownTransactionCommitResult）时的安全提交重试（不重放业务回调）
- * 4. 超出请求预算时的未知提交超时保护（RPC_TIMEOUT，提示客户端用原 client_message_id 恢复）
- * 5. 故障切主/超时恢复后客户端重试同一 client_message_id 的幂等去重与防消息/序号重复
- * 6. client_message_id 内容冲突防御（拒绝载荷篡改）
+ * Real replica-set persistence with injected transient errors and lost commit acknowledgements.
+ * Commit retry control flow is also covered by MongoMessageTransactionManagerTest.
+ * These tests do not trigger a real multi-node primary election.
  */
 final class MongoTransactionFailoverTest extends TestCase
 {
@@ -74,22 +68,11 @@ final class MongoTransactionFailoverTest extends TestCase
 
         $result = $manager->transaction(function (MessageWriteTransactionInterface $tx) use (&$attempts): string {
             $attempts++;
-            if ($attempts === 1) {
-                // 模拟主节点切换或网络闪断抛出 TransientTransactionError 瞬态异常
-                $exception = new class('not master / node stepped down', 10107) extends ServerException {
-                    public function hasErrorLabel(string $label): bool
-                    {
-                        return $label === 'TransientTransactionError';
-                    }
-                };
-                throw $exception;
-            }
-
             $now = '2026-10-21 12:00:00.000';
-            $seq = $tx->nextSequence('conv-failover-1', $now);
+            $seq = $tx->nextSequence('70001', $now);
             $tx->insert([
-                'message_id' => 'msg-failover-1',
-                'conversation_id' => 'conv-failover-1',
+                'message_id' => '90001',
+                'conversation_id' => '70001',
                 'seq' => $seq,
                 'sender_user_id' => '100',
                 'sender_persona_id' => '200',
@@ -99,7 +82,11 @@ final class MongoTransactionFailoverTest extends TestCase
                 'content' => '{"body":"failover retry success"}',
                 'created_at' => $now,
             ]);
-            $tx->recordMessageCreated('event-msg-failover-1', 'conv-failover-1', 'msg-failover-1', $seq, ['message' => ['message_id' => 'msg-failover-1']], '', $now);
+            $tx->recordMessageCreated('event-msg-failover-1', '70001', '90001', $seq, ['message' => ['message_id' => '90001']], '', $now);
+            if ($attempts === 1) {
+                // Fail after writes so rollback of message, sequence and outbox is exercised.
+                throw new LabeledMongoException('TransientTransactionError');
+            }
 
             return 'ok';
         }, new OperationBudget(5000));
@@ -110,26 +97,23 @@ final class MongoTransactionFailoverTest extends TestCase
         $repo = new MongoMessageRepository($this->client, $this->databaseName);
         $msg = $repo->findBySenderClientId('100', 'client-tx-retry');
         self::assertNotNull($msg);
-        self::assertSame('msg-failover-1', $msg['message_id']);
+        self::assertSame('90001', $msg['message_id']);
         self::assertSame('1', (string)$msg['seq']);
         self::assertSame(1, $this->database->selectCollection('outbox_events')->countDocuments());
     }
 
-    public function testUnknownCommitResultExhaustsBudgetAndReturnsRpcTimeout(): void
+    public function testExpiredBudgetReturnsRpcTimeoutBeforeExecutingOperation(): void
     {
-        // 验证提交阶段遇到未知结果且请求预算耗尽时，抛出明确的 RPC_TIMEOUT
+        // An expired request must fail before beginning the transaction.
         $budget = new OperationBudget(1);
         usleep(2000); // 确保预算已耗尽
 
         $manager = new MongoMessageTransactionManager($this->client, $this->databaseName);
-        try {
-            $manager->transaction(function (MessageWriteTransactionInterface $tx): void {
-                // 不做耗时操作，直接尝试进入提交阶段
-            }, $budget);
-            self::fail('Expected budget exhaustion');
-        } catch (RuntimeException $exception) {
-            self::assertSame(ErrorCode::RPC_TIMEOUT->value, $exception->getCode());
-        }
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionCode(ErrorCode::RPC_TIMEOUT->value);
+        $manager->transaction(function (MessageWriteTransactionInterface $tx): void {
+            self::fail('An expired request must not execute the operation');
+        }, $budget);
     }
 
     public function testIdempotentRecoveryAfterFailoverReturnsSameMessageWithoutDuplicateSequence(): void
@@ -139,8 +123,8 @@ final class MongoTransactionFailoverTest extends TestCase
             'allowed' => true,
             'denial_reason' => '',
             'member' => [
-                'user_id' => 'user-100',
-                'persona_id' => 'persona-200',
+                'user_id' => '100',
+                'persona_id' => '200',
                 'identity_mode' => 1,
                 'display_name_snapshot' => 'Tester',
                 'avatar_key_snapshot' => 'avatar:key',
@@ -160,7 +144,11 @@ final class MongoTransactionFailoverTest extends TestCase
         };
 
         $repo = new MongoMessageRepository($this->client, $this->databaseName);
-        $txManager = new MongoMessageTransactionManager($this->client, $this->databaseName);
+        $txManager = new MongoMessageTransactionManager(
+            $this->client,
+            $this->databaseName,
+            fn () => new CommitAcknowledgementLostSession(new NativeMongoTransactionSession($this->client, $this->databaseName)),
+        );
         $projector = new AnonymousAuthorProjector(new AnonymousReferenceFactory(str_repeat('f', 32)));
 
         $app = new MessageApplicationService(
@@ -174,28 +162,31 @@ final class MongoTransactionFailoverTest extends TestCase
 
         $payload = [
             'client_message_id' => 'client-idempotent-failover-1',
-            'conversation_id' => 'conv-idempotent-1',
+            'conversation_id' => '70002',
             'type' => 1,
             'content' => '{"text":"hello idempotent world"}',
-            'sender_user_id' => 'user-100',
-            'sender_persona_id' => 'persona-200',
-            'sender_identity_mode' => 1,
         ];
 
-        // 第一次发送：成功持久化
-        $first = $app->sendMessage('user-100', $payload);
-        self::assertSame(1, $first->getSeq());
-        $firstId = $first->getMessageId();
+        // The database commits, but every acknowledgement is lost until the request times out.
+        try {
+            $app->sendMessage('100', $payload, new OperationBudget(2000));
+            self::fail('Expected an unknown commit result');
+        } catch (RuntimeException $exception) {
+            self::assertSame(ErrorCode::RPC_TIMEOUT->value, $exception->getCode());
+            self::assertStringContainsString('commit result is unknown', $exception->getMessage());
+        }
+        $persisted = $repo->findBySenderClientId('100', $payload['client_message_id']);
+        self::assertNotNull($persisted);
 
         // 客户端在切主/网络闪断重连后重试同一 client_message_id
-        $second = $app->sendMessage('user-100', $payload);
-        self::assertSame($firstId, $second->getMessageId(), 'Client retry after failover must return original message_id');
-        self::assertSame(1, $second->getSeq(), 'Client retry must NOT increment sequence number');
+        $second = $app->sendMessage('100', $payload);
+        self::assertSame($persisted['message_id'], (string)$second->getMessageId(), 'Client retry must return the committed message');
+        self::assertSame('1', (string)$second->getSeq(), 'Client retry must NOT increment sequence number');
 
         // 数据库断言：仅有一条消息、序号仅推进到 1、Outbox 仅有一条事件
-        self::assertSame(1, $this->database->selectCollection('messages')->countDocuments(['conversation_id' => new Int64('conv-idempotent-1')]));
-        self::assertSame(1, $this->database->selectCollection('outbox_events')->countDocuments(['conversation_id' => new Int64('conv-idempotent-1')]));
-        self::assertSame('1', $repo->latestSequence('conv-idempotent-1'));
+        self::assertSame(1, $this->database->selectCollection('messages')->countDocuments(['conversation_id' => new Int64('70002')]));
+        self::assertSame(1, $this->database->selectCollection('outbox_events')->countDocuments(['conversation_id' => new Int64('70002')]));
+        self::assertSame('1', $repo->latestSequence('70002'));
     }
 
     public function testIdempotentRetryRejectsTamperedPayload(): void
@@ -205,8 +196,8 @@ final class MongoTransactionFailoverTest extends TestCase
             'allowed' => true,
             'denial_reason' => '',
             'member' => [
-                'user_id' => 'user-200',
-                'persona_id' => 'persona-300',
+                'user_id' => '200',
+                'persona_id' => '300',
                 'identity_mode' => 1,
                 'display_name_snapshot' => 'Tamper Test',
                 'avatar_key_snapshot' => 'avatar:key',
@@ -240,21 +231,19 @@ final class MongoTransactionFailoverTest extends TestCase
 
         $payload = [
             'client_message_id' => 'client-tamper-check',
-            'conversation_id' => 'conv-tamper-1',
+            'conversation_id' => '70003',
             'type' => 1,
             'content' => '{"text":"original content"}',
-            'sender_user_id' => 'user-200',
-            'sender_persona_id' => 'persona-300',
-            'sender_identity_mode' => 1,
         ];
 
-        $app->sendMessage('user-200', $payload);
+        $app->sendMessage('200', $payload);
 
         $tamperedPayload = $payload;
         $tamperedPayload['content'] = '{"text":"tampered content"}';
 
         $this->expectException(MessageException::class);
-        $app->sendMessage('user-200', $tamperedPayload);
+        $this->expectExceptionCode(ErrorCode::MESSAGE_DUPLICATE_CLIENT_ID->value);
+        $app->sendMessage('200', $tamperedPayload);
     }
 
     private function migrate(): void

@@ -13,7 +13,8 @@
   - 同步调用：全部基于 **gRPC**，携带 trace_id、request_id、user_id 与 deadline。
   - 异步通信：基于 **RabbitMQ Streams（领域事件）和 Quorum Queues（任务）**；领域事件写入 Transactional Outbox，消费者按事件 ID 幂等处理。
 - **数据源与基础设施**:
-  - 关系型业务最终事实数据源：MySQL 8.4 (分逻辑库，无跨库 JOIN)。
+  - 关系型业务最终事实数据源：PostgreSQL 18（固定服务 Schema，无跨服务 JOIN）。
+  - 消息最终事实数据源：MongoDB 8 副本集，消息、会话 seq 与消息 Outbox 在同一事务提交。
   - 高速缓存与即时状态：Redis 7.2 (统一 Key 规范，设置明确 TTL，禁止 `KEYS *`)。
   - 消息引擎：RabbitMQ 4.1（Streams + Quorum Queues）。
   - 媒体对象存储：RustFS（S3 兼容，客户端直传 Presigned URL，不经后端流式转发）。
@@ -71,15 +72,15 @@
 全部依赖均封装于 Docker 与 `compose.yaml` 中：
 - **Docker Engine**: >= 24.0.0
 - **Docker Compose**: >= v2.20.0
-- (本地开发可选): PHP >= 8.2 (带 pdo_mysql, redis, bcmath), Go >= 1.27, Composer >= 2.0
+- (本地开发可选): PHP >= 8.2（带 pdo_pgsql、pdo_sqlite、mongodb、grpc、redis、bcmath），Go >= 1.27，Composer >= 2.0；并发数据库测试另需 pcntl。
 
 ---
 
 ## 4. 本地启动
 
 ```bash
-# 1. 复制配置文件，并设置其中的 MYSQL_PASSWORD / JWT_SECRET / WS_TICKET_SECRET
-#    以及三个独立的 INTERNAL_RPC_*_TOKEN
+# 1. 复制配置文件，并设置 PostgreSQL / MongoDB 独立账号密码、JWT_SECRET / WS_TICKET_SECRET
+#    以及所有 INTERNAL_RPC_*_TOKEN
 #    （compose.yaml 对这些变量做强校验，缺失会拒绝启动）
 cp .env.example .env
 
@@ -92,7 +93,7 @@ make up
 curl http://127.0.0.1:8787/health
 ```
 
-> **启动与迁移顺序说明**：`make up` 依次启动 MySQL、Redis、RabbitMQ，导入 broker 拓扑，执行数据库迁移，再启动业务服务。对象存储按需运行 `make storage-up`。
+> **启动与迁移顺序说明**：`make up` 启动 PostgreSQL、MongoDB 副本集、Redis 和 RabbitMQ，完成账号初始化、探活、broker 拓扑及数据库迁移，再启动业务服务。对象存储按需运行 `make storage-up`。
 
 Redis 在 Compose 中启用 AOF（`appendfsync everysec`）并使用持久化命名卷
 `redis_data:/data`。访问令牌和设备撤销键属于安全状态，不应按普通缓存处理；因此
@@ -112,9 +113,9 @@ COMPOSE_ENV_FILE=.env.example bash scripts/redis_revocation_persistence_test.sh
 替代静态契约测试。没有 Docker 时仍可运行 `vendor/bin/phpunit --testsuite Unit`
 验证 Compose 的 AOF、fsync 和命名卷契约；这项静态检查不声称完成重启恢复验证。
 
-AuthService 与 UserService 的 gRPC 端口只在 Compose 内部网络暴露，不发布到宿主机；Gateway→Auth、Gateway→User、Auth→User 分别使用独立的 `INTERNAL_RPC_*_TOKEN`，并通过 `SERVICE_NAME` 做调用方和方法授权。部署前必须把 `.env` 中的三个 token 替换为至少 32 字节的随机值。
+内部服务的 gRPC 端口只在 Compose 内部网络暴露，不发布到宿主机；每条调用关系使用独立的 `INTERNAL_RPC_*_TOKEN`，并通过 `SERVICE_NAME` 做调用方和方法授权。部署前必须把 `.env` 中的全部 token 替换为至少 32 字节的独立随机值，包括 Message→Chat 和 Chat→Message。
 
-MySQL、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 服务之间继续使用内部 hostname 通信，需要外部访问时再显式设置对应的 `*_BIND_ADDRESS`。
+PostgreSQL、MongoDB、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 服务之间继续使用内部 hostname 通信，需要外部访问时再显式设置对应的 `*_BIND_ADDRESS`。
 
 生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`DEV_LOGIN_CODE` 为空。当前没有生产短信适配器，手机号验证码登录仅在本地/测试环境可用（Gateway 路由与 AuthService 双重门禁，生产直接关闭）；微信/QQ OAuth 登录不依赖短信，首次登录自动注册，配置真实 `WECHAT_APP_ID`/`QQ_APP_ID` 凭证并保持官方 HTTPS endpoint 后即可在生产开启。开发环境的 endpoint 覆盖（`WECHAT_TOKEN_ENDPOINT` 等）与 `SOCIAL_OAUTH_ALLOW_INSECURE_HTTP` 在生产环境会触发启动拒绝。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
 
@@ -160,7 +161,7 @@ IPv4 按完整地址分桶；IPv6 归一到 /64 前缀分桶（终端用户可�
 
 **剩余截止时间的运行时传播**：RoadRunner 不会把传入调用的 gRPC deadline 交给 PHP worker，因此网关在每次调用上以 `x-deadline-unix-ms` 元数据携带绝对截止时间；AuthService 在内部 RPC 授权通过后读取该值（`DeadlineContext`），Auth→User 目录跳的实际预算取 `min(配置值, 剩余值)`，剩余时间耗尽则立刻返回 `RPC_TIMEOUT` 而不是重新花一个完整预算。该元数据只能缩短内部跳预算、永远不能延长，伪造它的最坏效果是让自己的请求更早超时。
 
-`GRPC_AUTH_TIMEOUT_MS − GRPC_USER_DIRECTORY_TIMEOUT_MS` 是 Auth 侧自身每调用 ~50ms 的工作预算；worker 启动预热（Eloquent、protobuf 描述符池、JWT 编解码）正是为了把暖路径成本压在该预算内，`tests/Unit/GrpcDeadlineBudgetBenchmarkTest.php` 守住编解码份额，`tests/Integration/AuthWarmPathLatencyTest.php` 用真实 MySQL/Redis 和 JWT 编解码度量实际 `AuthApplicationService::verifyToken()` 的累计暖路径 P50/P95/P99，并将累计 P95 与 50ms 预算比较（UserDirectory 使用 ACTIVE stub，不包含真实 UserService 网络跳），`scripts/auth_latency_probe.sh`（`make latency-probe`，也包含在 `make e2e`）对完整链路（Gateway→gRPC→OAuth/MySQL/Redis→User gRPC）输出 P50/P95/P99 报告并守住 P95 预算；`tests/Unit/GrpcDeadlineConfigContractTest.php` 校验 compose.yaml 与 .env.example 的默认值满足上述跨服务关系及启动校验本身。
+`GRPC_AUTH_TIMEOUT_MS − GRPC_USER_DIRECTORY_TIMEOUT_MS` 是 Auth 侧自身每调用 ~50ms 的工作预算；worker 启动预热（Eloquent、protobuf 描述符池、JWT 编解码）正是为了把暖路径成本压在该预算内，`tests/Unit/GrpcDeadlineBudgetBenchmarkTest.php` 守住编解码份额，`tests/Integration/AuthWarmPathLatencyTest.php` 用真实 PostgreSQL/Redis 和 JWT 编解码度量实际 `AuthApplicationService::verifyToken()` 的累计暖路径 P50/P95/P99，并将累计 P95 与 50ms 预算比较（UserDirectory 使用 ACTIVE stub，不包含真实 UserService 网络跳），`scripts/auth_latency_probe.sh`（`make latency-probe`，也包含在 `make e2e`）对完整链路（Gateway→gRPC→OAuth/PostgreSQL/Redis→User gRPC）输出 P50/P95/P99 报告并守住 P95 预算；`tests/Unit/GrpcDeadlineConfigContractTest.php` 校验 compose.yaml 与 .env.example 的默认值满足上述跨服务关系及启动校验本身。
 
 已认证 HTTP 链路另有可选探针 `scripts/verify_token_latency_probe.php`，从环境变量 `VERIFY_TOKEN_PROBE_TOKEN` 读取现有测试用户的有效 access token，以 GET `/api/v1/personas`（或 `/api/v1/me`）采样；无需反复社交登录，因此不会消耗登录限流额度。配置请求数、预热数、并发数及 P95 门禁后执行，例如：
 
@@ -172,7 +173,7 @@ VERIFY_TOKEN_PROBE_CONCURRENCY=16 VERIFY_TOKEN_PROBE_BUDGET_MS=1000 \
 php scripts/verify_token_latency_probe.php
 ```
 
-每个样本包含 HTTP、Gateway 的 VerifyToken 调用及接口后续 UserService 查询，报告 P50/P95/P99、失败数与超时率；这些值是整个受认证 HTTP 请求的耗时，不能当作单独 VerifyToken RPC 的耗时。HTTP、业务、传输、超时错误或 P95 达到或超过预算都会让探针失败；P95/P99 的稳定性仍取决于样本量、持续时间和负载。探针不自动执行生产压测或重启服务；部署前应在专用环境中分别采集冷启动/重启、Redis/MySQL 延迟扰动和不同并发度的结果，并结合连接池容量判断。
+每个样本包含 HTTP、Gateway 的 VerifyToken 调用及接口后续 UserService 查询，报告 P50/P95/P99、失败数与超时率；这些值是整个受认证 HTTP 请求的耗时，不能当作单独 VerifyToken RPC 的耗时。HTTP、业务、传输、超时错误或 P95 达到或超过预算都会让探针失败；P95/P99 的稳定性仍取决于样本量、持续时间和负载。探针不自动执行生产压测或重启服务；部署前应在专用环境中分别采集冷启动/重启、Redis/PostgreSQL 延迟扰动和不同并发度的结果，并结合连接池容量判断。
 
 内部 gRPC 传输由 `GRPC_TLS_MODE` 控制。`.env.example` 明确选择 `plaintext` 供本地开发；当 `APP_ENV=production` 时，`GrpcTlsConfig` 和 `scripts/roadrunner-entrypoint.sh` 都拒绝明文或缺失证书。`tls` 模式从 `GRPC_TLS_CA_FILE` 读取 CA 并要求 `GRPC_TLS_SERVER_NAME`（或按目标服务命名的变量）进行服务名验证；`mtls` 另外读取 `GRPC_TLS_CERT_FILE`/`GRPC_TLS_KEY_FILE`。证书只从部署注入的文件加载，不写入 Git、镜像或日志。应用层 `x-service-token` 和方法白名单仍保留，负责调用授权而非传输加密。
 
@@ -182,7 +183,7 @@ RoadRunner 的 gRPC 插件在六个服务配置上通过 `grpc.tls` 的官方覆
 
 已签发 JWT 的用户状态策略：AuthService 每次 `VerifyToken` 验签及撤销检查后，先校验设备仍属于 JWT 中的用户，再通过已授权的 `UserService.GetUser` 读取主库用户状态，不缓存 active 状态。封禁（非 active）或软/硬删除后，下一次受保护 HTTP 请求即拒绝旧 JWT，刷新与新登录同样拒绝；Redis、数据库或用户目录超时、不可用时拒绝访问并返回 HTTP 503（`SERVICE_UNAVAILABLE` / `RPC_TIMEOUT`），不会将基础设施故障报告为凭证失效的 401。因此每次认证新增一次 Auth DB 设备归属查询和一次内部 RPC/用户主库查询，部署时需要为数据库及 UserService 的容量和可用性留出预算。此策略是状态暂停：解封后，尚未到期且未被登出撤销的 JWT 可恢复访问；删除后的 ID 不得复用。已完成认证的在途请求不被回滚，已建立的 WebSocket 连接或先前签发的短期 WS ticket 不属于 JWT 校验路径，尚无封禁广播断连能力。
 
-设备隔离迁移 `0006_device_user_scope.sql` 必须在暂停所有 AuthService 会话写入、备份 `devices`/`refresh_tokens` 后执行，再部署本次 Repository 与 JWT 校验代码、重启全部 worker 后恢复流量。它保留现有设备 ID 和当前归属，先撤销设备缺失或用户归属错配的历史 refresh token，再建立 `(user_id, device_uuid)` 唯一索引并删除旧 UUID 全局唯一索引。历史设备行被覆盖前的归属无法可靠重建，因此不把错配 token 迁给新设备；受影响用户需重新登录。旧 JWT 的设备归属不符时同样被拒绝，正确归属的会话继续有效。MySQL DDL 隐式提交，迁移不能依赖事务回滚；迁移失败时保持暂停状态，修复并重跑后确认索引与错配 token 撤销结果。禁止在新索引上回滚运行旧 UUID 查询代码。
+当前 PostgreSQL 基线已包含设备 `(user_id, device_uuid)` 唯一约束。历史 MySQL 设备隔离 SQL 仅作为旧版本记录保留，不属于当前迁移入口；从旧库迁移前须暂停写入、备份，并单独验证设备归属与历史 refresh token 的有效性，不能通过启动空白 PostgreSQL 自动搬迁旧数据。
 
 Snowflake Worker ID 说明：`WORKER_ID` 仍表示服务槽位（0-31），每个 RoadRunner worker 通过 Redis `SET NX EX` 在该槽位的 32 个进程槽中取得带所有权 token 的租约；租约按单调时钟定期续期，并在生成 ID 前检查所有权。Redis 故障、租约续期失败或租约已被回收时，进程拒绝继续生成 ID；正常退出会用 token 比对后释放，异常退出由 TTL 回收。因此同一 Redis 租约命名空间内的副本不会因 PID 重用或 `pid % 32` 碰撞而同时使用同一个 worker ID。部署所有使用 Snowflake 的服务时必须提供 `REDIS_HOST`/`REDIS_PORT`（可选 `REDIS_PASSWORD`），并可用 `WORKER_ID_LEASE_NAMESPACE`、`WORKER_ID_LEASE_TTL_SECONDS` 配置共享命名空间与 TTL。
 
@@ -218,7 +219,7 @@ make proto
 
 ## 6. 数据库设计与迁移
 
-本次消息链路升级：暂停 Chat/Message 写入并备份相关库，应用 `20261012000000` 后再启动新 worker。已有 MySQL 数据卷需要填写新的 `MYSQL_MESSAGE_OUTBOX_RELAY_PASSWORD` 并重跑账号初始化脚本以创建 `message_outbox_relay`。先执行 `docker compose build realtime-gateway`，再重建 realtime-gateway、message-service、chat-service、message-outbox-relay 和 chat-message-consumer 容器；已有 Go 镜像不会因 `make up` 自动刷新。验证网关 `/ready`（含 Redis 订阅就绪）和真实消息同步/推送，关注 `jobs.failed` 中超过五次投递失败的消息事件。
+当前采用 PostgreSQL + MongoDB。`make migrate` 先执行 `database/postgresql/migrations/` 中的 Phinx 迁移，再运行 `scripts/migrate_mongodb.php`。从 MySQL 旧部署切换时，应暂停写入、备份并单独完成数据迁移与核对；当前入口不会自动导入旧 MySQL 数据。升级后重建受影响的业务服务、relay、consumer 与网关镜像，验证消息同步、推送和已读游标。
 
 数据库初始化基线位于 `infra/docker/mysql/init/01-databases.sql`，容器首次启动时自动挂载执行。后续结构变更使用 Phinx，迁移文件放在 `database/migrations/`，由 `meta.phinxlog` 追踪。历史 `infra/docker/mysql/migrations/0001` 至 `0006` SQL 和 `meta.schema_migrations` 保留，由首次 Phinx 迁移接管；未完成的旧迁移按实际字段/索引补齐，已完成记录不重放。
 - `auth_db`: 存储 `devices`, `refresh_tokens`, `outbox_events`
@@ -226,11 +227,11 @@ make proto
 - `content_db`: 存储 `posts`, `post_media`, `comments`, `outbox_events`
 - `social_db`: 存储 `likes`, `follows`, `blocks`, `outbox_events`
 - `chat_db`: 存储 `conversations`, `conversation_members`, `outbox_events`
-- `message_db`: 存储 `messages`, `outbox_events` (预置 ShardRouter 槽位)
+- MongoDB `message_db`：存储 `messages`、`conversation_sequences`、`outbox_events`；历史消息和同步均按 `seq` 分页，尚未接入分片路由。
 
-### MySQL 账号边界
+### PostgreSQL 与 MongoDB 账号边界
 
-业务容器不使用 root。`infra/docker/mysql/init/02-runtime-accounts.sh` 创建并幂等重置以下账号；每个账号都使用独立的环境变量密码：
+PostgreSQL 空卷初始化脚本 `infra/docker/postgresql/init/01-create-roles.sh` 创建固定 Schema 和角色；MongoDB 使用 `infra/docker/mongodb/init.js` 初始化副本集与集合权限。每个账号使用独立密码，业务容器不使用管理员凭据。
 
 | 账号 | 授权范围 | 用途 |
 | :--- | :--- | :--- |
@@ -239,23 +240,15 @@ make proto
 | `content_runtime` | `content_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | ContentService |
 | `social_runtime` | `social_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | SocialService |
 | `chat_runtime` | `chat_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | ChatService |
-| `message_runtime` | `message_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | MessageService |
-| `message_outbox_relay` | `message_db.outbox_events` 的 `SELECT/UPDATE` | Message Outbox relay |
+| MongoDB `message_runtime` | 消息读取/插入、序号读取/插入/更新、Outbox 插入 | MessageService |
+| MongoDB `message_outbox_relay` | 仅 Outbox 的 find/update | Message Outbox relay |
 | `user_outbox_relay` | 仅 `user_db.outbox_events` 的 `SELECT/UPDATE` | User outbox relay |
-| `migration_ddl` | 迁移所需的 DDL/DML（仅匹配名称以 `_db`/`meta` 结尾的逻辑库）；无 `GRANT OPTION`、无 `CREATE USER` | Phinx |
+| PostgreSQL `migration_ddl` | 固定业务 Schema 与 `meta` 的所有者；无管理员或创建角色权限 | Phinx |
+| MongoDB `message_migration` | 消息库 dbAdmin/readWrite | MongoDB 迁移 |
 
-运行时账号没有跨库访问、建表、删表或授权能力；Outbox relay 也不能读写 `users`/`personas`。`MYSQL_PASSWORD` 仅是 MySQL 管理员密码，不能注入 PHP 业务容器；`MYSQL_MIGRATION_PASSWORD` 只用于 `database-migrate`，不得与其它账号复用。建议用 `openssl rand -hex 32` 为每个 `MYSQL_*_PASSWORD` 生成独立值。
+PostgreSQL 运行时角色只能访问所属 Schema；`user_outbox_relay` 仅能访问用户 Outbox。`POSTGRES_ADMIN_PASSWORD` 只供管理员初始化，`PG_MIGRATION_PASSWORD` 只供迁移，`PG_*_RUNTIME_PASSWORD` 供各服务。MongoDB 分别使用 `MONGODB_RUNTIME_PASSWORD`、`MONGODB_RELAY_PASSWORD` 和 `MONGODB_MIGRATION_PASSWORD`。
 
-初始化脚本只会由 MySQL 官方镜像在**空数据卷**首次启动时自动执行。已有环境升级或轮换凭据时，先在 `.env` 填好新值并重建 MySQL 容器（不要删除数据卷），再手工重跑同一个幂等脚本：
-
-```bash
-docker compose up -d --force-recreate mysql
-docker compose exec mysql sh /docker-entrypoint-initdb.d/02-runtime-accounts.sh
-# 轮换账号密码后重启使用该账号的业务容器；下一次 make migrate 会使用新迁移凭据
-docker compose up -d --force-recreate auth-service user-service user-outbox-relay content-service social-service chat-service message-service
-```
-
-脚本每次都会 `ALTER USER` 并重新收敛授权，因此可重复执行；执行后用 `SHOW GRANTS FOR 'auth_runtime'@'%';` 等只读命令核对权限。新部署不再授予 `root@'%'` 远程通配权限；若旧数据卷曾执行过旧基线，请由 DBA 在维护窗口审查并撤销遗留的 `root@'%'` 权限，不要把 root 凭据回填到任何 PHP 服务。
+PostgreSQL 初始化脚本只在空卷执行，不能在已有库上直接重跑包含 `CREATE ROLE` 的脚本；凭据轮换应由管理员在维护窗口执行，再重启使用该凭据的服务。MongoDB 的角色和账号初始化可通过 `docker compose run --rm mongo-init` 重新收敛，完成后也须重启相关服务。
 
 安装 Composer 依赖后应用待执行迁移（使用现有 PHP runtime 镜像）：
 ```bash
@@ -270,13 +263,11 @@ bash scripts/run_migrations.sh status
 bash scripts/run_migrations.sh create CreateExampleTable
 ```
 
-`phinx.php` 在同一 PDO 会话中取得 MySQL `GET_LOCK` 后执行 Phinx，Docker 入口和直接使用 `vendor/bin/phinx --configuration=phinx.php` 均受此锁保护。等待超时通过 `MYSQL_MIGRATION_LOCK_TIMEOUT` 设置（默认 30 秒，范围 0–300），超时后退出，连接关闭时释放锁。历史 SQL 不再新增或修改；已合并的 Phinx 迁移也保持不变，修正通过新的迁移完成。MySQL 多条 DDL 无法由事务整体回滚，新迁移需考虑部分成功后的重跑；本次接管和身份排序规则迁移均可恢复执行，禁止自动回滚删除既有数据。
+`phinx.php` 在同一 PDO 会话中取得 PostgreSQL advisory lock 后执行 Phinx。`PG_MIGRATION_LOCK_TIMEOUT` 设置等待秒数（默认 30，范围 0–300），连接关闭时释放锁。使用固定的 `auth_db`、`user_db`、`content_db`、`social_db`、`chat_db` 和 `meta` Schema，非空 `PG_SCHEMA_PREFIX` 会被拒绝。社交身份协议键使用 `C` 排序规则区分大小写；邮箱唯一性使用 ICU 不区分大小写与重音的排序规则。
 
-社交身份的应用 ID、命名空间和外部 subject/openid/unionid 使用 `utf8mb4_bin` 比较，区分大小写，保留字段长度、可空性和既有唯一键。部署时需要具备对应数据库 DDL 权限的迁移账号，迁移可能等待表元数据锁，应在合适的发布窗口执行。
+本机直接运行 Phinx 时，显式提供 `PG_HOST`、`PG_PORT`、`PG_DATABASE`、`PG_MIGRATION_USER` 和 `PG_MIGRATION_PASSWORD`（配置不会自动加载 `.env`）。真实数据库测试使用一次性的 `test_*` 数据库。
 
-本机直接运行 Phinx 时，显式提供 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER=migration_ddl` 和 `MYSQL_MIGRATION_PASSWORD` 环境变量（配置不自动读取 `.env`）；兼容旧调用时也接受 `MYSQL_PASSWORD` 作为迁移密码。`MYSQL_SCHEMA_PREFIX` 可为隔离测试添加库名前缀，默认空；集成测试仅使用随机 `social_test_` 前缀的独立数据库。
-
-配置加载会连接数据库并初始化 `meta`，`status` 也可能初始化 Phinx 记录表。首次旧 Schema 接管需要查询实际表结构，尚不支持全新库上的完整 `--dry-run`；`--fake` 保留 Phinx 原有的只标记版本语义，不能用于实际部署变更。
+MongoDB 迁移使用带所有权 token 的租约和版本校验和。当前版本为 `20261020000100_message_collections_v1`、`20261020000200_outbox_claimed_at_date`、`20261020000300_drop_message_id_paging_index`；升级保留消息和序号，移除旧 `_id` 分页索引。已记录迁移之后发现 Validator 或索引漂移会失败，不能将重新运行迁移当作自动修复。`--fake` 只标记 PostgreSQL 迁移版本，不能用于实际部署变更。
 
 ---
 
@@ -300,7 +291,7 @@ buf lint
 
 ## 8. 端到端 E2E 验证
 
-`make e2e` 运行 Phase 1 业务流、社交登录 HTTP → gRPC → MySQL/Redis 测试，以及真实链路延迟探针（社交登录全链路 P50/P95/P99 报告，见 `make latency-probe`）。微信/QQ 社交登录通过独立 `fake-oauth` 服务模拟上游；手机号登录走开发验证码（`ENABLE_DEV_LOGIN` / `DEV_LOGIN_CODE`），该入口仅供本地与 E2E 测试，**不作为正式登录方式**，生产环境由路由环境门禁与 AuthService 双重关闭。不调用真实 OAuth 或短信平台。在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
+`make e2e` 运行 Phase 1 业务流、社交登录 HTTP → gRPC → PostgreSQL/Redis 测试，以及真实链路延迟探针（社交登录全链路 P50/P95/P99 报告，见 `make latency-probe`）。微信/QQ 社交登录通过独立 `fake-oauth` 服务模拟上游；手机号登录走开发验证码（`ENABLE_DEV_LOGIN` / `DEV_LOGIN_CODE`），该入口仅供本地与 E2E 测试，**不作为正式登录方式**，生产环境由路由环境门禁与 AuthService 双重关闭。不调用真实 OAuth 或短信平台。在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
 
 ```bash
 export APP_ENV=testing ENABLE_WECHAT_LOGIN=true ENABLE_QQ_LOGIN=true
@@ -324,7 +315,9 @@ make e2e
 make e2e-social
 ```
 
-MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TEST_REDIS_*` 和 `RABBITMQ_INTEGRATION=1` 等连接参数，MySQL 测试库名称必须以 `social_test_` 开头。`tests/Integration/MySqlLeastPrivilegeTest.php` 是单独的真实权限黑盒测试：在一次性 MySQL 实例上设置 `MYSQL_PRIVILEGE_TEST=1`，并注入 `MYSQL_PASSWORD` 与各 `MYSQL_*_RUNTIME_PASSWORD`/`MYSQL_MIGRATION_PASSWORD` 后执行 `vendor/bin/phpunit --filter MySqlLeastPrivilegeTest`；它会创建临时 probe 表，验证运行时账号不能跨库或 DDL、relay 只能读写 outbox、迁移账号可 DDL 但不能建用户，结束时清理 probe。`make test` 执行 Unit 套件（禁止 skipped）和 Go tests；准备好上述依赖后，使用 `make test-integration` 执行 Integration 套件（禁止 skipped）。也可使用 `vendor/bin/phpunit --fail-on-skipped` 验证全套实际执行；缺少基础设施产生的跳过不代表通过。CI 的 MySQL/Redis 和 RabbitMQ 测试在各自依赖就绪后分步执行，E2E 失败同样阻止 CI 通过。
+PostgreSQL/MongoDB 集成测试要求 `DATABASE_INTEGRATION=1`，并明确要求数据库名称以 `test_` 开头。配置 `.env` 中的测试数据库后，先运行 `make postgres-ready mongo-ready migrate`，再运行 `make test-postgres test-mongodb`；MongoDB 套件还验证运行时与 relay 的权限隔离。`make test-mongodb` 包含稳定的事务故障注入和提交确认丢失恢复测试，并由默认 CI 执行；这些测试不会触发多节点真实选主。多节点选主与高并发 RPC 延迟需在独立环境验证。
+
+Redis/RabbitMQ 集成测试需要 `SOCIAL_TEST_REDIS_*`、`RABBITMQ_INTEGRATION=1` 等连接参数。`make test` 执行 Unit 套件和 Go tests；`make test-integration` 执行 Integration 套件，两者均禁止跳过。缺少基础设施导致 skipped 不能视为通过，E2E 失败同样阻止 CI 通过。
 
 ---
 
@@ -334,7 +327,7 @@ MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TE
 | :--- | :--- |
 | `make bootstrap` | 初始化依赖、生成 autoload 与配置 |
 | `make up` | 编排启动全流程（镜像检查 -> 基础设施 -> 数据迁移 -> 业务服务） |
-| `make infra-up` | 启动 MySQL、Redis、RabbitMQ 并导入拓扑 |
+| `make infra-up` | 启动 PostgreSQL、MongoDB、Redis、RabbitMQ 并导入拓扑 |
 | `make broker-init` | 重新导入 RabbitMQ exchange、stream 和 quorum queue 拓扑 |
 | `make storage-up` | 启动 RustFS（storage profile） |
 | `make app-up` | 仅启动业务微服务与网关容器 |
@@ -345,7 +338,8 @@ MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TE
 | `make e2e` | 执行端到端接口冒烟测试与全链路延迟探针 |
 | `make latency-probe` | 社交登录真实链路 P50/P95/P99 延迟报告（需已启动的栈） |
 | `make logs` | 查看所有容器运行日志 |
-| `make migrate` | 使用 Phinx 接管历史 Schema 并应用待执行迁移 |
+| `make migrate` | 应用 PostgreSQL Phinx 与 MongoDB 版本迁移 |
+| `make test-mongodb` | 消息持久化、迁移升级与事务故障注入测试 |
 | `make clean` | 停止并清除本地数据卷 |
 
 ---
@@ -358,7 +352,8 @@ MySQL/Redis/RabbitMQ 集成测试需要配置 `SOCIAL_TEST_MYSQL_*`、`SOCIAL_TE
 | `8080` | HTTP/WS | Realtime Gateway (WebSocket :8080/ws) |
 | `50051` | gRPC | AuthService (RPC) |
 | `50052` | gRPC | UserService (RPC) |
-| `3306` | MySQL | MySQL 8.4 数据库集群 |
+| `5432` | PostgreSQL | PostgreSQL 18 关系型业务库 |
+| `27017` | MongoDB | MongoDB 8 消息副本集 |
 | `6379` | Redis | Redis 7.2 缓存与即时状态 |
 | `5672` | AMQP | RabbitMQ 任务与事件发布 |
 | `5552` | Stream | RabbitMQ Streams 原生协议 |
@@ -399,8 +394,8 @@ Outbox 的 `aggregate_id` 标识事件所属实体；`event_key` 单独保存流
 
 ## 13. 故障排查 (Troubleshooting)
 
-1. **容器未就绪 / MySQL 连接拒绝**:
-   MySQL 容器首次初始化需载入数据表，可通过 `docker compose logs -f mysql` 观察健康检查状态，再执行 `make migrate` 应用待执行的 Phinx 迁移；首次接管会补齐未完成的历史 SQL 迁移。
+1. **容器未就绪 / 数据库连接拒绝**:
+   通过 `docker compose logs postgres mongo mongo-init` 检查数据库和副本集初始化，再运行 `make postgres-ready mongo-ready`。就绪后执行 `make migrate`，不要通过删除已有数据卷处理迁移错误。
 2. **WebSocket 无法连接**:
    确认已先调用 `POST /api/v1/ws/ticket` 获取合法 Ticket；Ticket 有效期 60 秒且**单次使用**（同一 Ticket 二次握手会被网关拒绝），需在 60 秒内通过 `/ws?ticket=<ticket>` 建立连接。
 3. **日志排查**:

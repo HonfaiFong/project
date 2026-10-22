@@ -199,7 +199,7 @@ jobs:
       - name: Run PostgreSQL and MongoDB regression tests
         timeout-minutes: 5
         run: |
-          docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 -e MONGODB_TEST_RUNTIME_PASSWORD=replace-with-random-local-mongo-runtime-password -e MONGODB_TEST_RELAY_PASSWORD=replace-with-random-local-mongo-relay-password --entrypoint php mongodb-migrate vendor/bin/phpunit tests/Integration/MongoMessagePersistenceTest.php --fail-on-skipped
+          make test-mongodb
           docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 --entrypoint php database-migrate vendor/bin/phpunit tests/Integration/PostgresMigrationRuntimeTest.php --fail-on-skipped
 
       - name: Run Redis integration tests

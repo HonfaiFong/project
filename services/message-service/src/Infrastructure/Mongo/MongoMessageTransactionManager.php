@@ -5,21 +5,22 @@ declare(strict_types=1);
 namespace Services\MessageService\Infrastructure\Mongo;
 
 use Contracts\Errors\ErrorCode;
+use Closure;
 use MongoDB\Client;
-use MongoDB\Driver\ReadConcern;
-use MongoDB\Driver\ReadPreference;
-use MongoDB\Driver\WriteConcern;
 use Packages\Database\MongoConnectionFactory;
 use Packages\GrpcCommon\OperationBudget;
 use Services\MessageService\Domain\Repository\MessageTransactionManagerInterface;
-use Services\MessageService\Domain\Repository\MessageWriteTransactionInterface;
 use RuntimeException;
 use Throwable;
 
 final class MongoMessageTransactionManager implements MessageTransactionManagerInterface
 {
-    public function __construct(private readonly Client $client, private readonly string $database = 'message_db')
-    {
+    /** @param (Closure(): MongoTransactionSession)|null $sessionFactory */
+    public function __construct(
+        private readonly Client $client,
+        private readonly string $database = 'message_db',
+        private readonly ?Closure $sessionFactory = null,
+    ) {
     }
 
     public function transaction(callable $operation, ?OperationBudget $budget = null): mixed
@@ -28,32 +29,23 @@ final class MongoMessageTransactionManager implements MessageTransactionManagerI
         $maxAttempts = MongoConnectionFactory::rpcMaxTransactionAttempts();
         $retryDelayMs = MongoConnectionFactory::rpcRetryDelayMs();
         for ($attempt = 0; $attempt < $maxAttempts; $attempt++) {
-            $session = $this->client->startSession();
+            // Configuration/deadline failures before begin must not enter transaction retry handling.
+            $commitTimeoutMs = MongoConnectionFactory::rpcCommitTimeoutMs($budget);
+            $writeTimeoutMs = MongoConnectionFactory::rpcWriteTimeoutMs($budget, $commitTimeoutMs);
+            $budget->remainingMilliseconds(MongoConnectionFactory::rpcReserveMs() + $commitTimeoutMs);
+            $session = $this->sessionFactory !== null
+                ? ($this->sessionFactory)()
+                : new NativeMongoTransactionSession($this->client, $this->database);
             $active = false;
             $commitUnknown = false;
             try {
-                $commitTimeoutMs = MongoConnectionFactory::rpcCommitTimeoutMs($budget);
-                $writeTimeoutMs = MongoConnectionFactory::rpcWriteTimeoutMs($budget, $commitTimeoutMs);
-                $budget->remainingMilliseconds(MongoConnectionFactory::rpcReserveMs() + $commitTimeoutMs);
-                $session->startTransaction([
-                    'readPreference' => new ReadPreference(ReadPreference::PRIMARY),
-                    'readConcern' => new ReadConcern(ReadConcern::SNAPSHOT),
-                    'writeConcern' => new WriteConcern(WriteConcern::MAJORITY, $writeTimeoutMs, true),
-                    'maxCommitTimeMS' => $commitTimeoutMs,
-                ]);
+                $transaction = $session->begin($budget, $writeTimeoutMs, $commitTimeoutMs);
                 $active = true;
-                $transaction = new MongoMessageWriteTransaction(
-                    $this->client,
-                    $this->database,
-                    $session,
-                    budget: $budget,
-                    commitTimeoutMs: $commitTimeoutMs,
-                );
                 $result = $operation($transaction);
                 while (true) {
                     try {
                         $budget->remainingMilliseconds(MongoConnectionFactory::rpcReserveMs() + $commitTimeoutMs);
-                        $session->commitTransaction();
+                        $session->commit();
                         $active = false;
                         return $result;
                     } catch (Throwable $exception) {
@@ -72,7 +64,7 @@ final class MongoMessageTransactionManager implements MessageTransactionManagerI
             } catch (Throwable $exception) {
                 if ($active && !$commitUnknown) {
                     try {
-                        $session->abortTransaction();
+                        $session->abort();
                     } catch (Throwable) {
                         // Preserve the original database error and discard this session.
                     }
@@ -89,7 +81,7 @@ final class MongoMessageTransactionManager implements MessageTransactionManagerI
                 }
                 throw $exception;
             } finally {
-                $session->endSession();
+                $session->end();
             }
         }
         throw new RuntimeException('MongoDB transaction retry budget exhausted', ErrorCode::SERVICE_UNAVAILABLE->value);
