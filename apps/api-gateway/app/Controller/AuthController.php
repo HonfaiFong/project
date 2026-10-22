@@ -11,6 +11,7 @@ use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Exception;
 use Illuminate\Contracts\Validation\Factory;
+use Throwable;
 use Webman\Http\Response;
 
 final readonly class AuthController
@@ -132,7 +133,7 @@ final readonly class AuthController
         return ApiResponse::success(['success' => true]);
     }
 
-    /** @throws Exception */
+    /** @throws Exception|Throwable */
     public function createWsTicket(GatewayRequest $request): Response
     {
         $res = $this->createWsTicketAction->execute((array)$request->post(), $request->authContext);

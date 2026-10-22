@@ -199,6 +199,9 @@ services:
     build:
       context: .
       dockerfile: infra/docker/php/Dockerfile
+      args:
+        PHP_EXTENSION_JOBS: ${PHP_EXTENSION_JOBS:-4}
+        DEBIAN_MIRROR: ${DOCKER_DEBIAN_MIRROR:-https://deb.debian.org}
     image: project-php-runtime:rabbitmq
 
   database-migrate:
@@ -917,6 +920,8 @@ services:
     build:
       context: .
       dockerfile: infra/docker/gateway/Dockerfile
+      args:
+        GOPROXY: ${DOCKER_GOPROXY:-https://proxy.golang.org,direct}
     image: project-realtime-gateway:redis-nonce
     container_name: social-realtime-gateway
     restart: unless-stopped

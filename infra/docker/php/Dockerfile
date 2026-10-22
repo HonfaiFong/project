@@ -2,10 +2,14 @@
 
 FROM php:8.4-cli-bookworm
 
-# apt 缓存放在 BuildKit cache mount,不进镜像层;Debian 源走 https,代理链路下更稳
+ARG DEBIAN_MIRROR=https://deb.debian.org
+
+# 保留下载包供 BuildKit cache mount 复用，不写入镜像层。
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources && \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    printf 'Binary::apt::APT::Keep-Downloaded-Packages "true";\n' > /etc/apt/apt.conf.d/keep-cache && \
+    sed -i "s|http://deb.debian.org|${DEBIAN_MIRROR}|g; s|https://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
         git \
         unzip \
@@ -18,10 +22,18 @@ COPY --from=ghcr.io/mlocati/php-extension-installer:2 \
     /usr/bin/install-php-extensions \
     /usr/local/bin/
 
-# 编译型扩展(grpc)只在这一层发生;业务代码变动不会触发本镜像重建
+# 默认四个编译任务；低内存构建机可设置为 1 或 2。
+ARG PHP_EXTENSION_JOBS=4
+
+# gRPC 编译单独缓存，增减其他扩展不再使这一层失效。
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    IPE_PROCESSOR_COUNT=1 install-php-extensions \
+    IPE_KEEP_SYSPKG_CACHE=1 IPE_PROCESSOR_COUNT=${PHP_EXTENSION_JOBS} install-php-extensions grpc && \
+    rm -rf /tmp/pear
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    IPE_KEEP_SYSPKG_CACHE=1 IPE_PROCESSOR_COUNT=${PHP_EXTENSION_JOBS} install-php-extensions \
         pdo_mysql \
         pdo_pgsql \
         mongodb \
@@ -29,13 +41,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         posix \
         sockets \
         bcmath \
-        grpc \
         curl \
         redis \
         zip \
         intl \
         mbstring \
-        opcache
+        opcache && \
+    rm -rf /tmp/pear
 
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 

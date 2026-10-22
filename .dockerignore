@@ -3,6 +3,9 @@
 .idea/
 .vscode/
 .github/
+.codegraph/
+.phpunit.result.cache/
+mitm_mcp_traffic.db*
 node_modules/
 doc/
 data/

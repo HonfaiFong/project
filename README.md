@@ -44,26 +44,26 @@
 
 ## 2. 服务列表
 
-| 服务目录 | 服务名称 | 运行时 / 技术栈 | 职责与边界 |
-| :--- | :--- | :--- | :--- |
-| `apps/api-gateway` | API Gateway (BFF) | Webman / PHP 8.4 | 对外 HTTP API 入口、JWT 认证、gRPC 客户端聚合 (**Phase 1 已实现**) |
-| `gateways/realtime-gateway` | Realtime Gateway | Go 1.27 / WebSocket | 实时长连接维持、心跳、多端连接管理、下行 Push (**Skeleton**：连接/心跳/票据校验已实现，当前使用 JSON Envelope，Phase 3 切换 Protobuf Binary Envelope；消息协议与 Presence 见其 README) |
-| `services/auth-service` | AuthService | RoadRunner / PHP 8.4 | 账号认证、Token 签发 / 轮转、设备管理、WS Ticket (**Phase 1 已实现**) |
-| `services/user-service` | UserService | RoadRunner / PHP 8.4 | 用户主体、Persona 分身管理 (**User != Persona**) (**Phase 1 已实现**) |
-| `services/content-service` | ContentService | RoadRunner / PHP 8.4 | 已实现帖子、图文媒体元数据、一级与回复评论及访问授权 |
-| services/social-service | SocialService | RoadRunner / PHP 8.4 | 已实现 MAIN 点赞/关注、账号级双向拉黑及交互状态查询 |
-| `services/discovery-service` | DiscoveryService | RoadRunner / PHP 8.4 | 漂流罐头、情绪池、随机发现、曝光过滤 (**骨架，未实现**) |
-| `services/feed-service` | FeedService | RoadRunner / PHP 8.4 | 首页 Feed 规则召回、ZSET Timeline 聚合 (**骨架，未实现**) |
-| `services/recommend-service` | RecommendService | RoadRunner / PHP 8.4 | 用户兴趣画像、候选打分排序 (**骨架，未实现**) |
-| `services/chat-service` | ChatService | RoadRunner / PHP 8.4 | 已实现私聊会话、固定成员身份快照、已读点及权限校验 |
-| `services/message-service` | MessageService | RoadRunner / PHP 8.4 | 已实现消息持久化、递增 seq、幂等去重及历史同步；当前运行库尚未接入分片路由 |
-| `services/risk-service` | RiskService | RoadRunner / PHP 8.4 | 同步风险决策 (ALLOW/DENY/CHALLENGE) (**骨架，未实现**) |
-| `services/moderation-service` | ModerationService | RoadRunner / PHP 8.4 | 内容敏感词与多媒体审核流转 (**骨架，未实现**) |
-| `services/notification-service` | NotificationService | RoadRunner / PHP 8.4 | 站内通知与离线推送通道 (**骨架，未实现**) |
-| `services/media-service` | MediaService | RoadRunner / PHP 8.4 | 预签名上传 URL 签发与对象元数据确认 (**骨架，未实现**) |
-| `services/search-service` | SearchService | RoadRunner / PHP 8.4 | OpenSearch 内容与标签检索 (**骨架，未实现**) |
-| `services/config-service` | ConfigService | RoadRunner / PHP 8.4 | 客户端 RouteProfile 与动态功能开关 (**骨架，未实现**) |
-| `apps/admin-api` | Admin API | Webman / PHP 8.4 | 运营后台、审核队列处理、封禁管理 (**骨架，未实现**) |
+| 服务目录                        | 服务名称            | 运行时 / 技术栈      | 职责与边界                                                                                                                                                                             |
+|:--------------------------------|:--------------------|:---------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `apps/api-gateway`              | API Gateway (BFF)   | Webman / PHP 8.4     | 对外 HTTP API 入口、JWT 认证、gRPC 客户端聚合 (**Phase 1 已实现**)                                                                                                                     |
+| `gateways/realtime-gateway`     | Realtime Gateway    | Go 1.27 / WebSocket  | 实时长连接维持、心跳、多端连接管理、下行 Push (**Skeleton**：连接/心跳/票据校验已实现，当前使用 JSON Envelope，Phase 3 切换 Protobuf Binary Envelope；消息协议与 Presence 见其 README) |
+| `services/auth-service`         | AuthService         | RoadRunner / PHP 8.4 | 账号认证、Token 签发 / 轮转、设备管理、WS Ticket (**Phase 1 已实现**)                                                                                                                  |
+| `services/user-service`         | UserService         | RoadRunner / PHP 8.4 | 用户主体、Persona 分身管理 (**User != Persona**) (**Phase 1 已实现**)                                                                                                                  |
+| `services/content-service`      | ContentService      | RoadRunner / PHP 8.4 | 已实现帖子、图文媒体元数据、一级与回复评论及访问授权                                                                                                                                   |
+| services/social-service         | SocialService       | RoadRunner / PHP 8.4 | 已实现 MAIN 点赞/关注、账号级双向拉黑及交互状态查询                                                                                                                                    |
+| `services/discovery-service`    | DiscoveryService    | RoadRunner / PHP 8.4 | 漂流罐头、情绪池、随机发现、曝光过滤 (**骨架，未实现**)                                                                                                                                |
+| `services/feed-service`         | FeedService         | RoadRunner / PHP 8.4 | 首页 Feed 规则召回、ZSET Timeline 聚合 (**骨架，未实现**)                                                                                                                              |
+| `services/recommend-service`    | RecommendService    | RoadRunner / PHP 8.4 | 用户兴趣画像、候选打分排序 (**骨架，未实现**)                                                                                                                                          |
+| `services/chat-service`         | ChatService         | RoadRunner / PHP 8.4 | 已实现私聊会话、固定成员身份快照、已读点及权限校验                                                                                                                                     |
+| `services/message-service`      | MessageService      | RoadRunner / PHP 8.4 | 已实现消息持久化、递增 seq、幂等去重及历史同步；当前运行库尚未接入分片路由                                                                                                             |
+| `services/risk-service`         | RiskService         | RoadRunner / PHP 8.4 | 同步风险决策 (ALLOW/DENY/CHALLENGE) (**骨架，未实现**)                                                                                                                                 |
+| `services/moderation-service`   | ModerationService   | RoadRunner / PHP 8.4 | 内容敏感词与多媒体审核流转 (**骨架，未实现**)                                                                                                                                          |
+| `services/notification-service` | NotificationService | RoadRunner / PHP 8.4 | 站内通知与离线推送通道 (**骨架，未实现**)                                                                                                                                              |
+| `services/media-service`        | MediaService        | RoadRunner / PHP 8.4 | 预签名上传 URL 签发与对象元数据确认 (**骨架，未实现**)                                                                                                                                 |
+| `services/search-service`       | SearchService       | RoadRunner / PHP 8.4 | OpenSearch 内容与标签检索 (**骨架，未实现**)                                                                                                                                           |
+| `services/config-service`       | ConfigService       | RoadRunner / PHP 8.4 | 客户端 RouteProfile 与动态功能开关 (**骨架，未实现**)                                                                                                                                  |
+| `apps/admin-api`                | Admin API           | Webman / PHP 8.4     | 运营后台、审核队列处理、封禁管理 (**骨架，未实现**)                                                                                                                                    |
 
 ---
 
@@ -77,6 +77,40 @@
 ---
 
 ## 4. 本地启动
+
+### 镜像构建加速
+
+日常使用 `make build-runtime`；没有 Make 时，依次运行以下命令，保留构建缓存：
+
+```bash
+docker compose build realtime-gateway
+docker compose build php-runtime
+```
+
+PHP 扩展默认使用 4 个并行编译任务，保留现有的调试信息和优化参数，gRPC 编译层独立缓存；低内存构建机可在 `.env` 中设置 `PHP_EXTENSION_JOBS=1` 或 `2`。PHP 镜像构建不传入业务代码上下文，修改业务 PHP 文件无需重建运行时。只有排查缓存问题时才使用禁用 PHP 缓存的 `make rebuild-runtime`。
+
+默认使用官方软件源。国内本地网络可在 `.env` 中按需设置：
+
+```dotenv
+PHP_EXTENSION_JOBS=4
+DOCKER_DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
+DOCKER_GOPROXY=https://goproxy.cn,direct
+```
+
+PowerShell 可在当前终端设置同名环境变量后构建：
+
+```powershell
+$env:DOCKER_DEBIAN_MIRROR = "https://mirrors.tuna.tsinghua.edu.cn"
+$env:DOCKER_GOPROXY = "https://goproxy.cn,direct"
+docker compose build realtime-gateway
+docker compose build php-runtime
+```
+
+这些参数分别作用于 PHP 的 Debian 软件下载和网关的 Go 模块下载，不改变基础镜像的仓库地址，也不配置 Docker daemon 的镜像加速器。网关最终镜像直接复用构建阶段的 CA bundle，省去额外的 apt 安装。
+
+GitHub CI 继续使用官方源与已有的 GHA `mode=max` 层缓存。Go 模块放在独立镜像层中以便跨 runner 复用；apt 和 Go 编译的 cache mount 可在同一构建器上复用，但不会自动随 GHA 层缓存恢复。参见 [Docker 缓存说明](https://docs.docker.com/build/ci/github-actions/cache/#cache-mounts)。首次构建或 PHP 基础镜像、安装器发生变化时，仍须完成扩展编译；本文不承诺固定加速倍数。
+
+### 启动服务
 
 ```bash
 # 1. 复制配置文件，并设置 PostgreSQL / MongoDB 独立账号密码、JWT_SECRET / WS_TICKET_SECRET
@@ -133,12 +167,12 @@ SOCIAL_TRUSTED_PROXY_CIDRS=100.64.0.0/10,10.0.0.0/8
 
 社交登录/绑定限流是**多层分桶**模型，一次请求必须同时通过所有命中的桶，任一超限即拒绝：
 
-| 桶 | Key 维度 | 默认阈值 | 作用 |
-| :--- | :--- | :--- | :--- |
-| IP 全局 | 客户端 IP | `SOCIAL_LOGIN_RATE_LIMIT=60` / 60s | 单 IP 总天花板，登录+绑定共用 |
-| IP + 场景 | 客户端 IP × login/bind | `SOCIAL_LOGIN_RATE_SCENARIO_LIMIT=30` / 60s | 登录与绑定互不挤占额度 |
-| IP + 设备 | 客户端 IP × device_uuid | `SOCIAL_LOGIN_RATE_DEVICE_LIMIT=20` / 60s | 压制单设备脚本行为，辅助风险信号 |
-| 用户 + 绑定 | 已认证 user_id | `SOCIAL_BIND_USER_RATE_LIMIT=10` / 3600s | 单账号反复绑定独立受限，与来源 IP 无关 |
+| 桶          | Key 维度                | 默认阈值                                    | 作用                                   |
+|:------------|:------------------------|:--------------------------------------------|:---------------------------------------|
+| IP 全局     | 客户端 IP               | `SOCIAL_LOGIN_RATE_LIMIT=60` / 60s          | 单 IP 总天花板，登录+绑定共用          |
+| IP + 场景   | 客户端 IP × login/bind  | `SOCIAL_LOGIN_RATE_SCENARIO_LIMIT=30` / 60s | 登录与绑定互不挤占额度                 |
+| IP + 设备   | 客户端 IP × device_uuid | `SOCIAL_LOGIN_RATE_DEVICE_LIMIT=20` / 60s   | 压制单设备脚本行为，辅助风险信号       |
+| 用户 + 绑定 | 已认证 user_id          | `SOCIAL_BIND_USER_RATE_LIMIT=10` / 3600s    | 单账号反复绑定独立受限，与来源 IP 无关 |
 
 绑定接口按「IP/场景/设备前置限流 → AuthMiddleware 验证 JWT → 已验证用户限流」执行。IP 超限时不会再调用 VerifyToken，认证后阶段只增加用户桶，每个请求不会重复增加 IP 桶。
 
@@ -148,14 +182,14 @@ IPv4 按完整地址分桶；IPv6 归一到 /64 前缀分桶（终端用户可�
 
 各超时旋钮不是独立自由值，以下关系同时由**运行时启动校验**与测试门禁强制，违反即拒绝启动（不是只校验 `.env.example` 默认值）：
 
-| 变量 | 默认 | 约束 | 强制位置 |
-| :--- | :--- | :--- | :--- |
-| `GRPC_AUTH_TIMEOUT_MS` | 300 | Gateway→Auth 普通调用外层截止时间；必须为正整数 | Gateway `config/gateway.php` 加载即校验 |
-| `GRPC_USER_DIRECTORY_TIMEOUT_MS` | 250 | Auth→User 目录跳预算；必须为正整数，且 **小于** `GRPC_AUTH_TIMEOUT_MS` | `DeadlineEnv` 严格解析 + AuthService 启动时对部署对做跨服务校验（compose.yaml 会把 `GRPC_AUTH_TIMEOUT_MS` 一并注入 auth-service 容器） |
-| `GRPC_SOCIAL_LOGIN_TIMEOUT_MS` | 7000 | 社交登录 RPC 截止；必须 **大于** `2 × SOCIAL_HTTP_TIMEOUT_MS`（QQ 最坏两跳 OAuth HTTP） | Gateway 配置加载即校验，`AuthServiceClient` 构造时再次保护 |
-| `GRPC_SOCIAL_BIND_TIMEOUT_MS` | 7000 | 社交绑定 RPC 截止；同上 | 同上 |
-| `SOCIAL_HTTP_TIMEOUT_MS` | 3000 | OAuth 上游单次 HTTP 超时；必须为正整数 | Gateway 配置加载与 AuthService 启动即校验 |
-| `SOCIAL_HTTP_CONNECT_TIMEOUT_MS` | 1000 | OAuth 连接超时；必须为正整数且不大于总 HTTP 超时 | AuthService 启动即校验，OAuth 客户端构造时再次保护 |
+| 变量                             | 默认 | 约束                                                                                    | 强制位置                                                                                                                               |
+|:---------------------------------|:-----|:----------------------------------------------------------------------------------------|:---------------------------------------------------------------------------------------------------------------------------------------|
+| `GRPC_AUTH_TIMEOUT_MS`           | 300  | Gateway→Auth 普通调用外层截止时间；必须为正整数                                         | Gateway `config/gateway.php` 加载即校验                                                                                                |
+| `GRPC_USER_DIRECTORY_TIMEOUT_MS` | 250  | Auth→User 目录跳预算；必须为正整数，且 **小于** `GRPC_AUTH_TIMEOUT_MS`                  | `DeadlineEnv` 严格解析 + AuthService 启动时对部署对做跨服务校验（compose.yaml 会把 `GRPC_AUTH_TIMEOUT_MS` 一并注入 auth-service 容器） |
+| `GRPC_SOCIAL_LOGIN_TIMEOUT_MS`   | 7000 | 社交登录 RPC 截止；必须 **大于** `2 × SOCIAL_HTTP_TIMEOUT_MS`（QQ 最坏两跳 OAuth HTTP） | Gateway 配置加载即校验，`AuthServiceClient` 构造时再次保护                                                                             |
+| `GRPC_SOCIAL_BIND_TIMEOUT_MS`    | 7000 | 社交绑定 RPC 截止；同上                                                                 | 同上                                                                                                                                   |
+| `SOCIAL_HTTP_TIMEOUT_MS`         | 3000 | OAuth 上游单次 HTTP 超时；必须为正整数                                                  | Gateway 配置加载与 AuthService 启动即校验                                                                                              |
+| `SOCIAL_HTTP_CONNECT_TIMEOUT_MS` | 1000 | OAuth 连接超时；必须为正整数且不大于总 HTTP 超时                                        | AuthService 启动即校验，OAuth 客户端构造时再次保护                                                                                     |
 
 非法值（`0`、负数、非数字、带单位的字符串）在任何部署环境都会让对应 worker 拒绝启动——不会像旧的 `max(1, (int)...)` 那样把 `abc` 悄悄钳制成 1ms。严格解析逻辑在 `Packages\GrpcCommon\DeadlineEnv` 中由 Gateway 与 AuthService 共享。
 
@@ -233,18 +267,18 @@ make proto
 
 PostgreSQL 空卷初始化脚本 `infra/docker/postgresql/init/01-create-roles.sh` 创建固定 Schema 和角色；MongoDB 使用 `infra/docker/mongodb/init.js` 初始化副本集与集合权限。每个账号使用独立密码，业务容器不使用管理员凭据。
 
-| 账号 | 授权范围 | 用途 |
-| :--- | :--- | :--- |
-| `auth_runtime` | `auth_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | AuthService |
-| `user_runtime` | `user_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | UserService |
-| `content_runtime` | `content_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | ContentService |
-| `social_runtime` | `social_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | SocialService |
-| `chat_runtime` | `chat_db.*` 的 `SELECT/INSERT/UPDATE/DELETE` | ChatService |
-| MongoDB `message_runtime` | 消息读取/插入、序号读取/插入/更新、Outbox 插入 | MessageService |
-| MongoDB `message_outbox_relay` | 仅 Outbox 的 find/update | Message Outbox relay |
-| `user_outbox_relay` | 仅 `user_db.outbox_events` 的 `SELECT/UPDATE` | User outbox relay |
-| PostgreSQL `migration_ddl` | 固定业务 Schema 与 `meta` 的所有者；无管理员或创建角色权限 | Phinx |
-| MongoDB `message_migration` | 消息库 dbAdmin/readWrite | MongoDB 迁移 |
+| 账号                           | 授权范围                                                   | 用途                 |
+|:-------------------------------|:-----------------------------------------------------------|:---------------------|
+| `auth_runtime`                 | `auth_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`               | AuthService          |
+| `user_runtime`                 | `user_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`               | UserService          |
+| `content_runtime`              | `content_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`            | ContentService       |
+| `social_runtime`               | `social_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`             | SocialService        |
+| `chat_runtime`                 | `chat_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`               | ChatService          |
+| MongoDB `message_runtime`      | 消息读取/插入、序号读取/插入/更新、Outbox 插入             | MessageService       |
+| MongoDB `message_outbox_relay` | 仅 Outbox 的 find/update                                   | Message Outbox relay |
+| `user_outbox_relay`            | 仅 `user_db.outbox_events` 的 `SELECT/UPDATE`              | User outbox relay    |
+| PostgreSQL `migration_ddl`     | 固定业务 Schema 与 `meta` 的所有者；无管理员或创建角色权限 | Phinx                |
+| MongoDB `message_migration`    | 消息库 dbAdmin/readWrite                                   | MongoDB 迁移         |
 
 PostgreSQL 运行时角色只能访问所属 Schema；`user_outbox_relay` 仅能访问用户 Outbox。`POSTGRES_ADMIN_PASSWORD` 只供管理员初始化，`PG_MIGRATION_PASSWORD` 只供迁移，`PG_*_RUNTIME_PASSWORD` 供各服务。MongoDB 分别使用 `MONGODB_RUNTIME_PASSWORD`、`MONGODB_RELAY_PASSWORD` 和 `MONGODB_MIGRATION_PASSWORD`。
 
@@ -293,7 +327,11 @@ buf lint
 
 MongoDB 自动化覆盖范围、待执行的三节点选主与容量验收见 [故障恢复验收说明](doc/MONGODB_RECOVERY_ACCEPTANCE.md)。
 
-`make e2e` 运行 Phase 1 业务流、社交登录 HTTP → gRPC → PostgreSQL/Redis 测试，以及真实链路延迟探针（社交登录全链路 P50/P95/P99 报告，见 `make latency-probe`）。微信/QQ 社交登录通过独立 `fake-oauth` 服务模拟上游；其中全量 E2E 仍包含历史手机号兼容回归，需要单独在隔离环境显式开启开发验证码（`ENABLE_DEV_LOGIN` / `DEV_LOGIN_CODE`）；这不代表正式产品支持手机号登录。下方示例只运行微信/QQ 正式链路的社交 E2E。不调用真实 OAuth 或短信平台。在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
+`make e2e` 依次执行 `scripts/e2e_test.sh`、`scripts/social_e2e_test.sh` 和 `scripts/auth_latency_probe.sh`，覆盖微信/QQ 登录、业务接口与社交登录全链路延迟。前者通过模拟微信 OAuth 登录；社交 E2E 还验证已移除的 `/api/v1/auth/social/phone/code`、`/api/v1/auth/social/phone/bind` 路由返回 404。这些是旧手机号路由不可用的兼容性断言，不是手机号验证码登录成功链路，也不需要开启 `ENABLE_DEV_LOGIN` 或设置 `DEV_LOGIN_CODE`。
+
+开发验证码的历史单元测试仍保留在 `tests/Unit/LoginCredentialVerifierTest.php`，用于检查显式启用条件、凭据校验及未配置真实提供方时的拒绝行为；它们不代表正式产品支持手机号登录。
+
+微信/QQ 社交登录通过独立 `fake-oauth` 服务模拟上游，不调用真实 OAuth 或短信平台。下方示例只运行社交 E2E；在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
 
 ```bash
 export APP_ENV=testing ENABLE_WECHAT_LOGIN=true ENABLE_QQ_LOGIN=true
@@ -324,43 +362,43 @@ Redis/RabbitMQ 集成测试需要 `SOCIAL_TEST_REDIS_*`、`RABBITMQ_INTEGRATION=
 
 ## 9. 常用 Make 命令
 
-| 命令 | 说明 |
-| :--- | :--- |
-| `make bootstrap` | 初始化依赖、生成 autoload 与配置 |
-| `make up` | 编排启动全流程（镜像检查 -> 基础设施 -> 数据迁移 -> 业务服务） |
-| `make infra-up` | 启动 PostgreSQL、MongoDB、Redis、RabbitMQ 并导入拓扑 |
-| `make broker-init` | 重新导入 RabbitMQ exchange、stream 和 quorum queue 拓扑 |
-| `make storage-up` | 启动 RustFS（storage profile） |
-| `make app-up` | 仅启动业务微服务与网关容器 |
-| `make down` | 停止并移除容器 |
-| `make lint` | 执行 PHP 语法校验与 Go vet |
-| `make analyse` | 执行 PHPStan 静态分析 |
-| `make test` | 执行全套单元测试 |
-| `make e2e` | 执行端到端接口冒烟测试与全链路延迟探针 |
-| `make latency-probe` | 社交登录真实链路 P50/P95/P99 延迟报告（需已启动的栈） |
-| `make logs` | 查看所有容器运行日志 |
-| `make migrate` | 应用 PostgreSQL Phinx 与 MongoDB 版本迁移 |
-| `make test-mongodb` | 消息持久化、迁移升级与事务故障注入测试 |
-| `make clean` | 停止并清除本地数据卷 |
+| 命令                 | 说明                                                           |
+|:---------------------|:---------------------------------------------------------------|
+| `make bootstrap`     | 初始化依赖、生成 autoload 与配置                               |
+| `make up`            | 编排启动全流程（镜像检查 -> 基础设施 -> 数据迁移 -> 业务服务） |
+| `make infra-up`      | 启动 PostgreSQL、MongoDB、Redis、RabbitMQ 并导入拓扑           |
+| `make broker-init`   | 重新导入 RabbitMQ exchange、stream 和 quorum queue 拓扑        |
+| `make storage-up`    | 启动 RustFS（storage profile）                                 |
+| `make app-up`        | 仅启动业务微服务与网关容器                                     |
+| `make down`          | 停止并移除容器                                                 |
+| `make lint`          | 执行 PHP 语法校验与 Go vet                                     |
+| `make analyse`       | 执行 PHPStan 静态分析                                          |
+| `make test`          | 执行全套单元测试                                               |
+| `make e2e`           | 执行端到端接口冒烟测试与全链路延迟探针                         |
+| `make latency-probe` | 社交登录真实链路 P50/P95/P99 延迟报告（需已启动的栈）          |
+| `make logs`          | 查看所有容器运行日志                                           |
+| `make migrate`       | 应用 PostgreSQL Phinx 与 MongoDB 版本迁移                      |
+| `make test-mongodb`  | 消息持久化、迁移升级与事务故障注入测试                         |
+| `make clean`         | 停止并清除本地数据卷                                           |
 
 ---
 
 ## 10. 服务端口映射
 
-| 端口 | 协议 | 服务组件 |
-| :--- | :--- | :--- |
-| `8787` | HTTP | API Gateway (Webman REST API) |
-| `8080` | HTTP/WS | Realtime Gateway (WebSocket :8080/ws) |
-| `50051` | gRPC | AuthService (RPC) |
-| `50052` | gRPC | UserService (RPC) |
-| `5432` | PostgreSQL | PostgreSQL 18 关系型业务库 |
-| `27017` | MongoDB | MongoDB 8 消息副本集 |
-| `6379` | Redis | Redis 7.2 缓存与即时状态 |
-| `5672` | AMQP | RabbitMQ 任务与事件发布 |
-| `5552` | Stream | RabbitMQ Streams 原生协议 |
-| `15672` | HTTP | RabbitMQ Management |
-| `9000` | S3 API | RustFS 对象存储 API（需 `--profile storage`，宿主默认仅绑定 `127.0.0.1`） |
-| `9001` | HTTP | RustFS 控制台（需 `--profile storage`，宿主默认仅绑定 `127.0.0.1`） |
+| 端口    | 协议       | 服务组件                                                                  |
+|:--------|:-----------|:--------------------------------------------------------------------------|
+| `8787`  | HTTP       | API Gateway (Webman REST API)                                             |
+| `8080`  | HTTP/WS    | Realtime Gateway (WebSocket :8080/ws)                                     |
+| `50051` | gRPC       | AuthService (RPC)                                                         |
+| `50052` | gRPC       | UserService (RPC)                                                         |
+| `5432`  | PostgreSQL | PostgreSQL 18 关系型业务库                                                |
+| `27017` | MongoDB    | MongoDB 8 消息副本集                                                      |
+| `6379`  | Redis      | Redis 7.2 缓存与即时状态                                                  |
+| `5672`  | AMQP       | RabbitMQ 任务与事件发布                                                   |
+| `5552`  | Stream     | RabbitMQ Streams 原生协议                                                 |
+| `15672` | HTTP       | RabbitMQ Management                                                       |
+| `9000`  | S3 API     | RustFS 对象存储 API（需 `--profile storage`，宿主默认仅绑定 `127.0.0.1`） |
+| `9001`  | HTTP       | RustFS 控制台（需 `--profile storage`，宿主默认仅绑定 `127.0.0.1`）       |
 
 ---
 

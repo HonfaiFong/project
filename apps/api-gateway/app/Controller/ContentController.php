@@ -10,6 +10,7 @@ use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Common\V1\IdentityMode;
 use Packages\Tracing\TraceContext;
+use Random\RandomException;
 use RuntimeException;
 use Webman\Http\Response;
 
@@ -71,6 +72,7 @@ final readonly class ContentController
     /**
      * @param array<string,mixed> $fields
      * @return array<string,mixed>
+     * @throws RandomException
      */
     private function writeFields(array $fields): array
     {
@@ -114,7 +116,11 @@ final readonly class ContentController
         return $mode;
     }
 
-    /** @param mixed $bodyPersonaId */
+    /**
+     * @param GatewayRequest $request
+     * @param mixed $bodyPersonaId
+     * @return string
+     */
     private function requestedPersonaId(GatewayRequest $request, mixed $bodyPersonaId): string
     {
         $bodyPersonaId = trim((string)($bodyPersonaId ?? ''));

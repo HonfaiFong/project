@@ -21,6 +21,7 @@ use Contracts\Gen\Chat\V1\CheckCanMessageRequest;
 use Contracts\Gen\Chat\V1\CheckCanMessageResponse;
 use Contracts\Gen\Common\V1\PaginationRequest;
 use Contracts\Gen\Common\V1\PublicAuthor;
+use Exception;
 use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\GrpcCallException;
 use Packages\GrpcCommon\UnaryGrpcClient;
@@ -35,7 +36,12 @@ final class ChatServiceClient
     private ?UnaryGrpcClient $client;
     public function __construct(private readonly ?string $target = null, private readonly int $timeoutMs = 700, private readonly ?string $serviceToken = null, ?UnaryGrpcClient $client = null) { $this->client = $client; }
 
-    /** @param array<string,mixed> $target */
+    /**
+     * @param array $fields
+     * @param array<string,mixed> $target
+     * @return array
+     * @throws Exception
+     */
     public function getOrCreate(array $fields, array $target): array
     {
         $targetMessage = isset($target['anonymous_ref'])
@@ -88,8 +94,11 @@ final class ChatServiceClient
 
     /**
      * @template T of Message
+     * @param string $method
+     * @param Message $request
      * @param class-string<T> $responseClass
      * @return T
+     * @throws Exception
      */
     private function call(string $method, Message $request, string $responseClass): Message
     {

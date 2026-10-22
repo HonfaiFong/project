@@ -23,7 +23,7 @@ final readonly class CreateWsTicketAction
      * @param array<string, mixed> $body
      * @param array<string, mixed> $authContext
      * @return array{ticket: string, expires_at: string}
-     * @throws Exception
+     * @throws Exception|Throwable
      */
     public function execute(array $body, array $authContext): array
     {
@@ -62,7 +62,7 @@ final readonly class CreateWsTicketAction
         if ((int)($persona['status'] ?? 0) !== 1) {
             throw new RuntimeException('persona is inactive', ErrorCode::PERSONA_FORBIDDEN->value);
         }
-        if ((int)($persona['type'] ?? 0) !== 1 || (bool)($persona['is_internal_alias'] ?? false)) {
+        if ((int)($persona['type'] ?? 0) !== 1 || ($persona['is_internal_alias'] ?? false)) {
             throw new RuntimeException('anonymous personas cannot open a general websocket connection', ErrorCode::PERSONA_FORBIDDEN->value);
         }
 
