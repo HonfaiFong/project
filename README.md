@@ -117,7 +117,7 @@ COMPOSE_ENV_FILE=.env.example bash scripts/redis_revocation_persistence_test.sh
 
 PostgreSQL、MongoDB、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 服务之间继续使用内部 hostname 通信，需要外部访问时再显式设置对应的 `*_BIND_ADDRESS`。
 
-生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`DEV_LOGIN_CODE` 为空。当前没有生产短信适配器，手机号验证码登录仅在本地/测试环境可用（Gateway 路由与 AuthService 双重门禁，生产直接关闭）；微信/QQ OAuth 登录不依赖短信，首次登录自动注册，配置真实 `WECHAT_APP_ID`/`QQ_APP_ID` 凭证并保持官方 HTTPS endpoint 后即可在生产开启。开发环境的 endpoint 覆盖（`WECHAT_TOKEN_ENDPOINT` 等）与 `SOCIAL_OAUTH_ALLOW_INSECURE_HTTP` 在生产环境会触发启动拒绝。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
+生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`DEV_LOGIN_CODE` 为空。正式产品仅支持微信和 QQ 注册登录。手机号相关路由、标准化组件及开发验证码属于历史兼容代码，仅保留隔离的历史回归用途，不属于正式产品能力或新功能维护范围；生产由 Gateway 和 AuthService 双重门禁关闭，且当前没有生产短信适配器。微信/QQ 首次登录自动注册，配置真实 `WECHAT_APP_ID`/`QQ_APP_ID` 凭证并保持官方 HTTPS endpoint 后即可在生产开启。开发环境的 endpoint 覆盖（`WECHAT_TOKEN_ENDPOINT` 等）与 `SOCIAL_OAUTH_ALLOW_INSECURE_HTTP` 在生产环境会触发启动拒绝。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
 
 ### 受信代理链与客户端 IP 限流
 
@@ -255,7 +255,7 @@ PostgreSQL 初始化脚本只在空卷执行，不能在已有库上直接重跑
 make migrate
 ```
 
-常规迁移、启动和 CI 不依赖历史手机号预检查。仅在维护已有手机号数据时，单独执行 `make preflight-phone`；规范化或修复数据应使用独立维护流程及相应数据库权限，不能提升业务运行时账号权限。
+常规迁移、启动和 CI 不依赖历史手机号预检查。`make preflight-phone` 仅用于已存在的旧库数据维护；规范化或修复数据应使用独立维护流程及相应数据库权限，不能提升业务运行时账号权限。
 
 查看状态、新建迁移：
 ```bash
@@ -291,11 +291,12 @@ buf lint
 
 ## 8. 端到端 E2E 验证
 
-`make e2e` 运行 Phase 1 业务流、社交登录 HTTP → gRPC → PostgreSQL/Redis 测试，以及真实链路延迟探针（社交登录全链路 P50/P95/P99 报告，见 `make latency-probe`）。微信/QQ 社交登录通过独立 `fake-oauth` 服务模拟上游；手机号登录走开发验证码（`ENABLE_DEV_LOGIN` / `DEV_LOGIN_CODE`），该入口仅供本地与 E2E 测试，**不作为正式登录方式**，生产环境由路由环境门禁与 AuthService 双重关闭。不调用真实 OAuth 或短信平台。在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
+MongoDB 自动化覆盖范围、待执行的三节点选主与容量验收见 [故障恢复验收说明](doc/MONGODB_RECOVERY_ACCEPTANCE.md)。
+
+`make e2e` 运行 Phase 1 业务流、社交登录 HTTP → gRPC → PostgreSQL/Redis 测试，以及真实链路延迟探针（社交登录全链路 P50/P95/P99 报告，见 `make latency-probe`）。微信/QQ 社交登录通过独立 `fake-oauth` 服务模拟上游；其中全量 E2E 仍包含历史手机号兼容回归，需要单独在隔离环境显式开启开发验证码（`ENABLE_DEV_LOGIN` / `DEV_LOGIN_CODE`）；这不代表正式产品支持手机号登录。下方示例只运行微信/QQ 正式链路的社交 E2E。不调用真实 OAuth 或短信平台。在专用本地测试数据库及 `.env.example` 配置下，可在同一 shell 中启用：
 
 ```bash
 export APP_ENV=testing ENABLE_WECHAT_LOGIN=true ENABLE_QQ_LOGIN=true
-export ENABLE_DEV_LOGIN=true DEV_LOGIN_CODE=123456
 export WECHAT_APP_ID=e2e-wechat-app WECHAT_APP_SECRET=e2e-wechat-secret
 export QQ_APP_ID=e2e-qq-app QQ_APP_KEY=e2e-qq-key QQ_REDIRECT_URI=http://e2e.test/callback
 export SOCIAL_OAUTH_ALLOW_INSECURE_HTTP=true
@@ -304,7 +305,7 @@ export QQ_TOKEN_ENDPOINT=http://fake-oauth:8081/oauth2.0/token
 export QQ_OPEN_ID_ENDPOINT=http://fake-oauth:8081/oauth2.0/me
 make up
 docker compose --profile e2e up -d fake-oauth
-make e2e
+make e2e-social
 ```
 
 **fake-oauth 授权码语义（与真实上游一致的单次兑换）**：测试码格式为 `<provider>-<scenario>-<identity>~<nonce>`，`~nonce` 之前的部分决定外部身份（openid/unionid），完整码串是一次性授权码。fake 上游对每个码只接受一次兑换——包括 503 瞬时失败的尝试也会烧毁该码，重放已消费码返回上游的 invalid code 错误（业务码 `1001009` / HTTP 401）。已消费状态记录在状态文件中，读—检查—写的整个周期由 `flock(LOCK_EX)` 保护，多 worker 并发兑换同一码时仍只有一个成功（`tests/Unit/FakeOAuthCodeConsumptionTest.php` 守护）。因此 E2E 中每一次失败恢复（上游瞬时故障、跨服务超时后的重试）都必须携带同身份的**全新**授权码（新 nonce），并断言恢复的是同一本地 User、不产生重复账号；这一契约由 `tests/Unit/SocialAuthServiceTest.php` 与 `scripts/social_e2e_test.sh` 共同守护。

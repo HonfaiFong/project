@@ -428,6 +428,27 @@ final class UserServiceTest extends TestCase
         $this->assertSame($personas[0]->id, $personaUpdatedEvents[0]['aggregate_id']);
     }
 
+    public function testZeroRegistrationKeyAndProfileTextRemainPresent(): void
+    {
+        $first = $this->userService->findOrCreateUserBySocialIdentity('0', '0');
+        $retry = $this->userService->findOrCreateUserBySocialIdentity('0', 'qq');
+        self::assertSame($first['user']->id, $retry['user']->id);
+        self::assertFalse($retry['is_new_user']);
+        self::assertSame('0', $retry['user']->registerChannel);
+        $persona = $this->userService->listPersonas($first['user']->id)[0];
+        $updated = $this->userService->updatePersona($persona->id, $first['user']->id, '0', '0', '0');
+        self::assertSame('0', $updated->nickname);
+        self::assertSame('0', $updated->avatarKey);
+        self::assertSame('0', $updated->bio);
+        $unchanged = $this->userService->updatePersona($persona->id, $first['user']->id);
+        self::assertSame('0', $unchanged->bio);
+        $cleared = $this->userService->updatePersona($persona->id, $first['user']->id, null, '', '');
+        self::assertSame('', $cleared->bio);
+        self::assertSame('', $cleared->avatarKey);
+        self::assertSame('0', $cleared->nickname);
+        self::assertCount(1, $this->userRepo->users);
+    }
+
     public function testFindOrCreateBySocialIdentityReusesAccountForRepeatedKey(): void
     {
         $first = $this->userService->findOrCreateUserBySocialIdentity('social:1001', 'wechat');

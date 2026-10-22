@@ -7,7 +7,6 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 use MongoDB\BSON\UTCDateTime;
 use MongoDB\Client;
-use MongoDB\Driver\ReadConcern;
 use MongoDB\Driver\ReadPreference;
 use MongoDB\Driver\WriteConcern;
 use MongoDB\Driver\Exception\CommandException;
@@ -264,10 +263,10 @@ function verifySchema(MongoDB\Database $database, array $definition): void
 {
     foreach ($definition as $name => $config) {
         $info = null;
-        // Metadata commands reject the client's majority read concern. Explicitly
-        // clear it for these commands; data reads keep their majority guarantee.
+        // Database::command uses executeCommand, which does not inherit the
+        // client's read concern. Its options do not support readConcern.
+        // Keep metadata on this path; business reads retain majority semantics.
         $metadata = $database->command(['listCollections' => 1, 'filter' => ['name' => $name]], [
-            'readConcern' => new ReadConcern(),
             'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
         ])->toArray();
         foreach ($metadata as $candidate) {
@@ -324,7 +323,6 @@ function verifySchema(MongoDB\Database $database, array $definition): void
 function schemaIndexes(MongoDB\Database $database, string $collection): array
 {
     $metadata = $database->command(['listIndexes' => $collection], [
-        'readConcern' => new ReadConcern(),
         'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
     ])->toArray();
     return array_map(static fn (array $index): MongoDB\Model\IndexInfo => new MongoDB\Model\IndexInfo($index), $metadata);

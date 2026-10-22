@@ -593,6 +593,23 @@ final class SocialAuthServiceTest extends TestCase
         $fixture['service']->bindSocialPhone('token', '13800000000', '123456', $this->device());
     }
 
+    public function testBothProvidersRejectEmptyAndZeroRegisteredUserWithoutIssuingCredentials(): void
+    {
+        foreach ([SocialProvider::WECHAT, SocialProvider::QQ] as $provider) {
+            foreach (['', '0'] as $userId) {
+                $fixture = $this->fixture($provider, ['user_id' => $userId, 'is_new_user' => true]);
+                try {
+                    $fixture['service']->socialLogin($provider, 'code', $this->device());
+                    self::fail('An invalid registration result must not create a session');
+                } catch (\RuntimeException $exception) {
+                    self::assertSame(ErrorCode::USER_NOT_FOUND->value, $exception->getCode());
+                }
+                self::assertSame([], $fixture['authRepo']->devices);
+                self::assertSame([], $fixture['authRepo']->tokens);
+            }
+        }
+    }
+
     private function bindingFixture(): array
     {
         return $this->fixture(SocialProvider::WECHAT, additionalIdentities: [$this->externalIdentity(SocialProvider::QQ)]);

@@ -111,6 +111,34 @@ SQL);
         );
     }
 
+    public function testZeroContentAndRequestKeyRemainIdempotentForBothIdentityModes(): void
+    {
+        foreach ([PersonaMode::MAIN, PersonaMode::ALIAS] as $mode) {
+            $actor = new BusinessActor((string)(10 * $mode->value));
+            $first = $this->content->createPost($actor, $mode->value, '0', 1, '0', 1, '', [], '0', '0');
+            $retry = $this->content->createPost($actor, $mode->value, '0', 1, '0', 1, '', [], '0', '0');
+            self::assertSame($first->getPostId(), $retry->getPostId());
+            self::assertSame('0', $first->getContent());
+            if ($mode === PersonaMode::ALIAS) {
+                self::assertSame('0', $first->getAuthor()->getDisplayName());
+                self::assertFalse($first->getAuthor()->getProfileAccessible());
+            }
+            try {
+                $this->content->createPost($actor, $mode->value, '0', 1, 'changed', 1, '', [], '0', '0');
+                self::fail('The zero request key must still detect conflicting replays');
+            } catch (RuntimeException $exception) {
+                self::assertSame(ErrorCode::IDEMPOTENCY_CONFLICT->value, $exception->getCode());
+            }
+        }
+        self::assertSame(2, (int)$this->pdo->query('SELECT COUNT(*) FROM posts')->fetchColumn());
+    }
+
+    public function testWhitespaceContentIsRejectedBeforePersistence(): void
+    {
+        $this->expectExceptionCode(ErrorCode::INVALID_ARGUMENT->value);
+        $this->content->createPost(new BusinessActor('10'), PersonaMode::MAIN->value, '0', 1, '   ', 1, '', [], 'blank-content');
+    }
+
     public function testAnonymousPostAndCommentPersistSnapshotsAndScopeReference(): void
     {
         $actor = new BusinessActor('10');

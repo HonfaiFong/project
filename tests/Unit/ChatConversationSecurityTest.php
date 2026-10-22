@@ -62,6 +62,38 @@ final class ChatConversationSecurityTest extends TestCase
         self::assertSame('Chosen conversation alias', $aliasMembers[0]->getAuthor()->getDisplayName());
     }
 
+    public function testZeroAliasNameAndZeroReadCursorRemainValid(): void
+    {
+        $users = $this->users();
+        $users->method('resolvePersonaMode')->willReturn(['persona' => [
+            ...$this->ownMain(), 'id' => '102', 'type' => 2, 'is_internal_alias' => true,
+        ]]);
+        $users->method('resolveMainPersona')->willReturn(['persona' => $this->mainPeer()]);
+        $app = $this->app($users);
+        $request = [
+            'identity_mode' => 2, 'alias_display_name' => '0',
+            'target' => new PublicChatTarget(['main_persona_id' => '201']),
+        ];
+        $first = $app->getOrCreatePrivateConversation('100', $request);
+        $retry = $app->getOrCreatePrivateConversation('100', $request);
+        self::assertSame($first->getConversationId(), $retry->getConversationId());
+        self::assertSame('0', iterator_to_array($first->getMembers())[0]->getAuthor()->getDisplayName());
+        self::assertTrue($app->markRead('100', (string)$first->getConversationId(), '0'));
+    }
+
+    public function testWhitespaceAliasNameIsRejected(): void
+    {
+        $users = $this->users();
+        $users->method('resolvePersonaMode')->willReturn(['persona' => [
+            ...$this->ownMain(), 'id' => '102', 'type' => 2, 'is_internal_alias' => true,
+        ]]);
+        $this->expectExceptionCode(\Contracts\Errors\ErrorCode::INVALID_ARGUMENT->value);
+        $this->app($users)->getOrCreatePrivateConversation('100', [
+            'identity_mode' => 2, 'alias_display_name' => '   ',
+            'target' => new PublicChatTarget(['main_persona_id' => '201']),
+        ]);
+    }
+
     public function testMainConversationIsUniqueInBothDirections(): void
     {
         $users = $this->users();

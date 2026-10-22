@@ -94,7 +94,6 @@ final class MongoMessagePersistenceTest extends TestCase
         }
         self::assertSame(3, $ledger->countDocuments());
         $indexes = $this->database->command(['listIndexes' => 'messages'], [
-            'readConcern' => new \MongoDB\Driver\ReadConcern(),
             'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
         ])->toArray();
         self::assertNotContains('idx_conversation_message_id_desc', array_column($indexes, 'name'));
@@ -212,7 +211,6 @@ final class MongoMessagePersistenceTest extends TestCase
             self::assertNotSame(0, $exitCode);
             self::assertStringContainsString('index set drift', $output);
             $metadata = $this->database->command(['listIndexes' => 'messages'], [
-                'readConcern' => new \MongoDB\Driver\ReadConcern(),
                 'typeMap' => ['root' => 'array', 'document' => 'array', 'array' => 'array'],
             ])->toArray();
             $indexNames = array_column($metadata, 'name');
