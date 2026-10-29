@@ -11,14 +11,13 @@ use Packages\Identity\AnonymousAuthorSnapshotFactory;
 use Packages\Identity\AnonymousReferenceFactory;
 use Packages\Identity\PersonaMode;
 use Packages\Identity\PersonaOperation;
-use Packages\Identity\UserIdentity;
-use Packages\Identity\UserIdentityDirectory;
 use Packages\IdGenerator\Snowflake;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 use Services\ContentService\Application\ContentApplicationService;
-use Services\ContentService\Domain\Social\BlockStatusResolver;
+use Tests\Support\ContentTestBlockResolver;
+use Tests\Support\ContentTestIdentityDirectory;
 
 /** Exercises the content boundary with real PDO persistence and projections. */
 final class ContentAuthorizationTest extends TestCase
@@ -95,6 +94,17 @@ CREATE TABLE post_media (
     duration_ms INTEGER NOT NULL,
     sort_order INTEGER NOT NULL,
     created_at TEXT NOT NULL
+);
+CREATE TABLE post_participants (
+    id INTEGER PRIMARY KEY,
+    post_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    persona_id TEXT NOT NULL,
+    identity_mode INTEGER NOT NULL,
+    display_name TEXT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (post_id, user_id)
 );
 SQL);
 
@@ -196,7 +206,9 @@ SQL);
         );
         $commentAuthor = $comment->getAuthor();
         $this->assertSame(2, $commentAuthor->getIdentityMode());
-        $this->assertSame('comment alias', $commentAuthor->getDisplayName());
+        // The per-post identity lock pins the author to the nickname chosen
+        // at publish time; a later comment cannot present a fresh alias.
+        $this->assertSame('post alias', $commentAuthor->getDisplayName());
         $this->assertSame($postAuthor->getAnonymousRef(), $commentAuthor->getAnonymousRef());
         $this->assertSame(0, $commentAuthor->getPersonaId());
     }
@@ -236,40 +248,5 @@ SQL);
         $this->assertFalse($resource['allowed']);
         $this->assertSame('0', $resource['resource_author_user_id']);
         $this->assertSame('0', $resource['root_author_user_id']);
-    }
-}
-
-final class ContentTestIdentityDirectory implements UserIdentityDirectory
-{
-    public function resolve(string $userId, PersonaMode $mode, PersonaOperation $operation, ?BusinessActor $actor = null): UserIdentity
-    {
-        if ($actor === null || $actor->userId !== $userId) {
-            throw new RuntimeException('actor mismatch');
-        }
-        $personaId = $mode === PersonaMode::MAIN ? (string)((int)$userId * 10 + 10) : (string)((int)$userId * 10 + 1);
-
-        return new UserIdentity($userId, $personaId, $mode, $mode === PersonaMode::MAIN ? 'Main ' . $userId : 'Internal alias', null, $mode === PersonaMode::MAIN);
-    }
-
-    public function validate(string $userId, string $personaId, PersonaOperation $operation, ?BusinessActor $actor = null): UserIdentity
-    {
-        throw new RuntimeException('not used');
-    }
-
-    public function main(string $personaId, PersonaOperation $operation, ?BusinessActor $actor = null): UserIdentity
-    {
-        throw new RuntimeException('not used');
-    }
-}
-
-final class ContentTestBlockResolver implements BlockStatusResolver
-{
-    /** @var array<string,bool> */
-    public array $blocked = [];
-
-    public function isBlockedEitherWay(string $firstUserId, string $secondUserId): bool
-    {
-        return ($this->blocked[$firstUserId . '|' . $secondUserId] ?? false)
-            || ($this->blocked[$secondUserId . '|' . $firstUserId] ?? false);
     }
 }

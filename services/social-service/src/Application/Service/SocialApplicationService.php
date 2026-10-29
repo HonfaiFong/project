@@ -193,6 +193,17 @@ final readonly class SocialApplicationService
             && $this->repository->hasBidirectionalBlock($userIdA, $userIdB);
     }
 
+    /** @param list<string> $targets @return list<string> */
+    public function blockedUserIds(string $actor, array $targets): array
+    {
+        $actor = $this->id($actor, 'user_id_a');
+        if (count($targets) > self::MAX_BATCH_SIZE) {
+            throw $this->error(ErrorCode::INVALID_ARGUMENT, 'Too many block targets');
+        }
+        $targets = array_values(array_unique(array_map(fn (string $id): string => $this->id($id, 'target_user_id'), $targets)));
+        return $this->repository->blockedUserIds($actor, array_values(array_filter($targets, static fn (string $id): bool => $id !== $actor)));
+    }
+
     private function mainActor(string $userId, string $personaId, int $operation): MainPersona
     {
         $userId = $this->id($userId, 'actor_user_id');

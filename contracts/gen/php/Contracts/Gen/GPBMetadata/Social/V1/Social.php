@@ -17,7 +17,7 @@ class Social
         \Contracts\Gen\GPBMetadata\Common\V1\Identity::initOnce();
         $pool->internalAddGeneratedFile(
             '
-è
+³
 social/v1/social.proto	social.v1"y
 LikeRequest
 
@@ -71,12 +71,15 @@ persona_id (
 target_ids (.
 identity_mode (2.common.v1.IdentityMode"O
  BatchGetInteractionStateResponse+
-states (2.social.v1.InteractionState"F
+states (2.social.v1.InteractionState"_
 CheckBidirectionalBlockRequest
 	user_id_a (
-	user_id_b ("2
+	user_id_b (
+target_user_ids ("d
 CheckBidirectionalBlockResponse
-blocked (2ð
+blocked (
+blocked_user_ids (
+batch_complete (2ð
 SocialService7
 Like.social.v1.LikeRequest.social.v1.LikeResponse=
 Unlike.social.v1.UnlikeRequest.social.v1.UnlikeResponse=

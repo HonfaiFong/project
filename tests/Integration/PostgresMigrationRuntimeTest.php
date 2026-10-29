@@ -93,6 +93,26 @@ final class PostgresMigrationRuntimeTest extends TestCase
         self::assertTrue($repo->markPublished($replacement[0]));
     }
 
+    public function testHistoricalParticipantBackfillKeepsFirstSnapshotAndExistingLocks(): void
+    {
+        $this->pdo->exec('SET LOCAL search_path TO content_db');
+        $this->pdo->exec("INSERT INTO posts (id,author_user_id,persona_id,identity_mode,author_display_name,type,content,visibility,status,moderation_status,created_at,updated_at) VALUES (88001,10,101,2,'Original',1,'historical',1,1,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)");
+        $this->pdo->exec("INSERT INTO comments (id,post_id,author_user_id,persona_id,identity_mode,author_display_name,content,status,created_at,updated_at) VALUES (88002,88001,20,201,2,'First','first',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),(88003,88001,20,210,1,'Later','mixed',1,CURRENT_TIMESTAMP+interval '1 second',CURRENT_TIMESTAMP)");
+        $this->pdo->exec("INSERT INTO post_participants (id,post_id,user_id,persona_id,identity_mode,display_name,created_at,updated_at) VALUES (88004,88001,30,301,2,'Existing',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)");
+        require_once __DIR__ . '/../../database/postgresql/migrations/20261030000000_backfill_post_participants.php';
+        $adapter = $this->createMock(\Phinx\Db\Adapter\AdapterInterface::class);
+        $adapter->method('execute')->willReturnCallback(fn (string $sql): int => (int)$this->pdo->exec($sql));
+        $migration = new \BackfillPostParticipants('testing', 20261030000000);
+        $migration->setAdapter($adapter);
+        $migration->up();
+        $migration->up();
+        $rows = $this->pdo->query('SELECT user_id,identity_mode,display_name FROM post_participants WHERE post_id=88001 ORDER BY user_id')->fetchAll(PDO::FETCH_ASSOC);
+        self::assertCount(3, $rows);
+        self::assertSame([2, 2, 2], array_map(static fn (array $row): int => (int)$row['identity_mode'], $rows));
+        self::assertSame(['Original', 'First', 'Existing'], array_column($rows, 'display_name'));
+        self::assertSame('Later', $this->pdo->query('SELECT author_display_name FROM comments WHERE id=88003')->fetchColumn());
+    }
+
     private function boolean(string $sql): bool
     {
         return in_array($this->pdo->query($sql)->fetchColumn(), [true, 't', '1', 1], true);

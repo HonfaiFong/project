@@ -26,6 +26,12 @@ class CheckBidirectionalBlockRequest extends \Google\Protobuf\Internal\Message
      * Generated from protobuf field <code>uint64 user_id_b = 2;</code>
      */
     protected $user_id_b = 0;
+    /**
+     * Internal batch, at most 100 accounts.
+     *
+     * Generated from protobuf field <code>repeated uint64 target_user_ids = 3;</code>
+     */
+    private $target_user_ids;
 
     /**
      * Constructor.
@@ -35,6 +41,8 @@ class CheckBidirectionalBlockRequest extends \Google\Protobuf\Internal\Message
      *
      *     @type int|string $user_id_a
      *     @type int|string $user_id_b
+     *     @type array<int>|array<string>|\Google\Protobuf\Internal\RepeatedField $target_user_ids
+     *           Internal batch, at most 100 accounts.
      * }
      */
     public function __construct($data = NULL) {
@@ -82,6 +90,32 @@ class CheckBidirectionalBlockRequest extends \Google\Protobuf\Internal\Message
     {
         GPBUtil::checkUint64($var);
         $this->user_id_b = $var;
+
+        return $this;
+    }
+
+    /**
+     * Internal batch, at most 100 accounts.
+     *
+     * Generated from protobuf field <code>repeated uint64 target_user_ids = 3;</code>
+     * @return \Google\Protobuf\Internal\RepeatedField
+     */
+    public function getTargetUserIds()
+    {
+        return $this->target_user_ids;
+    }
+
+    /**
+     * Internal batch, at most 100 accounts.
+     *
+     * Generated from protobuf field <code>repeated uint64 target_user_ids = 3;</code>
+     * @param array<int>|array<string>|\Google\Protobuf\Internal\RepeatedField $var
+     * @return $this
+     */
+    public function setTargetUserIds($var)
+    {
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::UINT64);
+        $this->target_user_ids = $arr;
 
         return $this;
     }

@@ -98,10 +98,13 @@ message BatchGetInteractionStateResponse {
 message CheckBidirectionalBlockRequest {
   uint64 user_id_a = 1;
   uint64 user_id_b = 2;
+  repeated uint64 target_user_ids = 3; // Internal batch, at most 100 accounts.
 }
 
 message CheckBidirectionalBlockResponse {
   bool blocked = 1;
+  repeated uint64 blocked_user_ids = 2;
+  bool batch_complete = 3; // Old servers must not silently authorize a batch.
 }
 
 service SocialService {

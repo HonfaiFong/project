@@ -17,6 +17,16 @@ class CheckBidirectionalBlockResponse extends \Google\Protobuf\Internal\Message
      * Generated from protobuf field <code>bool blocked = 1;</code>
      */
     protected $blocked = false;
+    /**
+     * Generated from protobuf field <code>repeated uint64 blocked_user_ids = 2;</code>
+     */
+    private $blocked_user_ids;
+    /**
+     * Old servers must not silently authorize a batch.
+     *
+     * Generated from protobuf field <code>bool batch_complete = 3;</code>
+     */
+    protected $batch_complete = false;
 
     /**
      * Constructor.
@@ -25,6 +35,9 @@ class CheckBidirectionalBlockResponse extends \Google\Protobuf\Internal\Message
      *     Optional. Data for populating the Message object.
      *
      *     @type bool $blocked
+     *     @type array<int>|array<string>|\Google\Protobuf\Internal\RepeatedField $blocked_user_ids
+     *     @type bool $batch_complete
+     *           Old servers must not silently authorize a batch.
      * }
      */
     public function __construct($data = NULL) {
@@ -50,6 +63,54 @@ class CheckBidirectionalBlockResponse extends \Google\Protobuf\Internal\Message
     {
         GPBUtil::checkBool($var);
         $this->blocked = $var;
+
+        return $this;
+    }
+
+    /**
+     * Generated from protobuf field <code>repeated uint64 blocked_user_ids = 2;</code>
+     * @return \Google\Protobuf\Internal\RepeatedField
+     */
+    public function getBlockedUserIds()
+    {
+        return $this->blocked_user_ids;
+    }
+
+    /**
+     * Generated from protobuf field <code>repeated uint64 blocked_user_ids = 2;</code>
+     * @param array<int>|array<string>|\Google\Protobuf\Internal\RepeatedField $var
+     * @return $this
+     */
+    public function setBlockedUserIds($var)
+    {
+        $arr = GPBUtil::checkRepeatedField($var, \Google\Protobuf\Internal\GPBType::UINT64);
+        $this->blocked_user_ids = $arr;
+
+        return $this;
+    }
+
+    /**
+     * Old servers must not silently authorize a batch.
+     *
+     * Generated from protobuf field <code>bool batch_complete = 3;</code>
+     * @return bool
+     */
+    public function getBatchComplete()
+    {
+        return $this->batch_complete;
+    }
+
+    /**
+     * Old servers must not silently authorize a batch.
+     *
+     * Generated from protobuf field <code>bool batch_complete = 3;</code>
+     * @param bool $var
+     * @return $this
+     */
+    public function setBatchComplete($var)
+    {
+        GPBUtil::checkBool($var);
+        $this->batch_complete = $var;
 
         return $this;
     }

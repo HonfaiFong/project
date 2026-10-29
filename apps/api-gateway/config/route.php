@@ -61,6 +61,14 @@ Route::delete('/api/v1/posts/{postId:[0-9]+}', [ContentController::class, 'delet
 Route::delete('/api/v1/comments/{commentId:[0-9]+}', [ContentController::class, 'deleteComment'])
     ->middleware([AuthMiddleware::class]);
 
+// 板块与列表入口：两个板块按帖子作者身份划分，真身主页只含公开 MAIN，本人管理仅限认证账号。
+Route::get('/api/v1/feed', [ContentController::class, 'feed'])
+    ->middleware([AuthMiddleware::class]);
+Route::get('/api/v1/me/posts', [ContentController::class, 'myPosts'])
+    ->middleware([AuthMiddleware::class]);
+Route::get('/api/v1/personas/{personaId:[0-9]+}/posts', [ContentController::class, 'personaPosts'])
+    ->middleware([AuthMiddleware::class]);
+
 Route::post('/api/v1/posts/{postId:[0-9]+}/like', [SocialController::class, 'likePost'])->middleware([AuthMiddleware::class]);
 Route::delete('/api/v1/posts/{postId:[0-9]+}/like', [SocialController::class, 'unlikePost'])->middleware([AuthMiddleware::class]);
 Route::post('/api/v1/comments/{commentId:[0-9]+}/like', [SocialController::class, 'likeComment'])->middleware([AuthMiddleware::class]);

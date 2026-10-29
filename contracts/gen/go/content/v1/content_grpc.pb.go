@@ -22,6 +22,7 @@ const (
 	ContentService_CreatePost_FullMethodName             = "/content.v1.ContentService/CreatePost"
 	ContentService_GetPost_FullMethodName                = "/content.v1.ContentService/GetPost"
 	ContentService_BatchGetPosts_FullMethodName          = "/content.v1.ContentService/BatchGetPosts"
+	ContentService_ListPosts_FullMethodName              = "/content.v1.ContentService/ListPosts"
 	ContentService_DeletePost_FullMethodName             = "/content.v1.ContentService/DeletePost"
 	ContentService_CreateComment_FullMethodName          = "/content.v1.ContentService/CreateComment"
 	ContentService_ListComments_FullMethodName           = "/content.v1.ContentService/ListComments"
@@ -38,6 +39,7 @@ type ContentServiceClient interface {
 	CreatePost(ctx context.Context, in *CreatePostRequest, opts ...grpc.CallOption) (*CreatePostResponse, error)
 	GetPost(ctx context.Context, in *GetPostRequest, opts ...grpc.CallOption) (*GetPostResponse, error)
 	BatchGetPosts(ctx context.Context, in *BatchGetPostsRequest, opts ...grpc.CallOption) (*BatchGetPostsResponse, error)
+	ListPosts(ctx context.Context, in *ListPostsRequest, opts ...grpc.CallOption) (*ListPostsResponse, error)
 	DeletePost(ctx context.Context, in *DeletePostRequest, opts ...grpc.CallOption) (*DeletePostResponse, error)
 	CreateComment(ctx context.Context, in *CreateCommentRequest, opts ...grpc.CallOption) (*CreateCommentResponse, error)
 	ListComments(ctx context.Context, in *ListCommentsRequest, opts ...grpc.CallOption) (*ListCommentsResponse, error)
@@ -79,6 +81,16 @@ func (c *contentServiceClient) BatchGetPosts(ctx context.Context, in *BatchGetPo
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BatchGetPostsResponse)
 	err := c.cc.Invoke(ctx, ContentService_BatchGetPosts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *contentServiceClient) ListPosts(ctx context.Context, in *ListPostsRequest, opts ...grpc.CallOption) (*ListPostsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPostsResponse)
+	err := c.cc.Invoke(ctx, ContentService_ListPosts_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +174,7 @@ type ContentServiceServer interface {
 	CreatePost(context.Context, *CreatePostRequest) (*CreatePostResponse, error)
 	GetPost(context.Context, *GetPostRequest) (*GetPostResponse, error)
 	BatchGetPosts(context.Context, *BatchGetPostsRequest) (*BatchGetPostsResponse, error)
+	ListPosts(context.Context, *ListPostsRequest) (*ListPostsResponse, error)
 	DeletePost(context.Context, *DeletePostRequest) (*DeletePostResponse, error)
 	CreateComment(context.Context, *CreateCommentRequest) (*CreateCommentResponse, error)
 	ListComments(context.Context, *ListCommentsRequest) (*ListCommentsResponse, error)
@@ -187,6 +200,9 @@ func (UnimplementedContentServiceServer) GetPost(context.Context, *GetPostReques
 }
 func (UnimplementedContentServiceServer) BatchGetPosts(context.Context, *BatchGetPostsRequest) (*BatchGetPostsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BatchGetPosts not implemented")
+}
+func (UnimplementedContentServiceServer) ListPosts(context.Context, *ListPostsRequest) (*ListPostsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPosts not implemented")
 }
 func (UnimplementedContentServiceServer) DeletePost(context.Context, *DeletePostRequest) (*DeletePostResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeletePost not implemented")
@@ -280,6 +296,24 @@ func _ContentService_BatchGetPosts_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ContentServiceServer).BatchGetPosts(ctx, req.(*BatchGetPostsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ContentService_ListPosts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPostsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContentServiceServer).ListPosts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContentService_ListPosts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContentServiceServer).ListPosts(ctx, req.(*ListPostsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -428,6 +462,10 @@ var ContentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BatchGetPosts",
 			Handler:    _ContentService_BatchGetPosts_Handler,
+		},
+		{
+			MethodName: "ListPosts",
+			Handler:    _ContentService_ListPosts_Handler,
 		},
 		{
 			MethodName: "DeletePost",

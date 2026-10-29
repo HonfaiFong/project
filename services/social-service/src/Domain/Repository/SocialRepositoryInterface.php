@@ -39,6 +39,9 @@ interface SocialRepositoryInterface
 
     public function deleteBlock(string $blockerUserId, string $blockedUserId): void;
 
+    /** @param list<string> $targets @return list<string> */
+    public function blockedUserIds(string $actor, array $targets): array;
+
     /** True when either account has blocked the other. */
     public function hasBidirectionalBlock(string $userIdA, string $userIdB): bool;
 }

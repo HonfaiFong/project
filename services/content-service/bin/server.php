@@ -79,7 +79,7 @@ $authorizer = new InternalRpcAuthorizer(
     ],
     allowedMethodsByCaller: [
         'api-gateway' => [
-            'CreatePost', 'GetPost', 'BatchGetPosts', 'DeletePost', 'CreateComment',
+            'CreatePost', 'GetPost', 'BatchGetPosts', 'ListPosts', 'DeletePost', 'CreateComment',
             'ListComments', 'DeleteComment', 'CanAccessResource',
         ],
         'chat-service' => ['ResolveAnonymousTarget', 'CanAccessResource'],

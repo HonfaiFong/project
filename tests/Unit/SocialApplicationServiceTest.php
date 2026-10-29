@@ -222,6 +222,11 @@ final class FakeResourceAccess implements ResourceAccessInterface
 
 final class FakeSocialRepository implements SocialRepositoryInterface
 {
+    public function blockedUserIds(string $actor, array $targets): array
+    {
+        return array_values(array_filter($targets, fn (string $id): bool => $this->hasBidirectionalBlock($actor, $id)));
+    }
+
     /** @var array<string, bool> */
     public array $likes = [];
     /** @var array<string, string> */

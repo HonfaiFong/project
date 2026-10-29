@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Apps\ApiGateway\Controller;
 
 use Apps\ApiGateway\Grpc\ContentServiceClient;
+use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\GatewayRequest;
 use Apps\ApiGateway\Response\ApiResponse;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Common\V1\IdentityMode;
+use Contracts\Gen\Content\V1\BoardScope;
 use Packages\Tracing\TraceContext;
 use Random\RandomException;
 use RuntimeException;
@@ -16,8 +18,10 @@ use Webman\Http\Response;
 
 final readonly class ContentController
 {
-    public function __construct(private ContentServiceClient $contentClient)
-    {
+    public function __construct(
+        private ContentServiceClient $contentClient,
+        private UserServiceClient $userClient,
+    ) {
     }
 
     public function createPost(GatewayRequest $request): Response
@@ -67,6 +71,72 @@ final readonly class ContentController
     {
         $this->requireActor($request);
         return ApiResponse::success($this->contentClient->deleteComment($commentId));
+    }
+
+    /**
+     * The two public boards. The board follows the post author's identity
+     * mode; comments never move a post between boards.
+     */
+    public function feed(GatewayRequest $request): Response
+    {
+        $this->requireActor($request);
+        $scope = match (strtolower(trim((string)$request->get('channel', '')))) {
+            'main' => BoardScope::BOARD_SCOPE_MAIN,
+            'alias' => BoardScope::BOARD_SCOPE_ALIAS,
+            default => throw new RuntimeException('channel is invalid', ErrorCode::INVALID_ARGUMENT->value),
+        };
+
+        return ApiResponse::success($this->contentClient->listPosts(
+            $scope,
+            '',
+            IdentityMode::IDENTITY_MODE_UNSPECIFIED,
+            $this->pageSize($request),
+            $this->cursor($request),
+        ));
+    }
+
+    /** Public MAIN posts of one persona; alias content never appears here. */
+    public function personaPosts(GatewayRequest $request, string $personaId): Response
+    {
+        $this->requireActor($request);
+        $persona = $this->userClient->getPersona($personaId)['persona'] ?? [];
+        if (
+            empty($persona)
+            || (int)($persona['type'] ?? 0) !== 1
+            || (bool)($persona['is_internal_alias'] ?? false)
+            || (int)($persona['status'] ?? 0) !== 1
+        ) {
+            throw new RuntimeException(ErrorCode::PERSONA_NOT_FOUND->message(), ErrorCode::PERSONA_NOT_FOUND->value);
+        }
+
+        return ApiResponse::success($this->contentClient->listPosts(
+            BoardScope::BOARD_SCOPE_PERSONA_HOME,
+            $personaId,
+            IdentityMode::IDENTITY_MODE_UNSPECIFIED,
+            $this->pageSize($request),
+            $this->cursor($request),
+        ));
+    }
+
+    /** Own management view: both identities and every non-deleted state. */
+    public function myPosts(GatewayRequest $request): Response
+    {
+        $this->requireActor($request);
+        $filter = strtolower(trim((string)($request->get('identity_mode', $request->get('identity_filter', '')))));
+        $identityFilter = match ($filter) {
+            '', 'all' => IdentityMode::IDENTITY_MODE_UNSPECIFIED,
+            'main' => IdentityMode::IDENTITY_MODE_MAIN,
+            'alias' => IdentityMode::IDENTITY_MODE_ALIAS,
+            default => throw new RuntimeException('identity_mode is invalid', ErrorCode::INVALID_ARGUMENT->value),
+        };
+
+        return ApiResponse::success($this->contentClient->listPosts(
+            BoardScope::BOARD_SCOPE_OWN,
+            '',
+            $identityFilter,
+            $this->pageSize($request),
+            $this->cursor($request),
+        ));
     }
 
     /**
@@ -136,5 +206,15 @@ final readonly class ContentController
         if (blank($request->authContext['user_id'])) {
             throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
+    }
+
+    private function pageSize(GatewayRequest $request): int
+    {
+        return max(1, min(100, (int)$request->get('page_size', 20)));
+    }
+
+    private function cursor(GatewayRequest $request): string
+    {
+        return trim((string)$request->get('cursor', ''));
     }
 }

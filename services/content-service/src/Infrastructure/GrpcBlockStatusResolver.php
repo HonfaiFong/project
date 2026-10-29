@@ -10,7 +10,7 @@ use Google\Protobuf\Internal\Message;
 use Packages\GrpcCommon\UnaryGrpcClient;
 use Services\ContentService\Domain\Social\BlockStatusResolver;
 
-final class GrpcBlockStatusResolver implements BlockStatusResolver
+final class GrpcBlockStatusResolver implements \Services\ContentService\Domain\Social\BatchBlockStatusResolver
 {
     private ?UnaryGrpcClient $client = null;
 
@@ -36,6 +36,24 @@ final class GrpcBlockStatusResolver implements BlockStatusResolver
         );
 
         return $response->getBlocked();
+    }
+
+    /** @param list<string> $targets @return list<string> */
+    public function blockedUserIds(string $actor, array $targets): array
+    {
+        if ($targets === []) {
+            return [];
+        }
+        if (count($targets) > 100) {
+            throw new \InvalidArgumentException('Too many block targets');
+        }
+        $response = $this->call('/social.v1.SocialService/CheckBidirectionalBlock', new CheckBidirectionalBlockRequest([
+            'user_id_a' => $actor, 'target_user_ids' => $targets,
+        ]), CheckBidirectionalBlockResponse::class);
+        if (!$response->getBatchComplete()) {
+            throw new \RuntimeException('Social server does not support batch authorization', \Contracts\Errors\ErrorCode::SERVICE_UNAVAILABLE->value);
+        }
+        return array_map(static fn ($id): string => (string)$id, iterator_to_array($response->getBlockedUserIds()));
     }
 
     /**

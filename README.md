@@ -259,10 +259,18 @@ make proto
 | --- | --- |
 | `auth_db` | devices、refresh_tokens、social_identities、Outbox |
 | `user_db` | users、personas、Outbox |
-| `content_db` | posts、post_media、comments、Outbox |
+| `content_db` | posts、post_media、comments、post_participants、Outbox |
 | `social_db` | likes、follows、blocks、Outbox |
 | `chat_db` | conversations、conversation_members、摘要与读游标、Outbox |
 | `message_db` | messages（content JSONB）、conversation_sequences、消息 Outbox |
+
+板块列表、真身主页与本人管理由 ContentService 的 `ListPosts` RPC 提供（`BoardScope`：MAIN / ALIAS / PERSONA_HOME / OWN），网关入口为 `GET /api/v1/feed?channel=main|alias`、`GET /api/v1/personas/{id}/posts`（仅公开 MAIN）和 `GET /api/v1/me/posts`（可按 `identity_mode=main|alias` 筛选），全部使用 `published_at + id`（本人管理用 `created_at + id`）的 Base64 游标分页。同一账号在单个帖子内的发言身份与匿名昵称由 `content_db.post_participants`（`(post_id, user_id)` 唯一）锁定：首次发帖或评论时确定，后续评论沿用；匿名楼主的昵称即发帖快照。匿名昵称最长 20 字。关注流与热榜仍留待 FeedService（Redis 候选池）阶段。
+
+公共列表每次最多扫描 100 条候选，用一次内部 RPC 批量检查双向拉黑，不提供精确 `pagination.total`；本人管理仍提供 total。过滤可能产生空页，客户端须以 `has_more` 判断是否继续，并使用 `next_cursor`，不能把空数组当作列表结束。非法时间和超出 PostgreSQL BIGINT 范围的游标 ID 在查询前拒绝。
+
+**内容审核机制暂不实现（2026-10-30）**：当前发帖、评论不接入自动审核、第三方审核服务或人工复核队列，也不等待审核通过后发布。发帖路径直接写入现有可展示状态；审核相关字段、协议与过滤条件保留为后续接入预留，不代表内容已经过真实审核。审核闭环不属于当前阶段验收范围，后续单独安排。身份授权、可见性及双向拉黑等现有权限检查继续生效。
+
+升级时执行新增的 `20261030000000` 回填迁移：楼主沿用原帖快照，其他参与者采用最早评论快照（包含已删除评论），已存在的参与者锁保留；历史混合模式记录不改写，只限制后续发言。缺少可信历史模式时拒绝发言。该迁移会锁住相关内容表，应在受控迁移窗口执行。先升级 SocialService 的批量拉黑协议，再升级 ContentService；旧 SocialService 不支持批量查询时返回服务不可用，保持权限检查关闭访问。
 
 运行时账号只能访问自己的 schema；`user_outbox_relay` 和 `message_outbox_relay` 仅能读取/更新各自 Outbox。`message_runtime` 只可读取/插入消息、维护序号及插入 Outbox，无消息修改或删除权限。管理员凭据只进入 PostgreSQL 容器，DDL 使用 `migration_ddl`。
 

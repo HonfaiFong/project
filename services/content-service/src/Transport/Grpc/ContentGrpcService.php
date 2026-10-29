@@ -22,6 +22,8 @@ use Contracts\Gen\Content\V1\GetPostRequest;
 use Contracts\Gen\Content\V1\GetPostResponse;
 use Contracts\Gen\Content\V1\ListCommentsRequest;
 use Contracts\Gen\Content\V1\ListCommentsResponse;
+use Contracts\Gen\Content\V1\ListPostsRequest;
+use Contracts\Gen\Content\V1\ListPostsResponse;
 use Contracts\Gen\Content\V1\ResolveAnonymousTargetRequest;
 use Contracts\Gen\Content\V1\ResolveAnonymousTargetResponse;
 use Contracts\Gen\Content\V1\UpdatePostStatusRequest;
@@ -102,6 +104,21 @@ final readonly class ContentGrpcService implements ContentServiceInterface
                 $ids[] = $this->id($postId, 'post_ids');
             }
             return new BatchGetPostsResponse(['posts' => $this->content->batchGetPosts($this->optionalActor($ctx), $ids)]);
+        });
+    }
+
+    public function ListPosts(ContextInterface $ctx, ListPostsRequest $in): ListPostsResponse
+    {
+        return $this->call($ctx, 'ListPosts', function () use ($ctx, $in): ListPostsResponse {
+            $result = $this->content->listPosts(
+                $this->optionalActor($ctx),
+                $in->getScope(),
+                $this->id($in->getPersonaId(), 'persona_id', true),
+                $in->getIdentityFilter(),
+                $in->getPagination(),
+            );
+
+            return new ListPostsResponse($result);
         });
     }
 

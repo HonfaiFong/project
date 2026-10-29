@@ -40,6 +40,15 @@ interface ContentServiceInterface extends GRPC\ServiceInterface
 
     /**
     * @param GRPC\ContextInterface $ctx
+    * @param ListPostsRequest $in
+    * @return ListPostsResponse
+    *
+    * @throws GRPC\Exception\InvokeException
+    */
+    public function ListPosts(GRPC\ContextInterface $ctx, ListPostsRequest $in): ListPostsResponse;
+
+    /**
+    * @param GRPC\ContextInterface $ctx
     * @param DeletePostRequest $in
     * @return DeletePostResponse
     *

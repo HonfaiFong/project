@@ -596,6 +596,19 @@ CREATE TABLE `post_media` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 SQL);
         $pdo->exec(<<<'SQL'
+CREATE TABLE `post_participants` (
+  `id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  `post_id` BIGINT UNSIGNED NOT NULL,
+  `user_id` BIGINT UNSIGNED NOT NULL,
+  `persona_id` BIGINT UNSIGNED NOT NULL,
+  `identity_mode` SMALLINT NOT NULL,
+  `display_name` VARCHAR(64) NULL,
+  `created_at` DATETIME(3) NOT NULL,
+  `updated_at` DATETIME(3) NOT NULL,
+  UNIQUE KEY `uniq_post_participant` (`post_id`, `user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL);
+        $pdo->exec(<<<'SQL'
 CREATE TABLE `outbox_events` (
   `id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,
   `event_id` VARCHAR(36) NOT NULL,
@@ -617,7 +630,7 @@ SQL);
 
     private function dropSchema(PDO $pdo): void
     {
-        $pdo->exec('DROP TABLE IF EXISTS `posts`, `comments`, `post_media`, `outbox_events`');
+        $pdo->exec('DROP TABLE IF EXISTS `posts`, `comments`, `post_media`, `post_participants`, `outbox_events`');
     }
 
     /** @param list<string> $params */

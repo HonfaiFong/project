@@ -8,6 +8,7 @@ use Apps\ApiGateway\Controller\ContentController;
 use Apps\ApiGateway\Controller\SocialController;
 use Apps\ApiGateway\Grpc\ContentServiceClient;
 use Apps\ApiGateway\Grpc\SocialServiceClient;
+use Apps\ApiGateway\Grpc\UserServiceClient;
 use Apps\ApiGateway\Http\GatewayRequest;
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Content\V1\CreatePostRequest;
@@ -62,8 +63,10 @@ final class GatewayContentBusinessTest extends TestCase
             )
             ->willReturn(new CreatePostResponse(['post' => new PublicPost(['post_id' => '900'])]));
 
-        $response = (new ContentController(new ContentServiceClient(target: '127.0.0.1:1', client: $grpc)))
-            ->createPost($this->request([
+        $response = (new ContentController(
+            new ContentServiceClient(target: '127.0.0.1:1', client: $grpc),
+            $this->userClientNeverCalled(),
+        ))->createPost($this->request([
                 'identity_mode' => 'alias',
                 'persona_id' => '0',
                 'content' => 'anonymous post',
@@ -92,8 +95,10 @@ final class GatewayContentBusinessTest extends TestCase
 
         $request = $this->request(['identity_mode' => 'main', 'content' => 'main post']);
         $request->authContext['requested_persona_id'] = '110';
-        $response = (new ContentController(new ContentServiceClient(target: '127.0.0.1:1', client: $grpc)))
-            ->createPost($request);
+        $response = (new ContentController(
+            new ContentServiceClient(target: '127.0.0.1:1', client: $grpc),
+            $this->userClientNeverCalled(),
+        ))->createPost($request);
 
         $this->assertSame(201, $response->getStatusCode());
     }
@@ -139,5 +144,13 @@ final class GatewayContentBusinessTest extends TestCase
         $request->authContext['user_id'] = '42';
 
         return $request;
+    }
+
+    private function userClientNeverCalled(): UserServiceClient
+    {
+        $user = $this->createMock(UnaryGrpcClient::class);
+        $user->expects($this->never())->method('call');
+
+        return new UserServiceClient(target: '127.0.0.1:1', client: $user);
     }
 }

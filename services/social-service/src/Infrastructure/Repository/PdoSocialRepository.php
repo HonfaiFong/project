@@ -189,6 +189,18 @@ final readonly class PdoSocialRepository implements SocialRepositoryInterface
         return $statement->fetchColumn() !== false;
     }
 
+    /** @param list<string> $targets @return list<string> */
+    public function blockedUserIds(string $actor, array $targets): array
+    {
+        if ($targets === []) {
+            return [];
+        }
+        $marks = implode(',', array_fill(0, count($targets), '?'));
+        $statement = $this->pdo->prepare('SELECT blocked_user_id AS target FROM blocks WHERE blocker_user_id = ? AND blocked_user_id IN (' . $marks . ') UNION SELECT blocker_user_id AS target FROM blocks WHERE blocked_user_id = ? AND blocker_user_id IN (' . $marks . ')');
+        $statement->execute([$actor, ...$targets, $actor, ...$targets]);
+        return array_map(static fn ($id): string => (string)$id, $statement->fetchAll(PDO::FETCH_COLUMN));
+    }
+
     private function now(): string
     {
         return gmdate('Y-m-d H:i:s.v');

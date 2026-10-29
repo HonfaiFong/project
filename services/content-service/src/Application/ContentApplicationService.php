@@ -9,6 +9,7 @@ use Contracts\Gen\Common\V1\IdentityMode as ProtoIdentityMode;
 use Contracts\Gen\Common\V1\PaginationRequest;
 use Contracts\Gen\Common\V1\PaginationResponse;
 use Contracts\Gen\Common\V1\PublicAuthor;
+use Contracts\Gen\Content\V1\BoardScope;
 use Contracts\Gen\Content\V1\MediaItem;
 use Contracts\Gen\Content\V1\PublicComment;
 use Contracts\Gen\Content\V1\PublicPost;
@@ -27,11 +28,14 @@ use PDO;
 use PDOException;
 use RuntimeException;
 use Services\ContentService\Domain\Social\BlockStatusResolver;
+use Services\ContentService\Domain\Social\BatchBlockStatusResolver;
 use Throwable;
 
 /** PDO-backed content business boundary. */
 final class ContentApplicationService
 {
+    private const ALIAS_DISPLAY_NAME_MAX = 20;
+
     public function __construct(
         private readonly PDO $pdo,
         private readonly Snowflake $ids,
@@ -75,18 +79,19 @@ final class ContentApplicationService
         }
 
         $postId = $this->ids->nextId();
+        $aliasName = $this->aliasDisplayName($aliasDisplayName);
         $snapshot = $identity->mode === PersonaMode::MAIN
             ? $this->snapshots->forMain($identity->personaId, $identity->displayName, $identity->avatarKey)
             : $this->snapshots->forAlias(
                 $identity->personaId,
                 'post',
                 $postId,
-                $this->aliasDisplayName($aliasDisplayName),
+                $aliasName,
             );
         $now = $this->now();
 
         try {
-            $this->transaction(function () use ($actor, $postId, $identity, $snapshot, $requestKey, $media, $now, $type, $content, $visibility, $emotion): void {
+            $this->transaction(function () use ($actor, $postId, $identity, $snapshot, $requestKey, $media, $now, $type, $content, $visibility, $emotion, $aliasName): void {
                 $statement = $this->pdo->prepare(
                     'INSERT INTO "posts" '
                     . '("id", "author_user_id", "request_id", "persona_id", "identity_mode", "author_display_name", '
@@ -117,6 +122,9 @@ final class ContentApplicationService
                     'updated_at' => $now,
                 ]);
                 $this->insertMedia($postId, $media, $now);
+                // The author is the first locked participant of the post; the
+                // row is what later comments resolve their identity against.
+                $this->settleParticipant($postId, $actor, $identity, $aliasName, $now);
                 $this->recordEvent('post', $postId, 'post.created.v1', $requestKey ?? '', [
                     'post_id' => $postId,
                     'user_id' => $actor->userId,
@@ -254,10 +262,19 @@ final class ContentApplicationService
         $this->assertRequestedPersona($requestedPersonaId, $identity);
         $content = $this->requiredText($content, 2000, 'content');
         $requestKey = $this->requestId($requestId);
+        // The per-post identity lock is resolved before the idempotency replay
+        // so a retry compares against the locked alias nickname, not the body.
+        $participant = $this->findParticipant($postId, $actor->userId);
+        if ($participant !== null) {
+            $this->assertParticipantMatches($participant, $identity);
+        }
+        $aliasName = $identity->mode === PersonaMode::ALIAS
+            ? $this->lockedAliasName($participant, $aliasDisplayName)
+            : '';
         if (filled($requestKey)) {
             $existing = $this->findByRequest('comments', $actor->userId, $requestKey);
             if (!empty($existing)) {
-                if (!$this->commentRequestMatches($identity, $existing, $postId, $this->nullableId($parentId), $this->nullableId($replyToCommentId), $content, $aliasDisplayName)) {
+                if (!$this->commentRequestMatches($identity, $existing, $postId, $this->nullableId($parentId), $this->nullableId($replyToCommentId), $content, $aliasName)) {
                     throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value);
                 }
 
@@ -274,18 +291,22 @@ final class ContentApplicationService
         }
 
         $commentId = $this->ids->nextId();
-        $snapshot = $identity->mode === PersonaMode::MAIN
-            ? $this->snapshots->forMain($identity->personaId, $identity->displayName, $identity->avatarKey)
-            : $this->snapshots->forAlias(
-                $identity->personaId,
-                'post',
-                $postId,
-                $this->aliasDisplayName($aliasDisplayName),
-            );
         $now = $this->now();
 
         try {
-            $this->transaction(function () use ($actor, $commentId, $identity, $snapshot, $requestKey, $postId, $parentId, $replyToCommentId, $content, $now): void {
+            $this->transaction(function () use ($actor, $commentId, $identity, $requestKey, $postId, $parentId, $replyToCommentId, $content, $now, $participant, $aliasName): void {
+                $finalAliasName = $aliasName;
+                if ($participant === null) {
+                    [, $finalAliasName] = $this->settleParticipant($postId, $actor, $identity, $aliasName, $now);
+                }
+                $snapshot = $identity->mode === PersonaMode::MAIN
+                    ? $this->snapshots->forMain($identity->personaId, $identity->displayName, $identity->avatarKey)
+                    : $this->snapshots->forAlias(
+                        $identity->personaId,
+                        'post',
+                        $postId,
+                        $finalAliasName,
+                    );
                 $statement = $this->pdo->prepare(
                     'INSERT INTO "comments" '
                     . '("id", "post_id", "author_user_id", "request_id", "persona_id", "identity_mode", "author_display_name", '
@@ -328,7 +349,7 @@ final class ContentApplicationService
                 if (empty($existing)) {
                     throw $e;
                 }
-                if (!$this->commentRequestMatches($identity, $existing, $postId, $parentId, $replyToCommentId, $content, $aliasDisplayName)) {
+                if (!$this->commentRequestMatches($identity, $existing, $postId, $parentId, $replyToCommentId, $content, $aliasName)) {
                     throw new RuntimeException('request_id was already used with different parameters', ErrorCode::IDEMPOTENCY_CONFLICT->value, $e);
                 }
                 return $this->getComment($actor, (string)$existing['id']);
@@ -409,6 +430,286 @@ final class ContentApplicationService
     }
 
     /**
+     * Resolves one listing scope into a public post page.
+     *
+     * Boards and the persona home only ever expose public, approved MAIN or
+     * ALIAS posts; the own view exposes everything the authenticated account
+     * still owns, hidden rows included, so the management UI can render
+     * states. Block filtering belongs here, not to the caller.
+     *
+     * @return array{posts:list<PublicPost>, pagination:PaginationResponse}
+     */
+    public function listPosts(
+        ?BusinessActor $actor,
+        int $scope,
+        string $personaId,
+        int $identityFilter,
+        ?PaginationRequest $pagination,
+    ): array {
+        $limit = min(max($pagination?->getPageSize() ?? 20, 1), 100);
+        [$cursorTime, $cursorId] = $this->decodeListCursor(trim($pagination?->getCursor() ?? ''));
+
+        $where = [];
+        $params = [];
+        $orderColumn = 'published_at';
+        $filterBlocks = false;
+        switch ($scope) {
+            case BoardScope::BOARD_SCOPE_MAIN:
+            case BoardScope::BOARD_SCOPE_ALIAS:
+                $where[] = '"identity_mode" = :identity_mode';
+                $params['identity_mode'] = $scope;
+                $where[] = $this->publicPostFilter();
+                $filterBlocks = true;
+                break;
+            case BoardScope::BOARD_SCOPE_PERSONA_HOME:
+                if (!$this->isPositiveId($personaId)) {
+                    throw new RuntimeException('persona_id is required', ErrorCode::INVALID_ARGUMENT->value);
+                }
+                $where[] = '"persona_id" = :persona_id';
+                $params['persona_id'] = $personaId;
+                $where[] = '"identity_mode" = 1';
+                $where[] = $this->publicPostFilter();
+                $filterBlocks = true;
+                break;
+            case BoardScope::BOARD_SCOPE_OWN:
+                if ($actor === null) {
+                    throw new RuntimeException('authentication is required', ErrorCode::AUTH_UNAUTHORIZED->value);
+                }
+                $where[] = '"author_user_id" = :user_id';
+                $params['user_id'] = $actor->userId;
+                $where[] = '"deleted_at" IS NULL';
+                if ($identityFilter !== ProtoIdentityMode::IDENTITY_MODE_UNSPECIFIED) {
+                    if (!in_array($identityFilter, [ProtoIdentityMode::IDENTITY_MODE_MAIN, ProtoIdentityMode::IDENTITY_MODE_ALIAS], true)) {
+                        throw new RuntimeException('identity_filter is invalid', ErrorCode::INVALID_ARGUMENT->value);
+                    }
+                    $where[] = '"identity_mode" = :identity_filter';
+                    $params['identity_filter'] = $identityFilter;
+                }
+                $orderColumn = 'created_at';
+                break;
+            default:
+                throw new RuntimeException('scope is invalid', ErrorCode::INVALID_ARGUMENT->value);
+        }
+
+        // Bound both database work and authorization work, even for an all-blocked tail.
+        $countParams = $params;
+        $scanLimit = 100;
+        $sql = 'SELECT * FROM "posts" WHERE ' . implode(' AND ', $where);
+        if ($cursorTime !== null) {
+            $sql .= ' AND ("' . $orderColumn . '" < :cursor_time OR ("' . $orderColumn . '" = :cursor_time AND "id" < :cursor_id))';
+            $params['cursor_time'] = $cursorTime;
+            $params['cursor_id'] = $cursorId;
+        }
+        $statement = $this->pdo->prepare($sql . ' ORDER BY "' . $orderColumn . '" DESC, "id" DESC LIMIT ' . ($scanLimit + 1));
+        $statement->execute($params);
+        $page = $statement->fetchAll(PDO::FETCH_ASSOC);
+        $hasMore = count($page) > $scanLimit;
+        $page = array_slice($page, 0, $scanLimit);
+        $blocked = [];
+        if ($filterBlocks && $actor !== null) {
+            $authors = array_values(array_unique(array_map(static fn (array $row): string => (string)$row['author_user_id'], $page)));
+            $authors = array_values(array_filter($authors, static fn (string $id): bool => $id !== $actor->userId));
+            if ($authors !== []) {
+                if ($this->blocks instanceof BatchBlockStatusResolver) {
+                    $blocked = array_fill_keys($this->blocks->blockedUserIds($actor->userId, $authors), true);
+                } else {
+                    foreach ($authors as $author) {
+                        if ($this->blocks->isBlockedEitherWay($actor->userId, $author)) {
+                            $blocked[$author] = true;
+                        }
+                    }
+                }
+            }
+        }
+        $rows = [];
+        $lastScanned = null;
+        foreach ($page as $index => $row) {
+            $lastScanned = $row;
+            if (!isset($blocked[(string)$row['author_user_id']])) {
+                $rows[] = $row;
+            }
+            if (count($rows) === $limit) {
+                $hasMore = $hasMore || $index < count($page) - 1;
+                break;
+            }
+        }
+        return [
+            'posts' => array_map(fn (array $row): PublicPost => $this->projectPost($row), $rows),
+            'pagination' => new PaginationResponse([
+                'next_cursor' => $hasMore && $lastScanned !== null
+                    ? $this->encodeListCursor((string)$lastScanned[$orderColumn], (string)$lastScanned['id']) : '',
+                'has_more' => $hasMore,
+                // Public totals would count blocked authors and leak invisible content.
+                'total' => $scope === BoardScope::BOARD_SCOPE_OWN ? $this->countListPosts($where, $countParams) : 0,
+            ]),
+        ];
+    }
+
+    /** Rows any other account may see on boards, the persona home or detail lookups. */
+    private function publicPostFilter(): string
+    {
+        return '"status" = 1 AND "visibility" = 1 AND "moderation_status" = 1'
+            . ' AND "deleted_at" IS NULL AND "published_at" IS NOT NULL';
+    }
+
+    /** @param list<string> $where @param array<string, mixed> $params */
+    private function countListPosts(array $where, array $params): int
+    {
+        $statement = $this->pdo->prepare('SELECT COUNT(*) FROM "posts" WHERE ' . implode(' AND ', $where));
+        $statement->execute($params);
+
+        return (int)$statement->fetchColumn();
+    }
+
+    private function encodeListCursor(string $time, string $id): string
+    {
+        return rtrim(strtr(base64_encode($time . '|' . $id), '+/', '-_'), '=');
+    }
+
+    /** @return array{?string, ?string} */
+    private function decodeListCursor(string $cursor): array
+    {
+        if ($cursor === '') {
+            return [null, null];
+        }
+        if (strlen($cursor) > 128) {
+            throw new RuntimeException('cursor is invalid', ErrorCode::INVALID_ARGUMENT->value);
+        }
+        $padded = strtr($cursor, '-_', '+/') . str_repeat('=', (4 - strlen($cursor) % 4) % 4);
+        $decoded = base64_decode($padded, true);
+        if ($decoded === false) {
+            throw new RuntimeException('cursor is invalid', ErrorCode::INVALID_ARGUMENT->value);
+        }
+        $parts = explode('|', $decoded);
+        if (count($parts) !== 2 || !$this->validCursorTime($parts[0]) || !$this->isPositiveId($parts[1]) || strlen($parts[1]) > 19 || (strlen($parts[1]) === 19 && strcmp($parts[1], '9223372036854775807') > 0)) {
+            throw new RuntimeException('cursor is invalid', ErrorCode::INVALID_ARGUMENT->value);
+        }
+
+        return [$parts[0], $parts[1]];
+    }
+
+    private function validCursorTime(string $time): bool
+    {
+        if (preg_match('/\A[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}(?::?[0-9]{2})?)?\z/', $time) !== 1) {
+            return false;
+        }
+        if (substr($time, 0, 4) === '0000') {
+            return false;
+        }
+        if (preg_match('/[+-]([0-9]{2})(?::?([0-9]{2}))?\z/', $time, $offset) === 1
+            && ((int)$offset[1] > 14 || (int)($offset[2] ?? 0) > 59 || ((int)$offset[1] === 14 && (int)($offset[2] ?? 0) !== 0))) {
+            return false;
+        }
+        try {
+            new \DateTimeImmutable($time);
+            $errors = \DateTimeImmutable::getLastErrors();
+            return $errors === false || ($errors['warning_count'] === 0 && $errors['error_count'] === 0);
+        } catch (\Exception) {
+            return false;
+        }
+    }
+
+    /** @return array<string, mixed>|null */
+    private function findParticipant(string $postId, string $userId): ?array
+    {
+        if (!$this->isPositiveId($postId) || blank($userId)) {
+            return null;
+        }
+        $statement = $this->pdo->prepare(
+            'SELECT * FROM "post_participants" WHERE "post_id" = :post_id AND "user_id" = :user_id LIMIT 1',
+        );
+        $statement->execute(['post_id' => $postId, 'user_id' => $userId]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+        if (is_array($row)) {
+            return $row;
+        }
+        // Also protect historical records during upgrades; never infer MAIN from current profiles.
+        $statement = $this->pdo->prepare(
+            'SELECT persona_id, identity_mode, display_name FROM ('
+            . 'SELECT id, persona_id, identity_mode, author_display_name AS display_name, created_at, 0 AS priority FROM posts WHERE id = ? AND author_user_id = ? '
+            . 'UNION ALL SELECT id, persona_id, identity_mode, author_display_name AS display_name, created_at, 1 AS priority FROM comments WHERE post_id = ? AND author_user_id = ?'
+            . ') AS history ORDER BY priority, created_at, id LIMIT 1',
+        );
+        $statement->execute([$postId, $userId, $postId, $userId]);
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+        if (is_array($row) && !in_array((int)$row['identity_mode'], [1, 2], true)) {
+            throw new RuntimeException('historical identity is unavailable', ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+        return is_array($row) ? $row : null;
+    }
+
+    /**
+     * Locks the account's speaking identity for one post and returns the
+     * effective alias nickname. Insert-if-absent plus re-read keeps a
+     * concurrent first speaker race-free: the loser of the unique key adopts
+     * the winner's identity and nickname instead of overriding it.
+     *
+     * @return array{0: array<string, mixed>, 1: string}
+     */
+    private function settleParticipant(
+        string $postId,
+        BusinessActor $actor,
+        UserIdentity $identity,
+        string $requestedAliasName,
+        string $now,
+    ): array {
+        $driver = (string)$this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $statement = $this->pdo->prepare(
+            ($driver === 'mysql' || $driver === 'mariadb' ? 'INSERT IGNORE INTO' : 'INSERT INTO')
+            . ' "post_participants" ("id", "post_id", "user_id", "persona_id", "identity_mode", '
+            . '"display_name", "created_at", "updated_at") VALUES (:id, :post_id, :user_id, :persona_id, '
+            . ':identity_mode, :display_name, :created_at, :updated_at)'
+            . ($driver === 'mysql' || $driver === 'mariadb' ? '' : ' ON CONFLICT DO NOTHING'),
+        );
+        $statement->execute([
+            'id' => $this->ids->nextId(),
+            'post_id' => $postId,
+            'user_id' => $actor->userId,
+            'persona_id' => $identity->personaId,
+            'identity_mode' => $identity->mode->value,
+            'display_name' => $identity->mode === PersonaMode::ALIAS ? $requestedAliasName : null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $participant = $this->findParticipant($postId, $actor->userId);
+        if ($participant === null) {
+            throw new RuntimeException('post participant is unavailable', ErrorCode::INTERNAL_SERVER_ERROR->value);
+        }
+        $this->assertParticipantMatches($participant, $identity);
+        $name = $identity->mode === PersonaMode::ALIAS
+            ? $this->lockedAliasName($participant, $requestedAliasName)
+            : '';
+
+        return [$participant, $name];
+    }
+
+    /**
+     * @param array<string, mixed>|null $participant
+     */
+    private function assertParticipantMatches(?array $participant, UserIdentity $identity): void
+    {
+        if ($participant !== null && (int)$participant['identity_mode'] !== $identity->mode->value) {
+            throw new RuntimeException('identity is locked for this post', ErrorCode::PERSONA_FORBIDDEN->value);
+        }
+    }
+
+    /**
+     * The locked nickname wins once the participant row exists; an empty
+     * stored value falls back to the request (or the system default).
+     *
+     * @param array<string, mixed>|null $participant
+     */
+    private function lockedAliasName(?array $participant, string $requested): string
+    {
+        $stored = trim((string)($participant['display_name'] ?? ''));
+        if (filled($stored)) {
+            return $stored;
+        }
+
+        return $this->aliasDisplayName($requested);
+    }
+
+    /**
      * Loads every referenced parent/reply row for a page with one query instead of one lookup per comment,
      * preserving the per-row visibility chain semantics.
      *
@@ -456,7 +757,6 @@ final class ContentApplicationService
             return $cache[$targetUserId];
         }
         $cache[$targetUserId] = $this->isBlocked($actorUserId, $targetUserId);
-
         return $cache[$targetUserId];
     }
 
@@ -579,11 +879,11 @@ final class ContentApplicationService
         ?string $parentId,
         ?string $replyToCommentId,
         string $content,
-        string $aliasDisplayName,
+        string $effectiveAliasName,
     ): bool {
         return (string)$existing['persona_id'] === $identity->personaId
             && (int)$existing['identity_mode'] === $identity->mode->value
-            && ($identity->mode !== PersonaMode::ALIAS || (string)$existing['author_display_name'] === $this->aliasDisplayName($aliasDisplayName))
+            && ($identity->mode !== PersonaMode::ALIAS || (string)$existing['author_display_name'] === $effectiveAliasName)
             && (string)$existing['post_id'] === $postId
             && (string)($existing['parent_id'] ?? '') === (string)($parentId ?? '')
             && (string)($existing['reply_to_comment_id'] ?? '') === (string)($replyToCommentId ?? '')
@@ -951,8 +1251,14 @@ final class ContentApplicationService
     private function aliasDisplayName(string $requested): string
     {
         $requested = trim($requested);
+        if (blank($requested)) {
+            return '匿名用户';
+        }
+        if ($this->length($requested) > self::ALIAS_DISPLAY_NAME_MAX) {
+            throw new RuntimeException('alias display name is invalid', ErrorCode::INVALID_ARGUMENT->value);
+        }
 
-        return blank($requested) ? '匿名用户' : $requested;
+        return $requested;
     }
 
     private function assertRequestedPersona(string $requestedPersonaId, UserIdentity $identity): void

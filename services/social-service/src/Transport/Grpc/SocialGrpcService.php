@@ -162,6 +162,10 @@ final readonly class SocialGrpcService implements SocialServiceInterface
         CheckBidirectionalBlockRequest $in,
     ): CheckBidirectionalBlockResponse {
         return $this->call($ctx, 'CheckBidirectionalBlock', function () use ($in): CheckBidirectionalBlockResponse {
+            if (count($in->getTargetUserIds()) > 0) {
+                $targets = array_map(static fn ($id): string => (string)$id, iterator_to_array($in->getTargetUserIds()));
+                return new CheckBidirectionalBlockResponse(['blocked_user_ids' => $this->social->blockedUserIds($this->requireId($in->getUserIdA(), 'user_id_a'), $targets), 'batch_complete' => true]);
+            }
             return (new CheckBidirectionalBlockResponse())->setBlocked($this->social->checkBidirectionalBlock(
                 $this->requireId($in->getUserIdA(), 'user_id_a'),
                 $this->requireId($in->getUserIdB(), 'user_id_b'),

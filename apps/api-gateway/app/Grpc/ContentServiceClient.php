@@ -21,6 +21,8 @@ use Contracts\Gen\Content\V1\GetPostRequest;
 use Contracts\Gen\Content\V1\GetPostResponse;
 use Contracts\Gen\Content\V1\ListCommentsRequest;
 use Contracts\Gen\Content\V1\ListCommentsResponse;
+use Contracts\Gen\Content\V1\ListPostsRequest;
+use Contracts\Gen\Content\V1\ListPostsResponse;
 use Contracts\Gen\Content\V1\MediaItem;
 use Contracts\Gen\Content\V1\PublicComment;
 use Contracts\Gen\Content\V1\PublicPost;
@@ -136,6 +138,29 @@ final class ContentServiceClient
                 'next_cursor' => $pagination?->getNextCursor() ?? '',
                 'has_more' => $pagination?->getHasMore() ?? false,
                 'total' => (string)($pagination?->getTotal() ?? 0),
+            ],
+        ];
+    }
+
+    public function listPosts(int $scope, string $personaId, int $identityFilter, int $pageSize, string $cursor): array
+    {
+        $response = $this->call('/content.v1.ContentService/ListPosts', new ListPostsRequest([
+            'pagination' => new PaginationRequest([
+                'page_size' => $pageSize,
+                'cursor' => $cursor,
+            ]),
+            'scope' => $scope,
+            'persona_id' => $personaId !== '' ? $personaId : '0',
+            'identity_filter' => $identityFilter,
+        ]), ListPostsResponse::class);
+
+        $pagination = $response->getPagination();
+        return [
+            'posts' => array_map(fn (PublicPost $post): array => $this->post($post), iterator_to_array($response->getPosts())),
+            'pagination' => [
+                'next_cursor' => $pagination?->getNextCursor() ?? '',
+                'has_more' => $pagination?->getHasMore() ?? false,
+                ...($scope === 4 ? ['total' => (string)($pagination?->getTotal() ?? 0)] : []),
             ],
         ];
     }

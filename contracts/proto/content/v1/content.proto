@@ -170,6 +170,32 @@ message UpdatePostStatusRequest {
   int32 moderation_status = 3;
 }
 
+// Which listing a ListPosts call resolves. Boards split by the author
+// identity mode recorded on the post; comments never change the board.
+enum BoardScope {
+  BOARD_SCOPE_UNSPECIFIED = 0;
+  BOARD_SCOPE_MAIN = 1;
+  BOARD_SCOPE_ALIAS = 2;
+  BOARD_SCOPE_PERSONA_HOME = 3;
+  BOARD_SCOPE_OWN = 4;
+}
+
+message ListPostsRequest {
+  common.v1.PaginationRequest pagination = 1;
+  BoardScope scope = 2;
+  // Required when scope = BOARD_SCOPE_PERSONA_HOME and rejected otherwise.
+  // The listing only ever returns public MAIN posts of this persona.
+  uint64 persona_id = 3;
+  // Optional identity filter for the own-posts management view;
+  // UNSPECIFIED returns both MAIN and ALIAS posts.
+  common.v1.IdentityMode identity_filter = 4;
+}
+
+message ListPostsResponse {
+  repeated PublicPost posts = 1;
+  common.v1.PaginationResponse pagination = 2;
+}
+
 message UpdatePostStatusResponse {
   bool success = 1;
 }
@@ -209,6 +235,7 @@ service ContentService {
   rpc CreatePost(CreatePostRequest) returns (CreatePostResponse);
   rpc GetPost(GetPostRequest) returns (GetPostResponse);
   rpc BatchGetPosts(BatchGetPostsRequest) returns (BatchGetPostsResponse);
+  rpc ListPosts(ListPostsRequest) returns (ListPostsResponse);
   rpc DeletePost(DeletePostRequest) returns (DeletePostResponse);
   rpc CreateComment(CreateCommentRequest) returns (CreateCommentResponse);
   rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse);
