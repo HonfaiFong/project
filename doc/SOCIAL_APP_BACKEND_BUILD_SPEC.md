@@ -1,265 +1,65 @@
 # 匿名社交 App 后端项目构建总规范
 
-> **身份业务规则更新（2026-10-11）**：真身与匿名分身以 [真身与匿名分身业务规则](USER_PERSONA_BUSINESS_RULES.md) 为准。下文涉及多个固定公开分身、分身关注及其他冲突的身份设计仅作历史背景；当前 ALIAS 是内部匿名能力，不能作为可追踪的公开小号。
+版本：2026-10-30 修订版。项目阶段：未上线、持续开发。
 
-> **架构变更（2026-09-29）**：本文是早期构建草案，其中 Kafka、Kafka Topic/Partition/Consumer 和 MinIO 的设计已被当前仓库的 `README.md`、`compose.yaml` 与 `infra/docker/rabbitmq/definitions.json` 取代。现行部署使用 RabbitMQ Streams 承载可重放领域事件、Quorum Queues 承载任务，RustFS 承载 S3 兼容对象存储。下文相关旧段落仅保留作为历史背景，不应作为实施指令。
+本文是项目的架构、业务边界与交付要求，不是功能完成证明。允许在上线前调整模型和协议，但必须同步实现、迁移、客户端契约与验证记录；不能因为尚未上线而丢弃已有开发数据。历史版本从 Git 查询，不在正文保留已经失效的实施指令。
 
-> 本文件用于直接交给 Coding Agent（Codex / Claude Code / Gemini CLI / Cursor Agent 等）构建项目。
->
-> 项目目标：构建一套类似匿名树洞 / 漂流罐头 / 弱关系社交产品的后端基础平台，支持从早期 MVP 平滑扩展到百万级在线连接。
->
-> **除非遇到真正阻塞实现的问题，否则不要反复向用户确认细节。优先按本文默认值落地，并把可变项放入配置。**
+## 0. 使用方式与文档优先级
 
----
+1. 用户明确提出的最新需求优先；本规范规定跨服务不变量、当前范围与验收要求。
+2. [真身与匿名分身业务规则](USER_PERSONA_BUSINESS_RULES.md) 是身份领域的详细说明。本文明确更新的规则优先于旧文中的待定项；发生其他冲突时先修订文档，不凭代码现状反向改变产品规则。
+3. `contracts/proto/`、`contracts/events/`、`contracts/errors/` 描述当前契约；`database/postgresql/migrations/` 描述实际 schema；`compose.yaml`、`.env.example`、`Makefile` 描述当前装配。它们与规范不一致时记为待整改，不等于规范自动失效。
+4. README、部署手册说明操作流程，历史验收记录只证明指定版本和环境的结果。旧 MySQL、MongoDB、Kafka、MinIO 设计不作为当前实施要求。
+5. 本次是规范调整，不代表同步完成代码改造。第 23 节列出已知差异；新增要求在对应功能验收前落实，不得宣称已通过。
 
-# 0. AI 执行规则
+执行任务前检查工作区和相关实现，保护已有未提交改动。按用户本次任务范围推进；阅读本规范不构成自动实现全部阶段的授权。不要从头初始化已有项目，不要用空 Controller、伪代码、跳过测试或修改生成文件冒充交付。
 
-你现在是本项目的主程和架构执行者。
+## 1. 产品范围与部署规模
 
-必须遵守：
+产品面向真身与匿名互动、树洞及弱关系私聊。先交付可验证的核心闭环，再按负载扩展；百万在线连接是长期方向，不是当前能力或第一阶段验收数字。
 
-1. 先扫描现有仓库；如果仓库为空，则从零初始化。
-2. 先建立可运行的 Monorepo、公共协议、基础设施和 CI，再逐步实现业务。
-3. 不允许只生成伪代码或空 Controller。
-4. 每完成一个阶段：
-   - 运行测试；
-   - 运行静态检查；
-   - 启动本地依赖；
-   - 验证关键接口；
-   - 修复失败后再进入下一阶段。
-5. 禁止为了“微服务”而过度拆分。
-6. 禁止一个服务直接读写其他服务的数据库。
-7. 禁止 API Gateway 直接访问业务数据库。
-8. 所有跨服务同步调用使用 gRPC。
-9. 所有领域事件、异步业务使用 Kafka。
-10. Redis 不是最终事实数据源。
-11. 所有关键写请求必须支持幂等。
-12. 所有关键业务写入必须考虑 Transactional Outbox。
-13. 所有 Kafka Consumer 必须支持重复消费。
-14. 所有 RPC 必须有 deadline。
-15. 禁止无限自动重试。
-16. 禁止在 PHP 常驻进程里保存请求级全局可变状态。
-17. 禁止把业务 Model、Repository 在多个服务间共享。
-18. 优先保证代码清晰、可测试、可观测，再做局部性能优化。
-19. 所有服务必须提供 health/readiness。
-20. 所有配置使用环境变量，不允许把密钥写进仓库。
+### 1.1 当前核心范围
 
----
+- 微信／QQ 登录注册、设备会话、刷新与注销。
+- 每账号一个 MAIN 和一个内部 canonical ALIAS；真身资料、匿名快照与权限隔离。
+- 帖子、一级评论与回复、真身／匿名板块、真身主页、本人内容管理。
+- MAIN 点赞与关注、账号级双向拉黑。
+- 双人私聊、固定成员身份、幂等发送、历史查询、断线同步、已读点和实时提示。
+- 支撑上述能力的数据库迁移、Outbox、故障恢复、安全与可观测性。
 
-# 1. 总体目标
+这些是交付范围，不表示每项已实现。媒体元数据不等于上传闭环，HTTP 消息发送不等于 WebSocket 上行协议已完成。
 
-系统需要支持：
+### 1.2 按需扩展与暂不实施
 
-- 主账号 User
-- 对外身份 Persona / 分身
-- 匿名树洞
-- 漂流罐头 / 随机发现
-- 图文帖子
-- 评论
-- 点赞
-- 收藏
-- 关注
-- 拉黑
-- 举报
-- 私聊
-- 在线状态
-- 消息送达 / 已读
-- Feed
-- 推荐
-- 内容审核
-- 风控
-- Push
-- 搜索
-- 媒体上传
-- 运营配置
-- 埋点分析
+规则推荐 Feed、随机罐头、收藏、搜索、离线 Push、媒体上传、举报入口与运营后台按独立任务推进，未实现接口不得返回假成功。账号注册登录不扩展为生产手机号登录。
 
-目标规模：
+**内容审核机制暂不实现。** 当前发帖、评论直接进入现有可展示状态，不接入自动审核、第三方审核、人工复核或先审后发。保留审核字段、协议、状态更新能力及既有过滤条件，但其 PASS 等状态值不证明进行过真实审核。审核服务、任务、事件及验收单独排期，不能随其他阶段自动启用。
 
-```text
-MVP:
-几千 ~ 几万 DAU
+第一阶段不建设物理分片、多地域多活、复杂 ML 推荐、全套 Service Mesh、自动 K8s 扩缩容或大规模 OpenSearch／ClickHouse 集群。不为目录齐全而启动无业务实现的服务。
 
-中期:
-10万 ~ 100万 DAU
+### 1.3 服务职责不等于部署单元数量
 
-长期:
-百万级 WebSocket 在线连接
-千万级注册用户
-```
+保留当前 Auth、User、Content、Social、Chat、Message 六个核心服务及两个 Gateway 的边界，避免仅为简化部署重写已有可用链路。开发环境可共用一个 PostgreSQL 实例，使用独立 schema 与角色。
 
-注意：
+Feed、Discovery、Recommend 等先保留模块／契约边界；新增功能可以先使用拥有该数据的服务提供简单查询，不强制立即部署独立进程。独立部署的触发条件是有实际业务、独立扩容或故障隔离需求，并已有明确的数据归属和运维预算。不得借合并部署跨服务访问数据库。
 
-```text
-100万在线 WebSocket != 100万 HTTP QPS
-```
+## 2. 技术栈与外部网络
 
-架构必须支持水平扩展，但第一阶段基础设施按开发和 MVP 规模部署。
+| 层             | 基线                                                  | 限制                                                 |
+|----------------|-------------------------------------------------------|------------------------------------------------------|
+| HTTP API / BFF | PHP 8.4、Webman 2.x、Workerman 5.x、Composer 2        | 鉴权入口、校验、gRPC 聚合、响应映射；不访问业务库    |
+| 内部业务服务   | PHP 8.4、RoadRunner、spiral/roadrunner-grpc、Protobuf | 原生 PHP gRPC 扩展不是服务端运行框架                 |
+| 实时 Gateway   | Go、WebSocket、gRPC                                   | 连接、票据、心跳、推送、背压与 drain；不承担业务事务 |
+| 事实数据       | PostgreSQL 18                                         | 所有业务持久化，包括 JSONB 消息正文                  |
+| 缓存与实时状态 | Redis 7.2+                                            | 安全状态和 ID 租约不能当可随意清空的缓存             |
+| 事件与任务     | RabbitMQ 4.1，Streams + Quorum Queues                 | 领域事件可重放、任务有确认；具体版本固定在部署文件   |
+| 对象存储       | RustFS，S3 兼容                                       | 客户端直传，数据库保存 object_key                    |
+| 开发与观测     | Docker Compose、Prometheus、Grafana、OpenTelemetry    | 观测按配置启用；Kubernetes／Helm 后续再建设          |
+| 后续可选       | OpenSearch、ClickHouse                                | 分别用于搜索和分析，不承担业务事实源                 |
 
----
+Go、RoadRunner、生成器及依赖的精确版本以仓库工具链为准，开发、CI、镜像保持一致。已有构建调试信息与编译参数不因文档整理而变更。
 
-# 2. 技术栈基线
-
-## 2.1 HTTP API / BFF
-
-使用：
-
-```text
-PHP 8.4
-Webman 2.x
-Workerman 5.x
-Composer 2
-```
-
-Webman 只负责：
-
-- HTTP API
-- 鉴权入口
-- 参数校验
-- REST API
-- BFF 聚合
-- gRPC Client
-- Rate Limit
-- Request Context
-- Response Formatting
-
-Webman 不直接访问业务数据库。
-
-## 2.2 PHP 内部微服务
-
-使用：
-
-```text
-PHP 8.4
-RoadRunner
-spiral/roadrunner-grpc
-Protobuf
-gRPC
-```
-
-PHP 微服务通过 RoadRunner 提供 gRPC Server。
-
-禁止假设官方 PHP gRPC 扩展本身可以直接提供原生 gRPC Server。
-
-## 2.3 实时连接 Gateway
-
-目标实现：
-
-```text
-Go
-WebSocket
-gRPC
-Protobuf
-```
-
-Gateway 仅负责：
-
-- WebSocket accept
-- Ticket 鉴权
-- heartbeat
-- connection registry
-- encode/decode
-- push
-- disconnect
-- connection drain
-
-Gateway 不负责：
-
-- 业务 SQL
-- Feed
-- 推荐
-- 内容审核
-- 复杂风控
-- 业务事务
-
-第一阶段如果尚未实现完整 Go Gateway，可以先创建协议、接口、Mock 和基础可运行 Gateway，但不能把消息核心业务写死在 Gateway 内。
-
-## 2.4 数据基础设施
-
-生产目标：
-
-```text
-MySQL 8.4
-Redis 7.x+
-Kafka 4.x compatible
-OpenSearch
-ClickHouse
-S3 Compatible Object Storage
-```
-
-开发环境：
-
-```text
-1 MySQL instance
-1 Redis instance
-1 Kafka broker (KRaft)
-MinIO
-```
-
-多个逻辑数据库可以共用一个开发 MySQL 实例。
-
-## 2.5 基础设施
-
-```text
-Docker
-Docker Compose
-Kubernetes
-Prometheus
-Grafana
-OpenTelemetry
-Loki
-Tempo
-```
-
-第一阶段必须优先完成 Docker Compose 本地开发体验。
-
-Kubernetes/Helm 在后续阶段补全。
-
----
-
-# 3. 外部网络架构
-
-线上计划：
-
-```text
-Global HTTP
-    -> Cloudflare
-    -> Hong Kong API LB
-    -> Webman
-
-China HTTP
-    -> EdgeOne
-    -> Hong Kong API LB
-    -> Webman
-
-Global WebSocket
-    -> Cloudflare
-    -> Hong Kong WS LB
-    -> Realtime Gateway
-
-China WebSocket
-    -> Hong Kong L4 LB
-    -> Realtime Gateway
-```
-
-域名规范：
-
-```text
-api-global.example.com
-api-cn.example.com
-
-ws-global.example.com
-ws-cn.example.com
-
-media-global.example.com
-media-cn.example.com
-
-admin.example.com
-```
-
-代码中不允许硬编码 Cloudflare / EdgeOne。
-
-客户端只接收 RouteProfile：
+线上可采用 Global HTTP / WSS 经 Cloudflare、China HTTP 经 EdgeOne、China WSS 经受控 L4 LB 的入口；供应商不得写死在业务代码。客户端只接收 RouteProfile：
 
 ```json
 {
@@ -269,1333 +69,96 @@ admin.example.com
 }
 ```
 
-后续客户端可根据测速在 CN / GLOBAL Profile 间切换。
+域名和链路是部署配置，不要求开发环境具备外部 CDN。源站仅接受受控代理，只有可信 socket peer 的转发头可用于客户端 IP 解析。
 
----
+## 3. 服务归属与架构不变量
 
-# 4. 总体内部架构
+| 服务                             | 拥有的数据／职责                                          | 不得承担                         |
+|----------------------------------|-----------------------------------------------------------|----------------------------------|
+| Auth                             | auth_db：设备、第三方身份映射、Token、撤销状态、WS Ticket | 直接写 User / Persona            |
+| User                             | user_db：账号、MAIN、canonical ALIAS、账号状态与身份授权  | 在公开响应暴露匿名归属           |
+| Content                          | content_db：帖子、评论、媒体关联、作者快照、同帖身份锁定  | 查询 Social 数据库判断拉黑       |
+| Social                           | social_db：点赞、关注、拉黑及关系状态                     | 将 ALIAS 变成可追踪小号          |
+| Chat                             | chat_db：会话、成员快照、业务授权、摘要、已读点           | 直接查询 Message 数据库          |
+| Message                          | message_db：消息、会话 seq、发送幂等、消息 Outbox         | 信任客户端提供的发送者身份       |
+| Feed / Discovery / Recommend     | 候选集、曝光、规则排序等派生模型                          | 成为内容可见性或账号授权的事实源 |
+| Media / Notification / Search 等 | 在启用前明确 owned data、输入契约及副作用                 | 默认获得全部业务库权限           |
 
-```text
-                   Client
-                     |
-            +--------+--------+
-            |                 |
-           HTTP              WSS
-            |                 |
-            v                 v
-       Webman API       Realtime Gateway
-            |                 |
-            +-------gRPC------+
-                     |
-        +------------+-------------+
-        |            |             |
-       User        Content        Chat
-      Persona      Social        Message
-        |            |             |
-        +------------+-------------+
-                     |
-        +------------+-------------+
-        |            |             |
-       Feed       Discovery       Risk
-        |        Recommendation  Moderation
-        |            |             |
-        +------------+-------------+
-                     |
-                    Kafka
-                     |
-        +------------+-------------+
-        |            |             |
-      Search     Notification   Analytics
-```
+必须遵守：
 
----
+- User != Persona；公开作者 != 内部归属字段。
+- HTTP 经过 Webman，实时连接经过 Go Gateway；两个 Gateway 均不访问业务数据库。
+- 跨服务同步通信使用经授权的 gRPC；异步通知使用 Outbox 与 RabbitMQ。不用消息队列模拟同步 RPC。
+- 服务只能读写自身 schema，禁止跨服务 JOIN，也禁止给同一个业务进程配多套数据库账号绕过归属。schema 共用实例不改变边界。
+- 对账通过数据所有者的内部批量 RPC、可重放事件或受控快照进行。一次性离线迁移工具可在停写窗口使用专用账号；不得长期运行或进入业务请求链路。
+- 事务仅覆盖所属服务的数据；跨服务动作不假装具有分布式原子性，要明确失败、幂等和补偿。
+- 关键写入需要持久化幂等，关键事件与业务同事务写 Outbox。所有网络请求有截止时间，所有队列、并发和重试有界。
+- 禁止在 PHP 常驻进程保存请求级全局可变状态；禁止跨服务共享业务 Model 或 Repository。
 
-# 5. Monorepo 目录
+## 4. 身份、内容与私聊的产品规则
 
-创建如下结构：
+### 4.1 生命周期与公开投影
 
-```text
-social-backend/
-├── apps/
-│   ├── api-gateway/
-│   └── admin-api/
-│
-├── gateways/
-│   └── realtime-gateway/
-│
-├── services/
-│   ├── auth-service/
-│   ├── user-service/
-│   ├── content-service/
-│   ├── social-service/
-│   ├── discovery-service/
-│   ├── feed-service/
-│   ├── recommend-service/
-│   ├── chat-service/
-│   ├── message-service/
-│   ├── risk-service/
-│   ├── moderation-service/
-│   ├── notification-service/
-│   ├── media-service/
-│   ├── search-service/
-│   └── config-service/
-│
-├── contracts/
-│   ├── proto/
-│   ├── events/
-│   └── errors/
-│
-├── packages/
-│   ├── php/
-│   │   ├── logging/
-│   │   ├── tracing/
-│   │   ├── grpc-common/
-│   │   ├── id-generator/
-│   │   └── outbox/
-│   └── go/
-│       ├── logging/
-│       ├── tracing/
-│       └── protocol/
-│
-├── infra/
-│   ├── docker/
-│   ├── compose/
-│   ├── kubernetes/
-│   ├── helm/
-│   ├── prometheus/
-│   └── grafana/
-│
-├── scripts/
-├── docs/
-├── Makefile
-├── compose.yaml
-├── .env.example
-└── README.md
-```
+新账号在 UserService 同一事务内创建 User、唯一 MAIN、唯一内部 canonical ALIAS 和相关 Outbox。普通接口不能创建第二个 MAIN 或固定 ALIAS；旧创建接口仅作兼容拒绝。旧账号缺少内部 ALIAS 时可受控补建，并发必须复用；停用、删除的 ALIAS 不得自动复活。
 
----
+MAIN 是稳定公开身份，不代表手机号或身份证实名。ALIAS 是内部匿名能力，不可被搜索、关注或浏览主页。历史固定分身保留归属但禁止用于新的匿名操作。
 
-# 6. 服务边界
+发帖、评论、建立私聊时选择 MAIN / ALIAS；点赞、关注、拉黑、举报、修改公开资料及通用连接只用 MAIN。未知操作或身份模式默认拒绝，校验失败不能顺带创建身份。
 
-## 6.1 AuthService
+匿名作者使用写入时的昵称、系统匿名头像和不透明范围标识。昵称最长 20 个 Unicode 码点，服务端先验证 UTF-8，再计数；组合字符和多码点 emoji 按实际码点计数，客户端采用相同规则，不以字节截断。公开字段使用 PublicAuthor 及独立 Public* DTO；所有嵌套对象同样禁止输出 User ID、ALIAS ID、跨范围稳定标识或反查入口。
 
-负责：
+匿名标识绑定帖子／讨论或会话范围，可由至少 32 字节密钥的 HMAC 生成并持久化。读取时校验范围，不从当前资料临时生成标识；轮换密钥不改写旧标识。历史模式或快照不可靠时展示不可关联的匿名作者，不推断为 MAIN。
 
-- 微信 / QQ OAuth 登录与注册（默认登录方式）
-- 已登录用户绑定第三方身份（BindSocialIdentity）
-- 手机号验证码登录（仅 local / development / testing，生产禁用）
-- Access Token
-- Refresh Token
-- Device
-- Session
-- WS Ticket
-- Logout
-- Token revoke
+### 4.2 同帖身份、列表与本人管理
 
-约束：
+- 板块按帖子的作者模式划分，评论不改变所属板块。真身主页只展示该 MAIN 的公开有效帖子。
+- 每个 `(post_id, user_id)` 只允许一个发言身份。楼主使用发帖快照；其他参与者首次评论时固定模式和匿名昵称，后续评论沿用，不允许同帖切换身份或昵称。
+- 并发首次参与由唯一约束和事务保证。历史回填采用可信的最早快照，缺少可靠模式时拒绝新发言；不重写历史混合身份记录。
+- 评论只支持一级评论加回复，不能无限嵌套；回复目标必须属于同帖。
+- 本人管理要求账号认证，允许按账号归属删除自己的匿名内容，不要求 MAIN 等于历史匿名作者 ID。
+- 公共列表、详情与评论执行账号状态、可见性、删除状态、双向拉黑检查。审核状态仅保留当前兼容过滤，不新增审核发布门禁。
 
-- 社交登录直接返回 `authenticated` 会话：首次登录即创建本地 User，不再有手机号绑定步骤，UserService 通过 `FindOrCreateBySocialIdentity(registration_key, register_channel)` 幂等开户；
-- 认证链路不依赖短信通道，只有开发环境的手机号登录使用固定开发验证码；
-- 绑定第三方身份时，被绑定的用户来自 Access Token，不信任请求体中的 user_id；
-- 旧的无凭据手机号绑定 RPC（`SendSocialPhoneCode` / `BindSocialPhone`）仅为协议兼容保留，调用一律拒绝。
+### 4.3 私聊身份与复用规则
 
-拥有：
+仅支持双人私聊。目标为公开 MAIN 或具体来源内容及其范围内匿名标识；不得要求普通客户端知道对方 User ID 或 ALIAS ID。服务端解析目标后再验证来源可见性、身份状态、双方拉黑和会话权限，不向客户端泄漏解析后的账号关系。
 
-```text
-auth_db
-```
+以下是本版确定的目标规则，存量实现须核对后整改：
 
-禁止 UserService 直接写 auth_db。
+- MAIN—MAIN 按无序账号对与身份组合复用唯一会话。
+- 含匿名身份的会话还必须绑定来源内容范围；只有相同双方、身份组合和来源范围可复用。不同帖子中的匿名作者不能因内部 ALIAS 相同而被合并成同一会话。
+- 来源标识只用于目标解析，会话作者另用会话范围标识；双方身份与昵称在创建时冻结，重复创建返回原会话，不更新昵称。
+- 创建请求携带幂等键；并发创建同一逻辑会话不得生成多份。已有会话不能通过发送消息切换身份，另一身份组合走新会话授权。
+- 发送者从可信账号和会话成员快照获得。请求仅传 client_message_id、conversation_id、type、content，不传发送者 User / Persona 或逐条模式选择。
 
----
+### 4.4 拉黑、封禁与生命周期
 
-## 6.2 UserService
+账号封禁影响全部身份；ALIAS 停用影响匿名行为。所有授权在关键操作时重新检查，不因曾经进入会话或取得 Ticket 而永久放行。授权服务不可用时关闭访问，返回服务不可用，不伪装成账号不存在或凭证失效。
 
-负责：
+本版对拉黑采用明确默认：双向禁止创建会话、发送消息和跨账号内容互动；普通列表、详情、历史消息及同步接口不再返回双方内容。历史数据和成员关系仍保留；解除拉黑后，符合其他权限的历史可再次读取。本人内容管理和内部审计不受该展示隐藏影响。错误响应不得暴露命中的匿名账号关系。
 
-- User 主账号
-- Persona 分身
-- 用户资料
-- Persona 展示资料
-- 账号状态
-- Persona 状态
+在途已授权操作不承诺被追溯回滚；新请求必须重新检查。实时投递须有权限复核或可证明的撤销机制，不能把 Redis PubSub 收件人列表当作永久授权。完成该机制前，不宣称拉黑／封禁能立即阻止所有既有连接收到在途推送。
 
-拥有：
+主动把匿名内容公开为 MAIN、群聊、账号注销后的匿名化与保留期限另行设计，当前不开放这些操作。不得物理删除有历史引用的身份行。若产品上线要求提供注销，须先完成该独立生命周期方案与验收。
 
-```text
-user_db
-```
+## 5. 登录、会话与注销
 
-关键原则：
+正式产品使用微信／QQ 登录，首次登录直接注册并建立 authenticated 会话；UserService 按 registration_key 幂等创建账号，不要求先绑定手机号。绑定第三方身份的目标 User 必须取自认证结果，不能相信请求体的 user_id。
 
-```text
-User != Persona
-```
+开发手机号／固定验证码只限 local、development、testing；生产在 Gateway 和 AuthService 双重关闭。旧 SendSocialPhoneCode / BindSocialPhone 协议保留时一律拒绝。生产 OAuth 使用官方 HTTPS endpoint，测试 endpoint 覆盖和不安全 HTTP 配置不得进入生产。
 
-所有公开内容绑定：
+JWT 绑定账号与设备；切换 MAIN / ALIAS 不重新登录。VerifyToken、刷新和新登录检查账号与设备状态；已失效或被删除的账号不能凭旧 JWT 恢复。凭证只存适当的 hash，任何密钥、Token 和 OAuth code 不得进入日志。
 
-```text
-persona_id
-```
-
-平台内部通过：
-
-```text
-persona.user_id
-```
-
-关联真实账号。
-
----
-
-## 6.3 ContentService
-
-负责：
-
-- Post
-- PostMedia metadata
-- Comment
-- Topic
-- Tag
-- 内容状态
-- 内容可见性
-
-拥有：
-
-```text
-content_db
-```
-
----
-
-## 6.4 SocialService
-
-负责：
-
-- Like
-- Follow
-- Favorite
-- Block
-- 社交关系状态
-
-拥有：
-
-```text
-social_db
-```
-
----
-
-## 6.5 DiscoveryService
-
-负责一罐类核心玩法：
-
-- 漂流罐头
-- 随机发现
-- 陌生内容召回
-- 情绪池
-- Topic Pool
-- 去重
-- 随机扰动
-- 用户历史已看过滤
-
-核心 Redis Pool：
-
-```text
-discovery:new
-discovery:hot
-discovery:emotion:{emotion}
-discovery:topic:{topic_id}
-```
-
----
-
-## 6.6 FeedService
-
-负责：
-
-- 首页 Feed
-- Timeline
-- Feed Cursor
-- Feed Redis
-- Read Model
-- Candidate merge
-
-正常查询优先读取 Redis，而不是实时对 MySQL 大排序。
-
----
-
-## 6.7 RecommendService
-
-负责：
-
-- 用户兴趣画像
-- Candidate Recall
-- Rank
-- Feature
-- Rule-based ranking
-- 后续 ML 接入
-
-初期使用规则推荐，不需要一开始做机器学习。
-
----
-
-## 6.8 ChatService
-
-负责：
-
-- Conversation
-- ConversationMember
-- 私聊权限
-- 会话建立
-- 会话设置
-- 免打扰
-- 拉黑校验
-
-拥有：
-
-```text
-chat_db
-```
-
----
-
-## 6.9 MessageService
-
-负责：
-
-- message_id
-- conversation seq
-- 消息持久化
-- 幂等
-- 消息同步
-- Message Outbox
-- ACK 状态
-
-拥有：
-
-```text
-message_db
-```
-
-这是未来最优先支持 Sharding 的服务。
-
----
-
-## 6.10 RiskService
-
-负责同步快速判断：
-
-```text
-ALLOW
-DENY
-CHALLENGE
-REVIEW
-```
-
-判断场景：
-
-- 登录
-- 注册
-- 发帖
-- 评论
-- 发消息
-- 关注
-- 创建 Persona
-
-同步路径优先：
-
-```text
-Memory
-Redis
-```
-
-复杂分析通过 Kafka 异步处理。
-
----
-
-## 6.11 ModerationService
-
-负责：
-
-- 文本审核
-- 图片审核状态
-- 视频审核状态
-- 敏感词
-- 人工审核队列
-- PASS / REVIEW / REJECT
-
-审核通过后发布：
-
-```text
-post.approved
-```
-
----
-
-## 6.12 NotificationService
-
-负责：
-
-- App 内通知
-- APNs
-- FCM
-- 离线 Push
-- 通知偏好
-
----
-
-## 6.13 MediaService
-
-负责：
-
-- Presigned Upload URL
-- object_key
-- Media metadata
-- MIME / size 验证
-- 上传授权
-
-文件内容不经过 PHP API Gateway。
-
----
-
-## 6.14 SearchService
-
-负责：
-
-- OpenSearch 查询
-- Post 搜索
-- Persona 搜索
-- Topic 搜索
-
-索引数据通过 Kafka 构建。
-
----
-
-# 7. 服务通信规则
-
-## 7.1 gRPC
-
-用于：
-
-```text
-现在必须马上知道结果
-```
-
-例如：
-
-```text
-GetUser
-BatchGetPersonas
-GetPost
-CheckPermission
-CreateConversation
-SendMessage
-CheckRisk
-GetFeed
-```
-
-## 7.2 Kafka
-
-用于：
-
-```text
-某件事情已经发生
-```
-
-例如：
-
-```text
-user.registered
-user.updated
-persona.updated
-post.created
-post.approved
-post.deleted
-comment.created
-like.created
-follow.created
-conversation.created
-message.created
-message.delivered
-message.read
-report.created
-moderation.completed
-notification.requested
-analytics.event
-```
-
-禁止：
-
-```text
-Kafka Request -> Wait Kafka Response
-```
-
-来模拟 RPC。
-
----
-
-# 8. RPC 规则
-
-所有 RPC：
-
-- 必须设置 deadline；
-- 必须传播 trace_id；
-- 必须传播 request_id；
-- 写请求必须支持 idempotency；
-- 不允许无限 retry；
-- Batch 优先；
-- 同步调用深度尽量 <= 3；
-- 不允许 N+1 RPC。
-
-统一 metadata：
-
-```text
-x-request-id
-x-trace-id
-x-user-id
-x-persona-id
-x-device-id
-x-app-version
-authorization
-```
-
-初始 deadline 建议：
-
-```text
-Memory/Redis query       50 ms
-Simple DB query         100 ms
-Risk                    100 ms
-Normal RPC              150 ms
-Feed                    250 ms
-Complex BFF             300 ms
-```
-
-这里只是默认值，后续按 P95 / P99 调整。
-
----
-
-# 9. ID 规则
-
-外部核心实体：
-
-```text
-BIGINT UNSIGNED
-```
-
-ID 使用 Snowflake：
-
-```text
-user_id
-persona_id
-post_id
-comment_id
-conversation_id
-message_id
-notification_id
-```
-
-要求：
-
-- 分布式生成
-- 趋势递增
-- 不依赖 MySQL AUTO_INCREMENT
-- worker_id 可配置
-- 不允许不同实例冲突
-
-客户端请求幂等 ID 使用：
-
-```text
-UUIDv7 / ULID
-```
-
-例如：
-
-```text
-client_message_id
-request_id
-```
-
----
-
-# 10. 数据库设计原则
-
-- 一个服务拥有自己的逻辑数据库；
-- 禁止跨库业务 JOIN；
-- 数据库 migration 属于对应服务；
-- 开发环境可以一个 MySQL 物理实例承载多个逻辑 DB；
-- 生产按负载逐步拆；
-- 默认使用 InnoDB；
-- 字符集 utf8mb4；
-- 时间统一存 UTC；
-- 金额使用整数最小货币单位；
-- JSON 只用于非强查询扩展字段；
-- 高频查询必须建立明确索引；
-- 不允许把大文本或媒体二进制存 MySQL。
-
----
-
-# 11. 第一阶段核心表
-
-## 11.1 auth_db.devices
-
-```text
-id BIGINT UNSIGNED PK
-user_id BIGINT UNSIGNED
-device_uuid VARCHAR(64)
-platform VARCHAR(16)
-app_version VARCHAR(32)
-push_token VARCHAR(255) NULL
-last_ip VARBINARY(16) NULL
-last_active_at DATETIME(3)
-created_at DATETIME(3)
-updated_at DATETIME(3)
-
-UNIQUE(user_id, device_uuid)
-INDEX(user_id)
-```
-
-## 11.2 auth_db.refresh_tokens
-
-```text
-id BIGINT UNSIGNED PK
-user_id BIGINT UNSIGNED
-device_id BIGINT UNSIGNED
-token_hash CHAR(64)
-expires_at DATETIME(3)
-revoked_at DATETIME(6) NULL
-logged_out_at DATETIME(6) NULL          # 设备注销时间；轮换消费仅设置 revoked_at
-created_at DATETIME(3)
-
-UNIQUE(token_hash)
-INDEX(user_id, device_id)
-INDEX(expires_at)
-```
-
----
-
-## 11.3 user_db.users
-
-```text
-id BIGINT UNSIGNED PK
-status SMALLINT NOT NULL
-phone VARCHAR(32) NULL
-email VARCHAR(191) NULL
-register_channel VARCHAR(32)
-risk_level SMALLINT DEFAULT 0
-last_login_at DATETIME(3) NULL
-last_active_at DATETIME(3) NULL
-created_at DATETIME(3)
-updated_at DATETIME(3)
-deleted_at DATETIME(3) NULL
-
-UNIQUE(phone)
-UNIQUE(email)
-INDEX(status)
-INDEX(created_at)
-```
-
----
-
-## 11.4 user_db.personas
-
-```text
-id BIGINT UNSIGNED PK
-user_id BIGINT UNSIGNED
-type SMALLINT NOT NULL
-nickname VARCHAR(64)
-avatar_key VARCHAR(255) NULL
-bio VARCHAR(500) NULL
-status SMALLINT NOT NULL
-created_at DATETIME(3)
-updated_at DATETIME(3)
-deleted_at DATETIME(3) NULL
-
-INDEX(user_id, status)
-INDEX(created_at)
-```
-
-规则：
-
-```text
-User 可以有多个 Persona
-Post/Comment/Message 对外只暴露 persona_id
-```
-
----
-
-## 11.5 content_db.posts
-
-```text
-id BIGINT UNSIGNED PK
-persona_id BIGINT UNSIGNED
-type SMALLINT NOT NULL
-content TEXT NULL
-visibility SMALLINT NOT NULL
-emotion VARCHAR(32) NULL
-status SMALLINT NOT NULL
-moderation_status SMALLINT NOT NULL
-like_count BIGINT UNSIGNED DEFAULT 0
-comment_count BIGINT UNSIGNED DEFAULT 0
-view_count BIGINT UNSIGNED DEFAULT 0
-published_at DATETIME(3) NULL
-created_at DATETIME(3)
-updated_at DATETIME(3)
-deleted_at DATETIME(3) NULL
-
-INDEX(persona_id, created_at)
-INDEX(status, published_at)
-INDEX(moderation_status, created_at)
-```
-
----
-
-## 11.6 content_db.post_media
-
-```text
-id BIGINT UNSIGNED PK
-post_id BIGINT UNSIGNED
-type SMALLINT
-object_key VARCHAR(512)
-mime_type VARCHAR(128)
-width INT NULL
-height INT NULL
-duration_ms INT NULL
-sort_order INT DEFAULT 0
-created_at DATETIME(3)
-
-INDEX(post_id, sort_order)
-```
-
-数据库保存：
-
-```text
-object_key
-```
-
-禁止保存完整 CDN URL。
-
----
-
-## 11.7 content_db.comments
-
-```text
-id BIGINT UNSIGNED PK
-post_id BIGINT UNSIGNED
-persona_id BIGINT UNSIGNED
-parent_id BIGINT UNSIGNED NULL
-reply_to_comment_id BIGINT UNSIGNED NULL
-content VARCHAR(2000)
-status SMALLINT
-like_count BIGINT UNSIGNED DEFAULT 0
-created_at DATETIME(3)
-updated_at DATETIME(3)
-deleted_at DATETIME(3) NULL
-
-INDEX(post_id, created_at)
-INDEX(parent_id, created_at)
-INDEX(persona_id, created_at)
-```
-
-只支持：
-
-```text
-一级评论 + 回复
-```
-
-不做无限层级树。
-
----
-
-## 11.8 social_db.likes
-
-```text
-id BIGINT UNSIGNED PK
-persona_id BIGINT UNSIGNED
-target_type SMALLINT
-target_id BIGINT UNSIGNED
-created_at DATETIME(3)
-
-UNIQUE(persona_id, target_type, target_id)
-INDEX(target_type, target_id, created_at)
-```
-
----
-
-## 11.9 social_db.follows
-
-```text
-id BIGINT UNSIGNED PK
-follower_persona_id BIGINT UNSIGNED
-followee_persona_id BIGINT UNSIGNED
-created_at DATETIME(3)
-
-UNIQUE(follower_persona_id, followee_persona_id)
-INDEX(followee_persona_id, created_at)
-```
-
----
-
-## 11.10 social_db.blocks
-
-```text
-id BIGINT UNSIGNED PK
-blocker_user_id BIGINT UNSIGNED
-blocked_user_id BIGINT UNSIGNED
-created_at DATETIME(3)
-
-UNIQUE(blocker_user_id, blocked_user_id)
-```
-
-平台安全边界使用 user_id，避免通过切换 Persona 绕过拉黑。
-
----
-
-## 11.11 chat_db.conversations
-
-```text
-id BIGINT UNSIGNED PK
-type SMALLINT
-last_message_id BIGINT UNSIGNED NULL
-last_message_at DATETIME(3) NULL
-created_at DATETIME(3)
-updated_at DATETIME(3)
-
-INDEX(last_message_at)
-```
-
----
-
-## 11.12 chat_db.conversation_members
-
-```text
-id BIGINT UNSIGNED PK
-conversation_id BIGINT UNSIGNED
-user_id BIGINT UNSIGNED
-persona_id BIGINT UNSIGNED
-last_read_seq BIGINT UNSIGNED DEFAULT 0
-joined_at DATETIME(3)
-left_at DATETIME(3) NULL
-mute_until DATETIME(3) NULL
-
-UNIQUE(conversation_id, user_id)
-INDEX(user_id, conversation_id)
-```
-
----
-
-## 11.13 message_db.messages
-
-```text
-message_id BIGINT UNSIGNED PK
-conversation_id BIGINT UNSIGNED
-seq BIGINT UNSIGNED
-sender_user_id BIGINT UNSIGNED
-sender_persona_id BIGINT UNSIGNED
-client_message_id VARCHAR(36)
-type SMALLINT
-content JSON
-created_at DATETIME(3)
-
-UNIQUE(conversation_id, seq)
-UNIQUE(sender_user_id, client_message_id)
-INDEX(conversation_id, message_id)
-INDEX(sender_user_id, created_at)
-```
-
-其中：
-
-```text
-conversation_id
-```
-
-是未来 Sharding Key。
-
----
-
-## 11.14 每个需要可靠事件的服务都有 outbox_events
-
-```text
-id BIGINT UNSIGNED PK
-event_id VARCHAR(36)
-aggregate_type VARCHAR(64)
-aggregate_id VARCHAR(64)
-event_type VARCHAR(128)
-event_version INT
-payload JSON
-status SMALLINT
-available_at DATETIME(3)
-published_at DATETIME(3) NULL
-created_at DATETIME(3)
-
-UNIQUE(event_id)
-INDEX(status, available_at)
-INDEX(aggregate_type, aggregate_id)
-```
-
----
-
-# 12. Message Logical Sharding
-
-从第一天实现 ShardRouter。
-
-不要第一天真的部署 256 张/套物理库。
-
-定义：
-
-```text
-logical_slots = 256
-slot = hash(conversation_id) % 256
-```
-
-初期：
-
-```text
-0..255 -> message_mysql_default
-```
-
-后期可以配置：
-
-```text
-0..63    -> cluster_a
-64..127  -> cluster_b
-128..191 -> cluster_c
-192..255 -> cluster_d
-```
-
-业务层永远只调用：
-
-```text
-MessageShardRouter
-```
-
-禁止散落 `% 256` 到业务代码中。
-
----
-
-# 13. Proto 目录
-
-创建：
-
-```text
-contracts/proto/
-├── common/v1/
-│   ├── pagination.proto
-│   ├── error.proto
-│   ├── metadata.proto
-│   └── health.proto
-│
-├── auth/v1/auth.proto
-├── user/v1/user.proto
-├── user/v1/persona.proto
-├── content/v1/content.proto
-├── social/v1/social.proto
-├── discovery/v1/discovery.proto
-├── feed/v1/feed.proto
-├── chat/v1/chat.proto
-├── message/v1/message.proto
-├── risk/v1/risk.proto
-├── moderation/v1/moderation.proto
-├── notification/v1/notification.proto
-└── media/v1/media.proto
-```
-
-使用 Buf：
-
-```text
-buf lint
-buf breaking
-buf generate
-```
-
-已发布字段编号禁止复用。
-
-删除字段时：
-
-```proto
-reserved 3;
-reserved "old_field";
-```
-
----
-
-# 14. 首批 gRPC 方法
-
-## AuthService
-
-```text
-Login
-RefreshToken
-Logout
-VerifyToken
-CreateWsTicket
-```
-
-## UserService
-
-```text
-GetUser
-BatchGetUsers
-UpdateUser
-CreatePersona
-GetPersona
-BatchGetPersonas
-UpdatePersona
-ListPersonas
-```
-
-## ContentService
-
-```text
-CreatePost
-GetPost
-BatchGetPosts
-DeletePost
-CreateComment
-ListComments
-```
-
-## SocialService
-
-```text
-Like
-Unlike
-Follow
-Unfollow
-Block
-Unblock
-BatchGetInteractionState
-```
-
-## DiscoveryService
-
-```text
-GetRandomCapsule
-AcknowledgeExposure
-```
-
-## FeedService
-
-```text
-GetFeed
-```
-
-## ChatService
-
-```text
-GetOrCreatePrivateConversation
-GetConversation
-ListConversations
-CheckCanMessage
-MarkRead
-```
-
-## MessageService
-
-```text
-SendMessage
-SyncMessages
-GetMessages
-```
-
-## RiskService
-
-```text
-CheckAction
-```
-
-## ModerationService
-
-```text
-SubmitContent
-GetModerationResult
-```
-
-## MediaService
-
-```text
-CreateUploadSession
-CompleteUpload
-```
-
----
-
-# 15. Kafka Topic
-
-第一阶段创建：
-
-```text
-user.registered.v1
-user.updated.v1
-persona.updated.v1
-
-post.created.v1
-post.approved.v1
-post.deleted.v1
-comment.created.v1
-
-like.created.v1
-follow.created.v1
-
-conversation.created.v1
-
-message.created.v1
-message.delivered.v1
-message.read.v1
-
-report.created.v1
-moderation.completed.v1
-
-notification.requested.v1
-
-analytics.event.v1
-```
-
-Partition Key：
-
-```text
-user event       -> user_id
-persona event    -> user_id
-post event       -> post_id
-message event    -> conversation_id
-```
-
-事件 Envelope：
-
-```json
-{
-  "event_id": "uuidv7",
-  "event_type": "message.created.v1",
-  "event_version": 1,
-  "occurred_at": "UTC ISO8601",
-  "trace_id": "...",
-  "producer": "message-service",
-  "key": "conversation_id",
-  "payload": {}
-}
-```
-
-Consumer 必须基于：
-
-```text
-event_id
-```
-
-实现去重。
-
----
-
-# 16. Redis Key 规范
-
-统一格式：
-
-```text
-{domain}:{purpose}:{id}
-```
-
-示例：
-
-```text
-cache:user:{user_id}
-cache:persona:{persona_id}
-cache:post:{post_id}
-
-presence:user:{user_id}
-presence:gateway:{gateway_id}
-
-feed:user:{user_id}
-
-counter:post:{post_id}
-
-rate:user:{user_id}:{action}
-rate:ip:{ip_hash}:{action}
-
-idempotency:{service}:{request_id}
-
-discovery:new
-discovery:hot
-discovery:emotion:{emotion}
-discovery:topic:{topic_id}
-
-config:feature:{key}
-```
-
-禁止业务代码随意创建没有规范的新 Key。
-
-所有 Redis Key：
-
-- 明确 TTL；
-- 没有 TTL 的必须写明原因；
-- 大集合必须控制容量；
-- 禁止使用 `KEYS *`；
-- 生产扫描使用 SCAN；
-- 防止 hot key。
-
----
-
-# 17. WebSocket 协议
-
-使用：
-
-```text
-WebSocket + Protobuf
-```
-
-定义统一 Envelope：
-
-```proto
-message Envelope {
-  uint32 version = 1;
-  string request_id = 2;
-  uint64 sequence = 3;
-  int64 timestamp_ms = 4;
-  string type = 5;
-  bytes payload = 6;
-}
-```
-
-核心事件：
-
-```text
-AUTH
-AUTH_OK
-
-PING
-PONG
-
-MESSAGE_SEND
-MESSAGE_ACK
-MESSAGE_PUSH
-
-MESSAGE_DELIVERED
-MESSAGE_READ
-
-TYPING
-
-ERROR
-```
-
-发送消息流程：
-
-```text
-Client
- -> Gateway
- -> gRPC MessageService.SendMessage
- -> DB + Outbox
- -> ACK Client
- -> Kafka message.created
- -> Delivery Consumer
- -> Presence Lookup
- -> Gateway Push
- -> Receiver
-```
-
----
-
-# 18. WS Ticket
-
-客户端连接 WebSocket 前：
-
-```text
-POST /api/v1/ws/ticket
-```
-
-Webman -> AuthService 创建短期 Ticket。
-
-Ticket 内容：
-
-```text
-user_id
-persona_id
-device_id
-nonce
-expire_at
-```
-
-有效期：
-
-```text
-30 ~ 60 秒
-```
-
-Gateway 本地验证签名。
-
-不要每次连接都同步调用 AuthService。
-
----
-
-# 19. Presence
-
-Redis 示例：
-
-```text
-presence:user:{user_id}
-```
-
-允许多设备：
-
-```json
-[
-  {
-    "gateway_id": "gw-01",
-    "connection_id": "abc",
-    "device_id": 1001,
-    "platform": "ios",
-    "last_heartbeat_ms": 0
-  }
-]
-```
-
-Gateway Registry：
-
-```text
-presence:gateway:{gateway_id}
-```
-
-包含：
-
-```text
-grpc_address
-status
-connections
-updated_at
-```
-
----
-
-# 20. Heartbeat
-
-默认：
-
-```text
-50 ~ 80 秒随机间隔
-```
-
-不能所有用户固定 60 秒同时发送。
-
-客户端加入 jitter。
-
-连接过期规则需要配置化。
-
----
-
-# 21. HTTP API
-
-统一前缀：
-
-```text
-/api/v1
-```
+### 5.1 必须保留的设备注销语义
 
 注销请求必须携带属于同一用户、同一设备的 Bearer 和 Refresh Token。Refresh Token 不存在时返回认证错误；历史 Refresh Token 不得搭配首次撤销时间之后签发的 Bearer 注销新会话。
 
-注销先在 MySQL 中原子记录首次撤销时间，再写入 Redis。Redis 部分失败返回 503；客户端可在原 Bearer 尚未过期时重试同一请求，即使该 Bearer 已被设备标记撤销，AuthService 仍会校验签名、用户、设备和签发时间。重试复用首次截止时间，仅补写原 Access Token 生存期内的撤销标记，不延长恢复窗口。设备截止时间通过 Redis Lua 原子取最大值，避免旧请求覆盖新注销。
+注销先在 PostgreSQL 中原子记录首次撤销时间，再写入 Redis。Redis 部分失败返回 503；客户端可在原 Bearer 尚未过期时重试同一请求，即使该 Bearer 已被设备标记撤销，AuthService 仍会校验签名、用户、设备和签发时间。重试复用首次截止时间，仅补写原 Access Token 生存期内的撤销标记，不延长恢复窗口。设备截止时间通过 Redis Lua 原子取最大值，避免旧请求覆盖新注销。
 
-部署此行为前需先运行 `make migrate`，应用 `20261018000000_preserve_refresh_revocation_precision`。已有记录丢失的小数精度无法重建，不得通过推迟历史截止时间补偿。
+部署前必须执行当前 PostgreSQL 迁移入口 `make migrate`，验证撤销时间的微秒精度。已有记录丢失的小数精度无法重建，不得通过推迟历史截止时间补偿。
 
 Logout 定义为退出当前用户的整个设备：有效 Refresh Token 在设备行锁内撤销该设备全部未撤销 Refresh Token，Refresh 轮换与新登录创建也使用同一把锁。`revoked_at` 表示不可再刷新，`logged_out_at` 仅表示设备注销；已轮换或已过期的旧 Refresh Token 请求注销返回 401，客户端必须使用当前令牌。已注销令牌仅能恢复原注销截止时间，不能影响后续重新登录。
 
-部署前先执行 `make migrate`，应用 `20261018000100_separate_refresh_logout_state`。历史 `revoked_at` 无法区分轮换和注销，迁移不会将其推断为注销记录，旧记录不能使用重试通道。
+当前 PostgreSQL schema 必须分别保留 `revoked_at` 与 `logged_out_at`。历史 `revoked_at` 无法区分轮换和注销，迁移不会将其推断为注销记录，旧记录不能使用重试通道。
 
 `AUTH_ACCESS_TOKEN_REVOCATION_TTL` 默认 7200 秒，保留窗口取它与当前签发 TTL 的较大值。缩短签发 TTL 前，该配置须至少覆盖所有仍可能有效的历史 Access Token 的最大 TTL；直到这些令牌全部过期后才可降低。
 
@@ -1603,1338 +166,362 @@ Logout 定义为退出当前用户的整个设备：有效 Refresh Token 在设�
 
 `/auth/logout` 在认证前使用独立 Redis IP 限流桶，默认每分钟 60 次；仅当请求体提供 `device.device_uuid` 或请求头提供 `x-device-id` 时，才叠加每分钟 20 次的 IP/设备桶。两者及窗口分别由 `AUTH_LOGOUT_RATE_LIMIT`、`AUTH_LOGOUT_RATE_DEVICE_LIMIT`、`AUTH_LOGOUT_RATE_WINDOW_SECONDS` 配置。只携带 `refresh_token` 的常规请求仍受 IP 限制。客户端设备提示是可选的附加限制，不作为可信身份或授权依据。监控 `auth_logout_recovery_total{status="200|401|503|error"}`，观察被普通 VerifyToken 拒绝后进入注销通道的恢复结果。
 
-首次微信/QQ 注册自动创建 MAIN Persona，公共 API 不提供 Persona 创建入口。
+### 5.2 安全状态恢复
 
-初期至少实现：
+数据库中的设备／Token 状态是持久化依据，Redis 撤销键不是可丢弃的普通缓存。Redis 故障时认证和依赖撤销检查的操作关闭访问；Redis 数据丢失后，恢复撤销状态或主动失效受影响会话，再恢复流量。不能仅因 Redis 进程重新就绪而假设旧撤销仍有效。
 
-```text
-POST /api/v1/auth/login                # 开发环境手机号登录
-POST /api/v1/auth/social/login         # 微信 / QQ 登录与注册，首次创建账号返回 201
-POST /api/v1/auth/social/bind          # Bearer JWT + provider/code，绑定第三方身份
-POST /api/v1/auth/refresh
-POST /api/v1/auth/logout
+## 6. 数据库、类型与逻辑模型
 
-GET  /api/v1/me
+PostgreSQL 按服务固定 schema 隔离，迁移由 `migration_ddl` 执行并记录在 `meta.phinxlog`。运行时账号没有 DDL 或跨服务权限；User / Message Relay 使用独立且仅能访问对应 Outbox 的角色。迁移管理员凭据不下发给业务容器。
 
-GET  /api/v1/personas
-GET  /api/v1/personas/{id}
-PATCH /api/v1/personas/{id}
+本文定义逻辑约束，不复制一份可能过期的完整 DDL。具体列、索引和增量历史以 PostgreSQL migrations 为准；已有 MySQL 迁移保留为历史，不在当前部署执行。
 
-POST /api/v1/posts
-GET  /api/v1/posts/{id}
-DELETE /api/v1/posts/{id}
+| 数据                                 | 必须保证的逻辑约束                                                         |
+|--------------------------------------|----------------------------------------------------------------------------|
+| devices / refresh_tokens             | `(user_id, device_uuid)` 唯一、Token hash 唯一、撤销与注销时间分别记录     |
+| users / personas                     | 账号身份映射幂等、每账号唯一 MAIN 与 canonical ALIAS、禁用身份不得自动重建 |
+| posts / comments / post_participants | 内部归属与公开快照分离、同帖参与者唯一、回复同帖、删除语义明确             |
+| likes / follows / blocks             | 点赞关系、关注关系、账号拉黑对唯一；只支持允许的 MAIN 行为                 |
+| conversations / conversation_members | 私聊复用键唯一、成员与固定身份快照一致、已读 seq 单调不回退                |
+| messages / conversation_sequences    | `(conversation_id, seq)` 唯一、发送者级幂等、序号与消息同事务              |
+| 各服务 Outbox / 消费记录             | event_id 唯一、领取租约可恢复、投影变更与消费去重原子提交                  |
 
-GET  /api/v1/feed
+类型约定：
 
-POST /api/v1/posts/{id}/like
-DELETE /api/v1/posts/{id}/like
+- Snowflake ID 使用正的有符号 64 位范围 `1..9223372036854775807`，PostgreSQL 使用 BIGINT；不继续使用 BIGINT UNSIGNED。已有 Proto uint64 不表示允许超出持久化范围。
+- HTTP JSON 的 ID / seq 均为十进制字符串，禁止经浮点数中转。游标和导入同样做范围校验；计数非负用约束保证。
+- 时间统一 UTC；外部内容时间使用明确的毫秒格式，Token 撤销等安全比较保留微秒，不能统一截断。
+- 金额使用最小货币单位整数。JSONB 只用于可扩展载荷，路由、权限、索引和排序字段使用明确列。
+- 消息 content API 字段为 JSON 文本字符串，存储为 JSONB；比较忽略对象键顺序／空白、保留数组顺序和精确数值语义。不得先转浮点或二次编码；不承诺保留原始数字写法。
+- object_key 与媒体元数据入库，不存固定 CDN URL，不把大型文件塞进业务数据库。
 
-GET  /api/v1/posts/{id}/comments
-POST /api/v1/posts/{id}/comments
+Snowflake worker 必须独占分配并有租约、续约、失去所有权后停止发号及安全重启机制。时钟回退与进程暂停要明确失败行为；禁止 PID 取模充当唯一 worker。Redis ID 租约故障时停止写入，不能降级为重复 ID。
 
-GET  /api/v1/discovery/capsule
+## 7. 消息事务、幂等与扩展边界
 
-GET  /api/v1/conversations
-POST /api/v1/conversations/private
-GET  /api/v1/conversations/{id}/messages
+### 7.1 当前单库模型
 
-POST /api/v1/ws/ticket
+MessageService 在一次数据库事务中完成会话 seq 递增、消息插入与 message.created.v1 Outbox 插入；提交成功才能 ACK。seq 使用可回滚的计数行更新，不能用 PostgreSQL sequence 替代。
 
-POST /api/v1/media/upload-session
+保留发送者级幂等键 `(sender_user_id, client_message_id)`。重试必须使用同一键、会话、类型和等价内容；任一业务载荷不同返回冲突，不能返回另一会话消息或静默覆盖。幂等查找同样执行当前账号和会话授权，避免通过旧键绕过权限。
 
-POST /api/v1/reports
-```
+序号按会话提交顺序递增。消息 ID／事件 ID 可在事务前生成，不能用其大小推断提交顺序。仅当事务已明确回滚才允许有界重试死锁／序列化失败；COMMIT 结果未知时丢弃连接，不重放写回调，客户端用原幂等键查询／重试恢复。
 
-API Gateway 只调用 gRPC，不直接查数据库。
+历史分页使用 `(conversation_id, seq)` 索引和稳定游标，增量使用 after_seq，不以 OFFSET 或全表 COUNT 实现。已读点不得超过该会话已提交最大 seq；不能以客户端提供的任意大值推进。
 
----
+### 7.2 分片延期，保留清晰接口
 
-# 22. HTTP Response 格式
+当前运行路径使用单个 message_db，不强制第一天接入 256 槽 Router，也不为未使用路由宣称具备分片能力。应用通过 MessageRepository 等边界访问存储，不在业务里散落取模表达式。
 
-成功：
+只有容量测量证明单库经索引、查询和资源优化后不能满足目标，才开启物理分片设计。候选路由键为 conversation_id，槽位数量和映射版本到该阶段确定。
 
-```json
-{
-  "code": 0,
-  "message": "ok",
-  "request_id": "uuidv7",
-  "data": {}
-}
-```
+**分片前必须解决发送者级幂等跨会话、跨分片的唯一性。** 每个分片上的局部唯一索引不能保证当前契约。届时须交付全局幂等协调及失败恢复方案，或经过显式协议变更把作用域调整为会话；不能在扩容时静默改变语义。
 
-失败：
+分片准入还包括：同会话 seq／消息／Outbox 同处一个事务边界、路由迁移期间的写入围栏、历史查询、故障回退、全量核对和带负载演练。不得仅添加 `% 256` 就宣称完成。
 
-```json
-{
-  "code": 1001001,
-  "message": "invalid request",
-  "request_id": "uuidv7",
-  "details": {}
-}
-```
+## 8. RabbitMQ、Outbox 与消费者一致性
 
-HTTP 状态码仍需正确使用：
+### 8.1 传输和契约
 
-```text
-200
-201
-204
-400
-401
-403
-404
-409
-422
-429
-500
-503
-```
+RabbitMQ `domain.events` 为领域事件交换机；`user.events`、`chat.events` 等 Streams 用于可重放订阅，Quorum Queues 用于需要确认的工作队列。一个事件可按拓扑送至 Stream 和工作队列，不能假定所有消费者使用相同 ACK／offset 模型。
 
-不要永远返回 HTTP 200。
+拓扑以 `infra/docker/rabbitmq/definitions.json` 为装配源。初始化了队列不代表已实现对应业务；审核队列存在也不能启用审核功能。事件 Envelope 至少有 event_id、event_type、event_version、occurred_at、trace_id、producer、event_key、payload；聚合标识和路由键不能混为一谈。
 
----
+已有事件如 message.created.v1 保持实际 schema；新事件必须进入契约目录并验证兼容性。消费者只获得完成其职责需要的字段；内部收件人路由信息不得直接序列化成公开对象。
 
-# 23. 错误码
+### 8.2 发布与重复消费
 
-建立：
+1. 业务行与 Outbox 同事务提交。
+2. Relay 领取带过期时间和所有权 token 的租约，使用数据库时间判断到期；旧 worker 不能确认新租约。
+3. 发布同时验证路由和 broker confirm；成功后才标记 published。发布成功但本地确认失败允许重复，不宣称 exactly-once。
+4. 消费者以 `(consumer_name, event_id)` 去重，同库投影变更与去重记录同事务提交，然后 ACK／推进已连续处理的 offset；不能提前记录消费成功。
+5. 跨外部系统的副作用使用目标幂等键或持久化任务状态恢复，不能把本地去重记录当成跨系统事务。
 
-```text
-contracts/errors/
-```
+消息摘要按 seq 只向前更新；其他聚合使用明确版本或可交换操作，删除保留足够版本信息，防止迟到旧事件复活内容。消费者须承受重复、乱序和部分失败，不能依赖重试后仍保持入队顺序。
 
-错误码按域分段：
+### 8.3 有界重试与隔离
 
-```text
-100xxxx Auth
-200xxxx User
-300xxxx Content
-400xxxx Social
-500xxxx Chat
-600xxxx Message
-700xxxx Risk
-800xxxx Moderation
-900xxxx Infrastructure
-```
+以下是本版待落地的统一策略，不能理解为当前消费者已支持：
 
-禁止各服务随意重复定义相同数字。
+- 同步请求只在原始截止时间内对明确可重试错误进行有限尝试；不自动重放提交结果未知的写入。
+- 后台 Relay／工作队列对瞬时依赖故障按 5s、30s、300s 分级退避。默认首次处理之后最多自动重试 20 次，且从首次失败起最多 24 小时，先达到者结束自动处理；新配置须在实现时加入环境示例与校验。
+- 重试次数、首次失败时间、错误分类跨进程重启与队列转移保留；恢复队列不能清零业务重试预算。并发、预取、单次处理时间和队列容量均有上限。
+- 无效 schema／载荷直接隔离；超预算事件进入独立的 exhausted 隔离状态或队列，不与 jobs.failed 审计副本混作可自动回流的来源。该隔离能力尚需实现，不能引用不存在的运维命令。
+- 隔离／延迟转存确认成功后才 ACK 原投递，失败保留原消息。Outbox 隔离时保留事件内容与关联，不删除业务事实。
+- 人工修复后按 event_id 有限重放，记录操作者、原因和新一轮预算；不能无限循环消费同一毒消息。隔离数据至少保留至处理完成，清理须有单独的保留策略。
 
----
+RabbitMQ 内部确认重试和应用重试是不同层；5s 延迟不是 broker 故障恢复承诺。Stream 消费失败时必须明确“停止推进”或“持久化隔离后推进”的策略，不能静默跳过。
 
-# 24. 幂等
+需要严格发布顺序的聚合，前序事件隔离后暂停该聚合后续发布并告警，不阻塞其他聚合；人工恢复前序后继续。允许越过失败事件的投影必须证明可由版本／seq 和对账恢复，消息客户端仍以持久化同步结果为准。隔离不能悄悄改变原有顺序保证。
 
-所有关键写操作接收：
+### 8.4 重放、对账和保留
 
-```text
-X-Request-ID
-```
+投影重建只更新派生状态，默认抑制 Push／短信等外部副作用。需要补发时建立独立任务及幂等键。消费者去重记录保留期必须覆盖事件保留期、最长故障和人工重放窗口；不能在仍可能重放时提前删除。
 
-或 request message 内：
+当前 Streams 的 7 天保留不是无限审计档案。超出保留窗口的投影重建从所属服务导出受控快照，再从确定的水位继续消费；要验证快照期间的增量不丢不重。
 
-```text
-request_id
-```
+Chat 摘要对账通过 MessageService 的内部批量 RPC 获取最新已提交消息／seq，按游标分批、限频和续传。不再把跨库双连接作为目标设计；对账只修复摘要，不默认补发历史通知。
 
-例如：
+## 9. 内容查询、Feed 与 Discovery
 
-```text
-CreatePost
-CreateComment
-SendMessage
-CreateConversation
-```
+MVP 的 `/api/v1/feed?channel=main|alias` 是 ContentService 板块查询，不等同于个性化 Feed。真身主页和本人管理仍由 ContentService 持有数据并授权，不为此额外部署 FeedService。
 
-SendMessage 还需要：
+所有大列表使用稳定复合游标。授权过滤可能产生空页；客户端以 has_more / next_cursor 判断后续，不以空数组判定结束。公共列表不强制提供精确 total，单次候选扫描和返回条数有界，批量检查拉黑，避免 N+1 RPC。
+
+后续推荐先使用 new／hot／topic／emotion／follow 规则召回和简单排序，不先上 ML。Redis ZSET 或其他读模型只是候选集，返回前必须复核当前内容有效性与权限；删除、拉黑、私密内容不能因投影延迟泄漏。依赖权限检查失败时关闭访问。
+
+Discovery 复用内容公开投影，过滤自己、双向拉黑、不可见和已看内容；曝光去重有容量与 TTL，避免随机查询无界扫描。当前无审核阶段通过可展示内容的创建／状态变化构建候选，不等待 post.approved 或 mock 审核。未来恢复审核时另行更新状态机、事件和验收。
+
+## 10. HTTP、Protobuf 与错误契约
+
+统一 HTTP 前缀 `/api/v1`；现有路由以 `apps/api-gateway/config/route.php` 为准，新增／删除路由必须同步契约和客户端。核心资源包括：
+
+| 资源            | 入口                                                                           |
+|-----------------|--------------------------------------------------------------------------------|
+| 登录会话        | POST /auth/social/login、/auth/social/bind、/auth/refresh、/auth/logout        |
+| 当前账号与 MAIN | GET /me、/personas；GET / PATCH /personas/{id}                                 |
+| 内容            | POST /posts；GET / DELETE /posts/{id}；GET / POST /posts/{id}/comments         |
+| 板块与管理      | GET /feed?channel=main\|alias、/personas/{id}/posts、/me/posts                 |
+| 私聊            | POST /conversations；GET /conversations、/conversations/{id}                   |
+| 消息            | POST / GET /conversations/{id}/messages；GET /conversations/{id}/messages/sync |
+| 已读与票据      | POST /conversations/{id}/read、/ws/ticket                                      |
+
+点赞、关注、拉黑按关系创建／删除建模。公开拉黑和私聊授权目标应使用 MAIN 或来源内容引用，旧的 User ID 目标路由须在上线前核对并替换；不能为调用这些路由新增公开 User—ALIAS 映射。
+
+成功响应使用 code、message、request_id、data；错误使用 code、message、request_id、details。正确使用 200／201／204／400／401／403／404／409／422／429／503，204 不带响应体。服务错误码统一归属 `contracts/errors/`，不在各服务重复发明数字；基础设施失败不伪装成认证失败或空结果。
+
+内部请求 metadata 由可信入口构造，外部同名 header 不能直接成为 x-user-id、x-persona-id、x-service-token 等授权依据。公开 DTO 与持久化实体分离。
+
+Protobuf 源放在 `contracts/proto/`，通过 `make proto` 生成 PHP／Go；禁止手工修改生成代码。删除字段保留编号与名称，已使用的字段编号不复用。未上线允许协调破坏性升级，但必须列出受影响客户端／事件消费者、停流或版本并行方式、升级顺序与回退限制；不能混用字段含义不同的旧新客户端。事件版本同样需要兼容策略。
+
+X-Request-ID 用于追踪，不自动等于持久化幂等键。创建帖子／评论／会话的写入契约要显式接收稳定幂等键，按可信账号、操作和业务载荷校验；响应丢失后返回原结果，载荷改变返回冲突。未实现的幂等能力在交付记录中明确列出。
+
+## 11. RPC 与端到端预算
+
+每个入口有总预算，内部调用只能缩短，不能重置。Gateway 完成鉴权再调用业务服务时也要扣除已用时间，不能给两段各一个完整的端到端预算。截止时间覆盖排队、建连、SQL 锁等待、网络、退避和重试，并留出序列化与返回余量。
 
 ```text
-client_message_id
+child_budget = min(child_config_limit, parent_remaining - return_reserve)
 ```
 
-DB：
+预算不足立即失败；SQL statement / lock timeout 受剩余预算约束。内部使用可信的绝对截止时间传播，例如现有 x-deadline-unix-ms；接收端验证并取较小值。服务间时钟须同步并监控偏差，本地耗时使用单调时钟。PHP worker 无法直接取得传输 deadline 时，不能省略应用层传播。
 
-```text
-UNIQUE(sender_user_id, client_message_id)
-```
+现有配置约束保留，以下是配置基线而非延迟 SLA：
 
----
+| 配置                                                       | 当前默认 | 约束                                           |
+|------------------------------------------------------------|----------|------------------------------------------------|
+| GRPC_AUTH_TIMEOUT_MS                                       | 300ms    | Auth 单跳配置上限                              |
+| GRPC_USER_DIRECTORY_TIMEOUT_MS                             | 250ms    | 小于 Auth 外层预算；实际受剩余时间限制         |
+| GRPC_SOCIAL_LOGIN_TIMEOUT_MS / GRPC_SOCIAL_BIND_TIMEOUT_MS | 7000ms   | 能容纳 OAuth 最坏调用路径及本地处理            |
+| SOCIAL_HTTP_TIMEOUT_MS                                     | 3000ms   | 单次 OAuth HTTP 上限，仍受入口总预算约束       |
+| SOCIAL_HTTP_CONNECT_TIMEOUT_MS                             | 1000ms   | 不大于 HTTP 总超时                             |
+| MESSAGE_OPERATION_BUDGET_MS                                | 600ms    | 消息操作预算；不是整个 HTTP 请求的独立重置窗口 |
 
-# 25. Transactional Outbox
+非法配置在启动时失败，不把 0、负数或非法字符串钳制成任意值。每类入口的总预算与返回余量须随实现加入配置和契约测试，不照抄旧版统一 150ms RPC 默认值。
 
-关键业务：
+同步调用尽量少于等于三层，批量优先，禁止逐条列表 RPC。只读或有明确幂等保障的操作可有限重试，默认最多两次尝试；健康检查的 waitForReady／UNAVAILABLE 恢复仅适用于健康方法，不能推广到所有业务写入。
 
-```text
-BEGIN
+## 12. WebSocket、在线状态与可靠送达
 
-INSERT business_record
+WS Ticket 绑定 user_id、MAIN persona_id、device_id、nonce 和短期过期时间，默认有效期在 30～60 秒范围配置。Gateway 本地验签，通过共享 Redis 原子消费 nonce，跨实例只使用一次；Redis 不可用则拒绝连接。不能让客户端改写连接身份或直接以 ALIAS 建立通用连接。
 
-INSERT outbox_events
+当前 Gateway 文档描述 JSON Envelope 与下行 MESSAGE_PUSH，不能把计划中的 Protobuf Binary／MESSAGE_SEND 当已完成。目标 Envelope 包含 version、request_id、sequence、timestamp_ms、type、payload；传输格式切换需协调客户端或显式协商版本。
 
-COMMIT
-```
+实时推送是提示，不是消息持久化证明。Redis PubSub 断线可能遗漏，客户端重连后用 after_seq 补拉、按消息 ID／seq 去重并排序。ACK 只表示消息事务已提交；已送达和已读必须有独立语义与幂等更新，不能从成功写入 socket 推断用户已读。
 
-Outbox Relay：
+后续 WS 上行发送必须经 MessageService gRPC 执行同一授权／幂等链路，不能在 Gateway 自行写库。连接 MAIN 不得覆盖匿名会话成员快照。
 
-1. SELECT 待发布事件；
-2. 锁定 / claim；
-3. Produce Kafka；
-4. 成功后标记 published；
-5. 失败按退避重试；
-6. 达到阈值进入 dead-letter / manual inspection。
+连接有最大入站帧、出站队列、并发处理和写超时。出站积压超限断开并要求补拉；TYPING 等非可靠提示可丢弃。心跳加入 jitter，默认周期在 50～80 秒范围配置，过期与清理规则明确；客户端重连指数退避并带抖动，避免集中重连压垮认证服务。
 
-不能：
+Presence 按账号／设备／Gateway 记录并有 TTL，不是会话成员或消息授权事实源。优雅关停先移出 readiness，再停止接入、通知客户端、限时 drain，最后清理拥有的连接状态。
 
-```text
-INSERT DB
-COMMIT
-produce Kafka
-```
+## 13. Redis 与运行时依赖
 
-而没有恢复机制。
+Key 使用 `{domain}:{purpose}:{id}` 等统一约定，每类说明所属服务、类型、TTL、容量和删除条件。普通缓存可重建，撤销状态、票据 nonce、限流和 ID 租约分别说明故障语义；禁止 `KEYS *`，扫描用有界 SCAN。
 
----
+开发环境可共用 Redis，生产根据安全状态和缓存的生命周期决定实例隔离。不得用缓存淘汰策略清除仍有效的撤销标记或租约；AOF everysec 不是零数据丢失承诺，恢复须按第 5 节处理。
 
-# 26. Feed 第一版
+空闲 worker 也要维护 ID 租约，丢失所有权后停止发号并安全替换进程。health/readiness 检查不能成为唯一续约来源。停止／暂停超过租约有效期的进程恢复后不能继续沿用旧 worker ID。
 
-不要一开始上复杂 ML。
+## 14. 安全边界
 
-实现规则召回：
+- 内部 RPC 按调用方与方法白名单授权，每条调用关系使用独立凭证。生产必须受控网络与 TLS，跨主机优先 mTLS；开发明文只能由明确开发配置启用。
+- 服务证书、密钥和环境凭证不进入 Git、镜像或日志；缺失生产凭证直接启动失败。轮换要有明确的双版本窗口或受控重启步骤，不能声称当前实现支持无缝双凭证。
+- SQL 参数化，输入长度、类型、ID 范围、枚举与 JSON 限制在边界验证；默认禁止越权，不能用参数合法替代业务授权。
+- 登录、绑定、写入和昂贵查询采用 IP／设备／账号分层限流。设备标识和转发 header 是不可信输入，不能解除其他桶的限制。
+- CORS 和可信代理显式配置。数据库、Redis、RabbitMQ、metrics 不面向公网；管理后台启用前必须有 RBAC、审计与独立访问控制，MFA 按上线要求落实。
+- 上传校验对象归属、大小和 MIME，不能信任客户端 CompleteUpload 自报成功。
+- 日志不打印密码、Token、Ticket、OAuth code、完整手机号／邮箱、私聊明文或匿名身份映射；指标标签不能放 user_id、message_id 等高基数字段。
 
-```text
-new pool
-hot pool
-topic pool
-emotion pool
-follow pool
-```
+## 15. 媒体与后续服务
 
-Merge 后：
+媒体闭环启用时：Client → MediaService.CreateUploadSession → 受限 Presigned URL → 直传 RustFS → CompleteUpload。服务端核验实际对象和归属后才标记可引用，过期未完成对象按受控任务清理；PHP Gateway 不接收大文件流。
 
-- block filter
-- self-content rule
-- already-exposed filter
-- moderation filter
-- freshness score
-- interest score
-- random exploration
+Notification 区分在线提示、站内通知与第三方 Push，分别定义可靠性和幂等。Search 和 Analytics 从最小化事件／公开投影构建索引，删除与可见性变化可恢复同步，不能暴露内部匿名关联。
 
-Redis：
+Risk 初期采用边界限流和规则校验；独立 RiskService 只在有明确调用链和故障策略后启用。审核恢复时另行定义 PENDING／PASS／REVIEW／REJECT 状态机、供应商适配、回调幂等、人工流程和发布规则；当前阶段不实现这些能力。
 
-```text
-feed:user:{user_id}
-```
+## 16. 可观测性与健康检查
 
-使用 ZSET。
+统一结构化 JSON 日志：timestamp、level、service、instance、request_id、trace_id、message、受限 context。Request ID 贯穿 HTTP、gRPC、事务、Outbox 与消费；历史事件缺 trace 时保持缺失，不伪造原调用链。
 
-Feed 返回 cursor，不使用 page number。
+Tracing 默认可关闭，启用后覆盖入口、RPC、数据库、Redis、事件发布／消费。导出使用有界异步队列，collector 故障不能阻塞业务；丢 span 与导出失败可观测，不承诺退出时全部 flush。
 
----
+必须区分 liveness 与 readiness：进程存活不等于可接流量；关键依赖、schema、凭证、租约与推送订阅不满足时移出就绪。健康检查本身有短截止时间，避免与业务争用无限资源。
 
-# 27. Discovery / 罐头
+至少观测请求延迟／错误、SQL 锁等待与连接占用、worker 排队、Outbox 数量及最老事件年龄、发布失败、消费延迟、重试／隔离、对账水位、Redis 失败、租约丢失、在线连接、出站积压、推送延迟、重连率。
 
-第一版实现：
+隔离队列新增事件立即告警；Outbox／消费积压持续增长、对账水位停滞或权限服务故障必须有明确责任人与处置入口。日志存在不等于告警已接入；告警通道在上线验收中实测。
 
-```text
-POST 创建内容
- -> moderation
- -> post.approved
- -> Kafka
- -> DiscoveryConsumer
- -> 加入候选池
-```
+## 17. 启动、迁移与回退
 
-用户捞罐头：
-
-```text
-DiscoveryService.GetRandomCapsule
-```
-
-规则：
-
-- 过滤自己；
-- 过滤拉黑双方；
-- 过滤已看；
-- 过滤不允许内容；
-- 优先兴趣 / 情绪池；
-- 保留一定随机探索比例；
-- 返回后记录 exposure。
-
----
-
-# 28. 内容审核
-
-第一阶段定义统一接口，不绑定单一供应商。
-
-```text
-ModerationProviderInterface
-```
-
-实现：
-
-```text
-LocalRuleProvider
-RemoteProvider (placeholder/adaptor)
-```
-
-状态：
-
-```text
-PENDING
-PASS
-REVIEW
-REJECT
-```
-
-公共推荐必须要求：
-
-```text
-PASS
-```
-
-举报和人工审核单独记录。
-
----
-
-# 29. 风控
-
-同步 CheckAction 输入：
-
-```text
-user_id
-persona_id
-device_id
-ip_hash
-action
-target_type
-target_id
-context
-```
-
-输出：
-
-```text
-ALLOW
-DENY
-CHALLENGE
-REVIEW
-```
-
-第一阶段规则：
-
-- 注册频率
-- 登录失败频率
-- 发帖频率
-- 评论频率
-- 私聊频率
-- 发送 URL 频率
-- 被举报次数
-- 设备多账号
-- IP 多账号
-
-阈值必须配置化。
-
----
-
-# 30. Media
-
-流程：
-
-```text
-Client
- -> API
- -> MediaService.CreateUploadSession
- -> Presigned URL
- -> Client uploads directly to MinIO/S3
- -> CompleteUpload
-```
-
-本地开发使用 MinIO。
-
-DB 只保存：
-
-```text
-object_key
-mime_type
-size
-metadata
-```
-
-不让 PHP 接收大文件流。
-
----
-
-# 31. Logging
-
-统一 JSON Log：
-
-```json
-{
-  "timestamp": "",
-  "level": "INFO",
-  "service": "content-service",
-  "instance": "",
-  "trace_id": "",
-  "request_id": "",
-  "user_id": "",
-  "message": "",
-  "context": {}
-}
-```
-
-禁止日志打印：
-
-- password
-- access_token
-- refresh_token
-- WS ticket
-- 完整手机号
-- 完整邮箱
-- 私聊明文内容（默认）
-- 隐私密钥
-
----
-
-# 32. Tracing
-
-使用 OpenTelemetry。
-
-必须传播：
-
-```text
-traceparent
-trace_id
-request_id
-```
-
-覆盖：
-
-```text
-HTTP
-gRPC
-Kafka producer
-Kafka consumer
-MySQL
-Redis
-```
-
-第一阶段至少保证 Request ID 全链路可追踪。
-
----
-
-# 33. Metrics
-
-所有服务至少暴露：
-
-```text
-requests_total
-request_duration_seconds
-
-grpc_requests_total
-grpc_duration_seconds
-
-db_query_duration_seconds
-redis_operation_duration_seconds
-
-kafka_produce_total
-kafka_consume_total
-kafka_consumer_lag
-
-errors_total
-```
-
-Gateway：
-
-```text
-active_connections
-connections_total
-disconnects_total
-reconnects_total
-messages_in_total
-messages_out_total
-push_latency
-```
-
----
-
-# 34. Security
-
-必须：
-
-- 密码使用 Argon2id；
-- Token 只存 hash（适用时）；
-- Refresh Token 支持 revoke；
-- 服务端校验 Persona 归属；
-- API Rate Limit；
-- gRPC 内网访问；
-- Redis/MySQL/Kafka 不开放公网；
-- 上传文件校验 MIME/size；
-- SQL 参数化；
-- 统一输入验证；
-- CORS 配置化；
-- 管理后台 RBAC；
-- 管理后台 MFA 预留；
-- Audit Log；
-- Sensitive config 使用 secret/environment。
-
-生产后续使用：
-
-```text
-mTLS
-```
-
-保护内部 RPC。
-
-第一阶段本地开发允许 insecure gRPC，但配置必须明确区分 DEV / PROD。
-
----
-
-# 35. Docker Compose 开发环境
-
-`compose.yaml` 至少包含：
-
-```text
-mysql
-redis
-kafka
-minio
-```
-
-可选 profile：
-
-```text
-opensearch
-clickhouse
-prometheus
-grafana
-tempo
-loki
-```
-
-还要能够启动：
-
-```text
-api-gateway
-auth-service
-user-service
-content-service
-social-service
-chat-service
-message-service
-```
-
-要求：
+### 17.1 新开发环境
 
 ```bash
-docker compose up -d
-```
-
-后能运行基本 E2E。
-
-提供：
-
-```text
-.env.example
-```
-
-以及初始化脚本。
-
----
-
-# 36. Makefile
-
-至少：
-
-```text
-make bootstrap
-make proto
-make lint
-make test
-make up
-make down
-make migrate
-make seed
-make e2e
-make logs
-```
-
-确保新开发者：
-
-```text
-git clone
 cp .env.example .env
+# 填写独立数据库密码、JWT / Ticket / 匿名密钥及内部 RPC 凭证
 make bootstrap
 make up
+```
+
+`make up` 必须按镜像检查／构建、PostgreSQL／Redis／RabbitMQ 就绪、broker 拓扑初始化、数据库迁移、业务服务启动的顺序执行。对象存储按需 `make storage-up`，观测按 profile 启用。shell 脚本在 Bash／相应容器环境执行。
+
+### 17.2 已有环境升级
+
+升级前记录版本、备份并验证恢复路径；破坏性 schema／协议变更先停写、排空旧请求与消费者。已有 PostgreSQL 卷不会重跑入口初始化，使用现有迁移入口补齐新增角色／schema，不删除数据卷。
+
+无历史导入的受控升级顺序如下，不能在不兼容旧 worker 仍写入时直接执行：
+
+```bash
+make build-runtime
+make infra-up
 make migrate
-make e2e
+# 核对 schema、角色、协议与待恢复任务，再启动应用
+make app-up
 ```
 
-即可跑起来。
+`make infra-up` 包含 broker-init；不能省略拓扑更新，也不能假设 `make app-up` 会代做。`make migrate` 执行当前 PostgreSQL Phinx 增量迁移，不手动运行旧 MySQL 迁移。DDL 锁等待和语句预算有界，失败报告原因，不跳过约束或静默宣告成功。
 
----
+若保留旧 MongoDB 消息，按 [消息存储与升级](POSTGRESQL_MESSAGE_STORAGE.md) 停写、停止旧 Relay／消费者、冻结三个集合的导出，在目标消息表为空时单事务导入；导入及数量、seq、快照、Outbox、分页核对完成后才执行 app-up。其他旧库数据须制定对应导入核对方案，不能只迁消息就声称全部数据迁移完成。
 
-# 37. 测试
+未上线允许协调升级协议与客户端，不等于允许覆盖已应用迁移。保留有用数据时新增增量迁移；只有明确可丢弃的测试环境才可重建基线。回退前确认新数据能被旧代码解释；不可逆变更优先前向修复或恢复已验证备份，不盲目执行 down。回填历史匿名快照不得公开归属或篡改既有展示。
 
-PHP：
+## 18. 测试、CI 与验证证据
 
-```text
-PHPUnit / Pest（二选一，统一即可）
-```
+使用项目已有 PHPUnit、PHPStan、Go tests、Buf 和生成工具，不再重新选择测试框架。验证命令以当前 Makefile 为入口：
 
-Go：
-
-```text
-go test ./...
-```
-
-必须包含：
-
-## Unit
-
-- Snowflake
-- ShardRouter
-- Idempotency
-- Outbox
-- Risk rules
-- Feed ranking
-- Discovery filter
-
-## Integration
-
-- MySQL
-- Redis
-- Kafka
-- gRPC
-
-## Contract
-
-- Proto breaking check
-- Event schema compatibility
-
-## E2E
-
-至少验证：
-
-```text
-Login
- -> Create Persona
- -> Create Post
- -> Approve Post (dev mock)
- -> Get Feed
- -> Like
- -> Create Conversation
- -> Send Message
- -> Sync Message
-```
-
----
-
-# 38. Static Analysis / Quality
-
-PHP：
-
-```text
-PHPStan
-PHP-CS-Fixer / Pint-like formatter
-Composer audit
-```
-
-Go：
-
-```text
-gofmt
-go vet
-golangci-lint
-```
-
-Proto：
-
-```text
-buf lint
-buf breaking
-```
-
----
-
-# 39. CI
-
-GitHub Actions：
-
-PR：
-
-```text
-lint
-static analysis
-unit test
-proto lint
-proto breaking
-build
-```
-
-main：
-
-```text
-all checks
-build Docker images
-security scan
-```
-
-Docker image 使用：
-
-```text
-git sha
-```
-
-作为不可变 tag。
-
----
-
-# 40. 配置管理
-
-环境变量命名统一：
-
-```text
-APP_ENV
-APP_NAME
-SERVICE_NAME
-SERVICE_INSTANCE_ID
-
-MYSQL_DSN
-REDIS_DSN
-KAFKA_BROKERS
-
-GRPC_USER_SERVICE
-GRPC_CONTENT_SERVICE
-
-OTEL_EXPORTER_OTLP_ENDPOINT
-
-JWT_PRIVATE_KEY
-JWT_PUBLIC_KEY
-```
-
-不要让不同服务使用完全不同风格的变量名。
-
----
-
-# 41. 第一阶段不做的事情
-
-避免 AI 过度工程：
-
-第一阶段不要实现：
-
-- Istio 全套 Service Mesh
-- 跨地域多活数据库
-- 真正 256 物理分片
-- 复杂 ML 推荐模型
-- Elasticsearch/OpenSearch 深度优化
-- ClickHouse 大规模集群
-- 全自动 K8s Autoscaling
-- 多机房一致性协议
-- 自研 MQ
-- 自研数据库
-- 自研对象存储
-
-必须保留接口和扩展点，但不要提前增加复杂度。
-
----
-
-# 42. 开发阶段
-
-## Phase 0 — Repository Foundation
-
-完成：
-
-- Monorepo
-- Composer workspace/脚本
-- Go module
-- Buf
-- Proto generation
-- Docker Compose
-- MySQL
-- Redis
-- Kafka
-- MinIO
-- Logging
-- Request ID
-- Base gRPC server
-- Base gRPC client
-- Health checks
-- Makefile
-- CI
-
-验收：
-
-```text
-make up
-make proto
+```bash
 make lint
+make analyse
 make test
+make test-integration
+make test-postgres
+make test-message
+make e2e
+make e2e-social
 ```
 
-全部通过。
-
----
-
-## Phase 1 — Auth + User + Persona
-
-完成：
+这些命令不是无条件可复制到生产的脚本。数据库集成测试只运行于已迁移、可丢弃的独立 `test_*` 数据库；测试配置须实际传入容器，不能仅在宿主设置未被 Compose 转发的变量。Redis／RabbitMQ 及端口、网络、队列同样隔离，禁止并行测试污染开发或生产环境。
 
-- AuthService
-- UserService
-- API Gateway
-- JWT access token
-- refresh token
-- device
-- Persona CRUD
-- migrations
-- tests
-
-E2E：
+验证重点：
 
-```text
-login
- -> get me
- -> create persona
- -> list personas
-```
+- Unit：身份授权、快照、序列化精度、预算、错误映射、幂等与状态机。
+- Integration：真实 PostgreSQL 事务／锁／唯一竞争、Outbox、Redis 安全状态与租约、RabbitMQ confirm／隔离／回流、真实 gRPC 故障。
+- Contract：Proto 兼容、事件 schema、字段隐私、配置约束、生成产物可重复。连续两次生成第二次不应改变文件。
+- E2E：微信／QQ 测试适配登录 → 自动建立双身份 → 真身／匿名发帖评论 → 板块／主页／本人管理 → MAIN 互动 → 私聊 → 同键重试 → 历史／增量同步 → 拉黑与越权拒绝 → 设备注销。
+- 故障恢复：提交确认丢失、消费者处理后 ACK 前崩溃、乱序、隔离后重放、Redis 重启与撤销恢复、worker 长时间空闲及暂停、依赖重连。
 
----
+当前阶段 E2E 不包含手动创建 Persona 或 mock 审核通过。真实故障、数据库主备切换、RabbitMQ 多节点与容量验收不能由应用异常注入或单节点测试替代。
 
-## Phase 2 — Content + Social
-
-完成：
-
-- ContentService
-- SocialService
-- Post
-- Comment
-- Like
-- Follow
-- Block
-- Media metadata
-- Outbox
-- Kafka events
+PR 根据改动运行必要的语法、静态、单元、契约和受影响集成检查；发布候选必须运行核心 E2E、构建和恢复检查。缺依赖造成 skipped、未执行或超时必须单列，不能计为通过。镜像用不可变 git SHA 标识；依赖审计和镜像安全检查纳入发布流程。
 
-E2E：
+每次验收记录代码版本、环境、数据规模、命令、通过／失败／跳过、持续时间、结果文件与尚未验证项。历史测试数量不搬作当前版本的证明。
 
-```text
-create post
- -> get post
- -> comment
- -> like
- -> follow
-```
-
----
-
-## Phase 3 — Chat + Message
-
-完成：
+## 19. 容量模型与上线可靠性目标
 
-- ChatService
-- MessageService
-- logical shard router
-- conversation seq
-- idempotent SendMessage
-- message outbox
-- sync messages
-- WS protocol
-- Gateway skeleton
+以下为首轮容量与恢复验收目标，尚不是实测结果。可根据部署资源和产品预期修订，但必须记录理由和测量结果，不能测试失败后无记录放宽门槛。
 
-E2E：
+### 19.1 首轮容量基准
 
-```text
-create conversation
- -> send message
- -> server ack
- -> consume message.created
- -> sync message
-```
-
----
-
-## Phase 4 — Feed + Discovery
+| 项目         | 初始测试配置                                                          |
+|--------------|-----------------------------------------------------------------------|
+| 数据规模     | 10 万账号、10 万帖子、100 万消息，包含热点会话及不均匀分布            |
+| 连接         | 1 万 WebSocket 长连接，使用真实 Ticket 和心跳                         |
+| 并发负载     | 持续 100 次／秒受认证读请求 + 50 条／秒私聊写入，写请求含幂等重试样本 |
+| 载荷与接收端 | 常规 1KiB 消息正文，另测协议允许的边界载荷；每个收件账号 2 个设备     |
+| 稳态         | 预热 5 分钟后持续 30 分钟，分别记录成功、错误与超时                   |
+| 突发与恢复   | 10% 连接在 60 秒内带抖动重连；消息负载翻倍 5 分钟后恢复基线           |
+| 长稳         | 发布候选再执行 24 小时稳定性测试，记录资源、积压与连接趋势            |
 
-完成：
+常规受认证读请求目标 P95 ≤ 300ms、P99 ≤ 800ms；消息从客户端请求到持久化 ACK 目标 P95 ≤ 500ms、P99 ≤ 1000ms；在线提示从提交到客户端接收目标 P95 ≤ 1s。第三方 OAuth 单独按供应商耗时和既有超时预算评估，不混入普通读请求分位数。
 
-- FeedService
-- DiscoveryService
-- Redis feed
-- candidate pools
-- exposure
-- basic ranking
-- basic random capsule
-
-E2E：
-
-```text
-approved post
- -> Kafka
- -> feed/discovery pool
- -> user retrieves item
-```
-
----
-
-## Phase 5 — Moderation + Risk + Notification
-
-完成：
-
-- ModerationService
-- RiskService
-- NotificationService
-- mock providers
-- rate limit
-- report
-- push abstraction
-
----
-
-## Phase 6 — Observability + Production Infra
-
-完成：
-
-- Prometheus
-- Grafana
-- OTel
-- Loki
-- Tempo
-- Docker image
-- Kubernetes manifests
-- Helm
-- readiness
-- rolling deployment
-- Gateway drain
-
----
-
-# 43. 首次 Coding Agent 执行范围
-
-如果这是一个空仓库：
-
-**不要一次性实现全部 Phase。**
-
-第一次执行必须：
-
-1. 完成 Phase 0；
-2. 完成 Phase 1；
-3. 为后续所有 Service 创建明确目录和 README；
-4. 建立所有核心 Proto，但未实现 RPC 可以明确 TODO；
-5. 建立事件定义；
-6. 建立统一错误码；
-7. 建立本地 Docker Compose；
-8. 跑通 Phase 1 E2E；
-9. 输出当前状态；
-10. 再继续 Phase 2。
-
-如果环境和上下文允许连续执行，则按 Phase 顺序继续，但每个 Phase 都必须通过测试后再继续。
-
----
-
-# 44. Definition of Done
-
-一个功能只有满足以下条件才算完成：
-
-- 有 migration；
-- 有 Domain / Application 层；
-- 有 transport handler；
-- 有 input validation；
-- 有统一错误码；
-- 有日志；
-- 有 request_id / trace_id；
-- 有 unit test；
-- 有 integration test（适用时）；
-- 写操作考虑 idempotency；
-- 领域事件考虑 Outbox；
-- 文档已更新；
-- lint/test 全绿。
-
----
-
-# 45. PHP 服务内部推荐结构
-
-每个服务：
-
-```text
-src/
-├── Application/
-│   ├── Command/
-│   ├── Query/
-│   ├── DTO/
-│   └── Service/
-│
-├── Domain/
-│   ├── Entity/
-│   ├── ValueObject/
-│   ├── Enum/
-│   ├── Event/
-│   ├── Repository/
-│   └── Service/
-│
-├── Infrastructure/
-│   ├── Database/
-│   ├── Redis/
-│   ├── Kafka/
-│   ├── Repository/
-│   └── Outbox/
-│
-├── Transport/
-│   └── Grpc/
-│
-└── Support/
-```
-
-避免：
-
-```text
-GrpcHandler -> SQL
-```
-
-正确：
-
-```text
-GrpcHandler
- -> Application Service
- -> Domain
- -> Repository Interface
- -> Infrastructure Repository
-```
-
----
-
-# 46. Webman API Gateway 结构
-
-```text
-app/
-├── controller/
-├── middleware/
-├── validation/
-├── grpc/
-├── auth/
-├── response/
-├── exception/
-└── support/
-```
-
-Controller 必须薄。
-
-示例：
-
-```text
-Controller
- -> validate
- -> grpc client
- -> transform
- -> response
-```
-
-禁止 API Gateway 出现业务持久化逻辑。
-
----
-
-# 47. Go Gateway 目录
-
-```text
-cmd/gateway/
-internal/
-├── connection/
-├── protocol/
-├── auth/
-├── presence/
-├── push/
-├── grpc/
-├── metrics/
-└── lifecycle/
-```
-
-重点测试：
-
-- 连接建立
-- Ticket 验证
-- heartbeat timeout
-- multi-device
-- push
-- disconnect cleanup
-- graceful drain
-- reconnect behavior
-
----
+无故障稳态的非预期失败／超时率目标 ≤ 0.1%，预期权限拒绝和主动过载拒绝分别统计且不能用来掩盖失败。每项均报告实际吞吐、尾延迟、CPU、内存、网络、DB 连接／锁等待、worker 排队、积压和重连；过载时有界拒绝，恢复基线后积压应可收敛。
 
-# 48. 性能设计
-
-不要在第一阶段伪造“百万并发已完成”。
+### 19.2 恢复与持久性
 
-必须准备压测：
+消息返回成功后，在应用进程重启、消费者崩溃和 broker 暂时不可用的故障模型下，不允许丢失数据库消息与 Outbox。推送可重复或遗漏，但重连补拉须恢复。数据库主机／磁盘灾难是独立故障模型，不能把单库事务保证称为跨灾难零丢失。
 
-HTTP：
+上线前必须完成备份恢复和故障演练。初始数据库灾难恢复目标 RPO ≤ 15 分钟、RTO ≤ 4 小时，需要相应备份／日志归档与恢复流程支撑；当前单机 Compose 不证明达成。若业务要求已确认消息跨主机灾难也 RPO=0，必须另行建设并验证满足该目标的复制与切换方案。
 
-```text
-k6 / wrk / vegeta
-```
+服务恢复后应在 5 分钟内恢复正常接入；故障期间积压清空时间按积压量与恢复吞吐单独报告。隔离事件、未完成对账和未知提交结果不能仅因健康检查变绿就算恢复完成。
 
-WebSocket：
+容量扩展以数据库饱和、worker 排队、热点、Gateway 资源和消费落后等测量为触发：先优化查询／索引和批量路径，再扩资源与副本，最后才分片。不能仅凭注册数或在线数决定数据库分片。
 
-创建专门压测工具。
+## 20. 开发阶段与阶段出口
 
-记录：
+阶段用于验收组织，不要求从零重做已有功能，也不代表按编号已全部完成。
 
-```text
-connections
-CPU
-memory
-network
-message rate
-P50
-P95
-P99
-error rate
-reconnect rate
-```
+| 阶段       | 范围                                                           | 必须验证的出口                                             |
+|------------|----------------------------------------------------------------|------------------------------------------------------------|
+| A 基础设施 | 工具链、Compose、PostgreSQL、Redis、RabbitMQ、迁移、日志与健康 | 新环境启动及已有卷升级；schema／角色隔离；构建与生成可重复 |
+| B 账号身份 | OAuth、设备会话、双身份、快照、投影与内部授权                  | 注册原子性、匿名不关联、失败关闭访问、注销与恢复           |
+| C 内容社交 | 发帖评论、板块、主页、本人管理、MAIN 互动、拉黑                | 同帖并发身份锁定、游标、双向权限、删除与幂等；无审核依赖   |
+| D 私聊消息 | 会话规则、事务、幂等、Outbox、同步、实时提示                   | 未知提交恢复、乱序与重试、RPC 对账、拉黑／封禁边界         |
+| E 上线准备 | 超时、背压、告警、备份、安全与容量                             | 第 18／19 节核心验收，已知阻断差异关闭或明确缩小上线范围   |
+| F 按需扩展 | 上传闭环、推荐、Discovery、搜索、Push、举报与管理              | 每项独立明确数据归属、失败恢复与验收，不强制全部部署       |
 
-Gateway 单机连接上限必须通过实际负载确定。
+审核、账号注销生命周期、群聊、物理分片和多地域部署独立立项，不能因为进入 F 阶段自动实施。
 
----
+## 21. 代码结构、配置与文档维护
 
-# 49. 生产扩容边界
+保留 Monorepo：apps、gateways、services、contracts、packages、infra、scripts、tests、database、doc。各服务采用 Transport → Application → Domain / Repository Interface → Infrastructure；Controller／gRPC handler 保持薄，业务不直接堆在传输层。
 
-所有重要层必须 Stateless 或可水平扩容：
+PHP 使用 strict_types、明确类型、适当的 readonly DTO 和 enum、构造注入，领域层不使用 Service Locator。Go 传播 context、显式错误处理、有界 goroutine 和优雅退出；不吞 panic，不以无限后台任务掩盖资源问题。
 
-```text
-Webman API
-gRPC Service
-Kafka Consumer
-Gateway
-Feed Worker
-Notification Worker
-```
+共享包只包含日志、RPC、追踪、数据库基础设施、ID 与 Outbox 等通用能力，不共享跨服务业务模型。未实现代码应有明确阶段或任务引用，不创建大量假成功 stub。
 
-State 放在：
+配置使用既有命名体系：APP_ENV／SERVICE_NAME、PG_*、REDIS_*、RABBITMQ_*、STORAGE_*、GRPC_*、INTERNAL_RPC_*、JWT_SECRET、WS_TICKET_SECRET、ANONYMOUS_IDENTITY_KEY、OTEL_EXPORTER_OTLP_ENDPOINT。新增配置同时补充默认、范围、生产限制与环境示例，不重新引入 MYSQL_DSN 或 KAFKA_BROKERS。
 
-```text
-MySQL
-Redis
-Kafka
-Object Storage
-```
+根 README 维护架构、服务状态、依赖、启动、迁移、生成、测试、端口、事件拓扑、Redis key 和排障入口。服务 README 说明职责、Owned Data、RPC、消费／生产事件、依赖、运行与验证。每份文档标明现行规则、操作手册或历史记录；“已实现”和“已验收”分别陈述。
 
----
+## 22. Definition of Done
 
-# 50. 关键架构不变量
+功能完成必须同时满足：
 
-以下规则后续任何功能都不应轻易破坏：
+- 业务规则、输入、权限、幂等、失败和公开投影明确。
+- 数据归属、必要约束／索引、增量迁移与已有数据处理完整。
+- 传输契约、错误码、日志、request_id／trace_id 和必要指标齐全。
+- 关键事件原子写入 Outbox，重复／乱序／失败恢复有对应验证。
+- 测试与静态检查按改动范围通过，关键路径不以 mock 代替所需真实集成。
+- 配置、部署、回退限制和文档同步；生成文件由工具生成。
+- 报告已完成、未执行、已知限制及证据，不把接口／表／队列存在当成功能完成。
 
-```text
-User != Persona
+项目上线完成还要求核心 E2E、安全、容量与恢复验收通过，不能仅凭 make up 或单元测试全绿宣称可承载生产流量。
 
-HTTP external
- -> Webman
+## 23. 本版与现状的已知差异
 
-Realtime external
- -> Gateway
+下表根据当前文档、配置及本轮查看的入口整理，未在本次文档修改中重新执行运行时验收。所有差异须在对应功能交付时核对实现；不能把此表当完整代码审计结果。
 
-Internal sync
- -> gRPC
+| 差异                                                           | 处理要求                                                         |
+|----------------------------------------------------------------|------------------------------------------------------------------|
+| Chat 对账入口仍以 message_runtime 与 chat_runtime 双连接读写   | 改为经授权的 MessageService 批量 RPC，移除 Chat 进程的消息库凭据 |
+| 消息恢复文档仍规定 300 秒无限回流                              | 实现持久化次数／时间预算和 exhausted 隔离，更新手册与故障验收    |
+| Persona 迁移手册仍以旧 MySQL DDL 和业务骨架描述当前状态        | 改为当前 PostgreSQL 迁移与分功能状态；旧内容归档                 |
+| 身份规则中的同帖昵称、会话复用、拉黑历史读取等仍有待定文字     | 按第 4 节统一规则、核对实现与迁移；未整改前不能宣称行为已一致    |
+| 现有公开路由含 User ID 拉黑／can-message 目标                  | 核查公开身份边界并迁移到 MAIN／来源引用，不扩大匿名映射暴露      |
+| Gateway 仍有 JSON 与未完成的上行／送达协议，既有连接撤销有边界 | 按第 12 节和权限要求验收；未完成能力关闭或明确限制               |
+| 消息运行库未接入物理分片                                       | 当前允许；删除“已具备分片”的宣传，扩展前满足第 7.2 节            |
+| 请求总预算、所有关键写入幂等与事件去重尚需逐链路核对           | 以第 7／8／10／11 节为准，不能只检查单跳 timeout 或请求 ID 存在  |
+| 容量、备份恢复、真实主备／多节点故障证据不完整                 | 第 19 节是待验证目标，缺少证据时明确未通过                       |
 
-Internal async
- -> Kafka
-
-Business truth
- -> MySQL
-
-Realtime/cache
- -> Redis
-
-Large media
- -> Object Storage
-
-Search
- -> OpenSearch
-
-Analytics
- -> ClickHouse
-```
-
-并且：
-
-```text
-Service cannot directly write another Service DB
-
-Critical write
- -> Idempotent
-
-Critical domain event
- -> Transactional Outbox
-
-Consumer
- -> Idempotent
-
-RPC
- -> Deadline
-
-Large lists
- -> Cursor pagination
-
-Feed
- -> Redis/read model
-
-Message
- -> conversation_id sharding key
-```
-
----
-
-# 51. Coding Style
-
-PHP：
-
-- `declare(strict_types=1);`
-- PHP 8.4 typing
-- readonly DTO where appropriate
-- enum for app status
-- no magic array when typed DTO is practical
-- constructor injection
-- no Service Locator in domain
-- no global mutable state
-
-Go：
-
-- context propagation
-- explicit error handling
-- graceful shutdown
-- bounded goroutines
-- no silent panic recovery
-- structured logging
-
-所有语言：
-
-- small functions
-- clear naming
-- avoid premature abstraction
-- no dead code
-- no TODO without issue/phase context
-
----
-
-# 52. README 最终必须包含
-
-根 README：
-
-1. 架构简介
-2. 服务列表
-3. 环境依赖
-4. 本地启动
-5. Proto 生成
-6. Migration
-7. Test
-8. E2E
-9. 常用 Make 命令
-10. 服务端口
-11. Kafka Topics
-12. 数据库列表
-13. Redis Key 规范入口
-14. Troubleshooting
-
-每个 Service README：
-
-```text
-Responsibility
-Owned Data
-gRPC API
-Consumed Events
-Produced Events
-Dependencies
-Local Run
-Test
-```
-
----
-
-# 53. 最终交付检查清单
-
-AI 在认为项目基础搭建完成前，必须检查：
-
-```text
-[ ] docker compose 能正常启动
-[ ] 所有必要 container healthy
-[ ] proto 可以重新生成
-[ ] 没有生成代码被人工修改
-[ ] migrations 可重复执行
-[ ] auth-service health 正常
-[ ] user-service health 正常
-[ ] api-gateway health 正常
-[ ] 登录 E2E 正常
-[ ] Persona E2E 正常
-[ ] request_id 全链路存在
-[ ] gRPC deadline 已配置
-[ ] 错误响应统一
-[ ] secrets 未提交
-[ ] PHPStan 通过
-[ ] tests 通过
-[ ] README 可让新开发者直接启动
-```
-
----
-
-# 54. AI 开始执行时的第一条动作
-
-开始后：
-
-```text
-1. 检查仓库
-2. 输出准备创建/修改的目录与组件
-3. 初始化 Phase 0
-4. 实际运行命令
-5. 修复错误
-6. 完成 Phase 0 验收
-7. 开始 Phase 1
-8. 完成登录 + Persona E2E
-9. 汇报代码结构、测试结果和下一阶段
-```
-
-不要只给实施建议。
-
-**直接实施。**
-
----
-
-# 55. 最终原则
-
-本项目不是为了第一天制造一个庞大的分布式系统。
-
-目标是：
-
-```text
-小规模时：
-部署简单、开发快
-
-流量增长时：
-按服务扩实例
-
-数据增长时：
-按逻辑边界拆数据库
-
-消息增长时：
-按 conversation_id 分片
-
-连接增长时：
-增加 Gateway
-
-异步任务增长时：
-增加 Kafka Partition + Consumer
-
-整个过程中：
-客户端协议和核心业务模型尽量稳定
-```
-
-优先构建：
-
-```text
-正确边界
-稳定协议
-可靠数据
-完整测试
-可观测性
-```
-
-然后才是：
-
-```text
-极限性能
-```
+本次不修改这些运行时代码，也不自动迁移数据。后续按核心闭环和风险优先级逐项整改，遵循：清晰边界、稳定契约、可靠数据、可恢复失败、可验证容量。
