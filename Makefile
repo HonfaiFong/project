@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration test-postgres test-message test-database-failover up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone postgres-ready redis-ready seed e2e e2e-social latency-probe logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration test-legacy-mysql test-postgres test-message test-database-failover up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone postgres-ready redis-ready seed e2e e2e-social latency-probe logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -33,6 +33,9 @@ test-integration:
 	@echo "Running PHP Integration Tests..."
 	@vendor/bin/phpunit --testsuite Integration --fail-on-skipped
 
+test-legacy-mysql:
+	@vendor/bin/phpunit --testsuite LegacyMysql --fail-on-skipped
+
 test-postgres:
 	@echo "Running PostgreSQL integration tests..."
 	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 --entrypoint php database-migrate vendor/bin/phpunit tests/Integration/PostgresMigrationRuntimeTest.php tests/Integration/EloquentPersistenceTest.php tests/Integration/UserOutboxTransactionTest.php --fail-on-skipped
@@ -59,7 +62,7 @@ storage-up:
 	docker compose --profile storage run --rm storage-init
 
 app-up:
-	docker compose up -d auth-service user-service user-outbox-relay message-outbox-relay chat-message-consumer content-service social-service chat-service message-service api-gateway realtime-gateway
+	docker compose up -d auth-service user-service user-outbox-relay message-outbox-relay chat-message-consumer chat-message-reconciler content-service social-service chat-service message-service api-gateway realtime-gateway
 
 # 标准开发入口: 镜像校验/构建 -> 启动基础设施 -> 等待 PostgreSQL 就绪 -> 迁移数据库 -> 启动应用服务
 up:
@@ -78,7 +81,7 @@ up:
 	@echo ">>> 执行数据库基线与增量迁移..."
 	@$(MAKE) migrate
 	@echo ">>> 启动业务应用与网关服务..."
-	docker compose up -d auth-service user-service user-outbox-relay message-outbox-relay chat-message-consumer content-service social-service chat-service message-service api-gateway realtime-gateway
+	docker compose up -d auth-service user-service user-outbox-relay message-outbox-relay chat-message-consumer chat-message-reconciler content-service social-service chat-service message-service api-gateway realtime-gateway
 
 down:
 	docker compose down

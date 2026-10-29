@@ -198,6 +198,21 @@ final class ChatMessagePersistenceTest extends TestCase
             self::assertSame('realtime unavailable', $exception->getMessage());
         }
         self::assertSame('1', (string)$chatRepository->findById($conversationId)['last_message_seq']);
+        $invalidEvents = 0;
+        foreach ([['seq' => '9223372036854775808'], ['created_at' => '2026-13-11 00:00:00.000'], ['unexpected_private_field' => 'secret']] as $invalid) {
+            $badEvent = new EventEnvelope(
+                eventId: $event->eventId, eventType: $event->eventType, eventVersion: 1,
+                occurredAt: $event->occurredAt, traceId: '', producer: 'message-service', key: $conversationId,
+                payload: ['message' => array_replace($event->payload['message'], $invalid)],
+            );
+            try {
+                $handler->handle($badEvent);
+                self::fail('Invalid events must be distinguishable from dependency outages');
+            } catch (\Services\ChatService\Domain\Exception\InvalidMessageEvent) {
+                $invalidEvents++;
+            }
+        }
+        self::assertSame(3, $invalidEvents);
         $realtime->fail = false;
         $handler->handle($event);
         $handler->handle($event);

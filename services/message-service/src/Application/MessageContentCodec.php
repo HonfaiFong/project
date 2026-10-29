@@ -14,7 +14,20 @@ final class MessageContentCodec
             return null;
         }
         try {
-            $decoded = json_decode($value, false, 512, JSON_THROW_ON_ERROR);
+            // Validate grammar, but never compare the decoded PHP numbers: they may be floats.
+            json_decode($value, false, 512, JSON_THROW_ON_ERROR);
+            $pattern = <<<'REGEX'
+~"(?:\\.|[^"\\])*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?~s
+REGEX;
+            // Tag strings as well as numbers so JSON strings cannot impersonate numeric tokens.
+            $tagged = preg_replace_callback($pattern, function (array $match): string {
+                $token = $match[0];
+                $tag = $token[0] === '"'
+                    ? 's:' . json_decode($token, flags: JSON_THROW_ON_ERROR)
+                    : 'n:' . $this->normalizeNumber($token);
+                return json_encode($tag, JSON_THROW_ON_ERROR);
+            }, $value);
+            $decoded = json_decode($tagged, false, 512, JSON_THROW_ON_ERROR);
             return json_encode(
                 $this->normalizeJsonValue($decoded),
                 JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
@@ -22,6 +35,23 @@ final class MessageContentCodec
         } catch (JsonException) {
             return null;
         }
+    }
+
+    private function normalizeNumber(string $token): string
+    {
+        preg_match('/\A(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?\z/', $token, $parts);
+        $fraction = $parts[3] ?? '';
+        $exponent = $parts[4] ?? '0';
+        if (strlen(ltrim($exponent, '+-0')) > 6) {
+            throw new JsonException('Number exponent exceeds PostgreSQL numeric range');
+        }
+        $digits = ltrim($parts[2] . $fraction, '0');
+        if ($digits === '') {
+            return '0';
+        }
+        $coefficient = rtrim($digits, '0');
+        $scale = (int)$exponent - strlen($fraction) + strlen($digits) - strlen($coefficient);
+        return $parts[1] . $coefficient . 'e' . $scale;
     }
 
     private function normalizeJsonValue(mixed $value): mixed

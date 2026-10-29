@@ -406,6 +406,8 @@ Outbox 的 `aggregate_id` 标识事件所属实体；`event_key` 单独保存流
 3. **日志排查**:
    所有微服务输出严格的 JSON 日志，包含 `trace_id` 与 `request_id`，可通过 `docker compose logs -f <service_name>` 检索单个链路。
 
+消息消费重试、死信恢复、摘要对账和独立测试入口见 [消息恢复说明](doc/MESSAGE_RECOVERY.md)。
+
 ## 14. Anonymous identity contract
 
 完整中文业务规则见 [真身与匿名分身业务规则](doc/USER_PERSONA_BUSINESS_RULES.md)，涵盖身份生命周期、操作权限、匿名展示、私聊、拉黑及验收场景。迁移与部署见 [Persona 迁移说明](doc/PERSONA_IDENTITY_MIGRATION.md)。

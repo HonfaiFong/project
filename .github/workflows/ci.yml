@@ -26,7 +26,7 @@ jobs:
       - run: docker compose up -d rabbitmq
       - run: docker compose run --rm rabbitmq-init
       - name: Verify Stream routing and mandatory return
-        run: vendor/bin/phpunit tests/Integration/RabbitMqPublisherContractTest.php --fail-on-skipped
+        run: vendor/bin/phpunit tests/Integration/RabbitMqPublisherContractTest.php tests/Integration/RabbitMqMessageRecoveryTest.php --fail-on-skipped
         env:
           RABBITMQ_INTEGRATION: '1'
           RABBITMQ_HOST: 127.0.0.1

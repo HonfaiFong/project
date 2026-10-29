@@ -629,6 +629,24 @@ services:
       rabbitmq-init:
         condition: service_completed_successfully
 
+  chat-message-reconciler:
+    image: project-php-runtime:rabbitmq
+    restart: unless-stopped
+    working_dir: /app
+    command: php services/chat-service/bin/message-reconciler.php
+    environment:
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DATABASE: ${PG_DATABASE:-social_backend}
+      PG_USER: chat_runtime
+      PG_PASSWORD: ${PG_CHAT_RUNTIME_PASSWORD:?Set PG_CHAT_RUNTIME_PASSWORD in .env}
+      PG_MESSAGE_RUNTIME_PASSWORD: ${PG_MESSAGE_RUNTIME_PASSWORD:?Set PG_MESSAGE_RUNTIME_PASSWORD in .env}
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   chat-message-consumer:
     image: project-php-runtime:rabbitmq
     container_name: social-chat-message-consumer

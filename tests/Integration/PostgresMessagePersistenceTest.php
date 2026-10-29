@@ -369,6 +369,79 @@ final class PostgresMessagePersistenceTest extends TestCase
         return PostgresConnectionFactory::fromEnvironment(['PG_SCHEMA' => 'message_db']);
     }
 
+    public function testOutboxCannotReferenceTwoDifferentValidMessages(): void
+    {
+        $this->write('900', '1', 'one');
+        $this->write('800', '2', 'two');
+        $this->pdo->exec('DELETE FROM outbox_events WHERE id = 800');
+        try {
+            $this->pdo->exec('UPDATE outbox_events SET message_id = 800 WHERE id = 900');
+            self::fail('Independent valid message references must still describe the same message');
+        } catch (PDOException $exception) {
+            self::assertSame('23503', $exception->getCode());
+        }
+    }
+
+    public function testConcurrentMessageTimeIsSampledAfterTheSequenceLockWait(): void
+    {
+        $this->write('900', '1', 'first');
+        $this->pdo->beginTransaction();
+        $this->pdo->exec('UPDATE conversation_sequences SET last_seq = last_seq WHERE conversation_id = 1');
+        $worker = proc_open([PHP_BINARY, __DIR__ . '/../Support/concurrent_message_sender.php', 'after-lock', 'signal-clock'],
+            [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes);
+        self::assertIsResource($worker);
+        try {
+            fwrite($pipes[0], '1');
+            fclose($pipes[0]);
+            stream_set_timeout($pipes[1], 10);
+            self::assertSame("clock-sampled\n", fgets($pipes[1]));
+            usleep(30_000);
+            $this->pdo->exec('UPDATE messages SET created_at = clock_timestamp() WHERE seq = 1');
+            $this->pdo->commit();
+            $output = stream_get_contents($pipes[1]);
+            $error = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            self::assertSame(0, proc_close($worker), $output . $error);
+            $rows = $this->repository()->listAfter('1', '0', 10);
+            self::assertSame(['1', '2'], array_column($rows, 'seq'));
+            self::assertGreaterThanOrEqual($rows[0]['created_at'], $rows[1]['created_at']);
+        } finally {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            if (is_resource($worker)) {
+                proc_terminate($worker);
+                proc_close($worker);
+            }
+        }
+    }
+
+    public function testReconciliationRepairsSummaryWithoutRegressingTimeOrSequence(): void
+    {
+        $this->write('900', '1', 'one');
+        $this->write('800', '1', 'two');
+        $chatPdo = PostgresConnectionFactory::fromEnvironment(['PG_SCHEMA' => 'chat_db']);
+        $chatPdo->beginTransaction();
+        try {
+            $chatPdo->exec("INSERT INTO conversations (id, created_at, updated_at) VALUES (1, '2026-10-29 00:00:00+00', '2026-10-29 00:00:00+00')");
+            $chat = new \Services\ChatService\Infrastructure\PdoChatRepository($chatPdo);
+            $reconciler = new \Services\ChatService\Infrastructure\MessageSummaryReconciler($this->pdo, $chat);
+            self::assertSame(1, $reconciler->runOnce());
+            $row = $chat->findById('1');
+            self::assertSame('2', (string)$row['last_message_seq']);
+            self::assertSame('800', (string)$row['last_message_id']);
+            $chat->applyMessageSummary('1', '700', '3', '2026-10-28 00:00:00.000');
+            self::assertSame(1, $reconciler->runOnce());
+            $row = $chat->findById('1');
+            self::assertSame('3', (string)$row['last_message_seq']);
+            self::assertSame('700', (string)$row['last_message_id']);
+            self::assertSame('2026-10-29 00:00:00.123', (new \DateTimeImmutable($row['last_message_at']))->format('Y-m-d H:i:s.v'));
+        } finally {
+            $chatPdo->rollBack();
+        }
+    }
+
     private function manager(): PostgresMessageTransactionManager { return new PostgresMessageTransactionManager($this->pdo); }
     private function repository(): PostgresMessageRepository { return new PostgresMessageRepository($this->pdo); }
     private function app(): MessageApplicationService

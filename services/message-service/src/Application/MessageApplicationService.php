@@ -96,8 +96,7 @@ final class MessageApplicationService
             return $this->publicMessage($existing);
         }
 
-        // Values outside the transaction callback stay stable on transaction retries.
-        $now = ($this->clock)();
+        // Identifiers stay stable on transaction retries; time follows the sequence lock.
         $messageId = $this->ids->nextId();
         $eventId = TraceContext::generateUuidV7();
         $traceId = TraceContext::current()->traceId;
@@ -110,7 +109,6 @@ final class MessageApplicationService
                 $content,
                 $member,
                 $normalized,
-                $now,
                 $messageId,
                 $eventId,
                 $traceId,
@@ -124,10 +122,12 @@ final class MessageApplicationService
                     return $this->publicMessage($existing);
                 }
 
+                $sequence = $transaction->nextSequence($conversationId, ($this->clock)());
+                $now = ($this->clock)();
                 $row = [
                     'message_id' => $messageId,
                     'conversation_id' => $conversationId,
-                    'seq' => $transaction->nextSequence($conversationId, $now),
+                    'seq' => $sequence,
                     'sender_user_id' => $trustedUserId,
                     'sender_persona_id' => (string)$member['persona_id'],
                     'sender_identity_mode' => (int)$member['identity_mode'],

@@ -5,6 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../../vendor/autoload.php';
 
 use Packages\Database\PostgresConnectionFactory;
+use Packages\Database\EloquentConnection;
 use Packages\Observability\MetricsHttpServer;
 use Packages\Outbox\OutboxRelay;
 use Packages\Outbox\OutboxRepository;
@@ -14,6 +15,8 @@ use PhpAmqpLib\Connection\AMQPStreamConnection;
 MetricsHttpServer::startInBackground();
 
 for (;;) {
+    $pdo = null;
+    $relay = null;
     $connection = null;
     $channel = null;
     try {
@@ -39,6 +42,10 @@ for (;;) {
         error_log('Message outbox relay failed: ' . $exception::class);
         sleep(5);
     } finally {
+        if ($pdo instanceof PDO) {
+            EloquentConnection::forget($pdo);
+        }
+        unset($relay, $pdo);
         if ($channel !== null) {
             try { $channel->close(); } catch (Throwable) {}
         }

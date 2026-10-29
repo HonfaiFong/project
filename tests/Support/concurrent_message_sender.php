@@ -26,7 +26,18 @@ $chat = new class implements ChatMemberSnapshotClient {
         ]];
     }
 };
+$clock = isset($argv[2]) && $argv[2] === 'signal-clock' ? static function (): string {
+    static $signaled = false;
+    $now = (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('Y-m-d H:i:s.v');
+    if (!$signaled) {
+        fwrite(STDOUT, "clock-sampled\n");
+        fflush(STDOUT);
+        $signaled = true;
+    }
+    return $now;
+} : null;
 $app = new MessageApplicationService(new PostgresMessageRepository($pdo), new PostgresMessageTransactionManager($pdo), $chat,
+    clock: $clock,
     projector: new AnonymousAuthorProjector(new AnonymousReferenceFactory(str_repeat('k', 32))));
 $app->sendMessage('100', ['conversation_id' => '1', 'client_message_id' => $argv[1], 'type' => 1,
     'content' => '{"body":"concurrent"}'], new OperationBudget(5000));

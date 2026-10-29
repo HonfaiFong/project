@@ -7,12 +7,18 @@ namespace Packages\Outbox;
 use Packages\Observability\MetricsRegistry;
 use Throwable;
 
-final readonly class OutboxRelay
+final class OutboxRelay
 {
+    private float $nextBacklogSampleAt = 0;
+    /** @var \Closure():float */
+    private readonly \Closure $clock;
+
     public function __construct(
-        private OutboxRelayStore $outbox,
-        private EventPublisher $publisher,
+        private readonly OutboxRelayStore $outbox,
+        private readonly EventPublisher $publisher,
+        ?\Closure $clock = null,
     ) {
+        $this->clock = $clock ?? static fn (): float => hrtime(true) / 1_000_000_000;
     }
 
     /** @throws Throwable */
@@ -42,7 +48,10 @@ final readonly class OutboxRelay
             }
         }
 
-        if (method_exists($this->outbox, 'backlogDepth')) {
+        $now = ($this->clock)();
+        if ($now >= $this->nextBacklogSampleAt && method_exists($this->outbox, 'backlogDepth')) {
+            // Throttle failed samples too, so a monitoring failure cannot flood the database.
+            $this->nextBacklogSampleAt = $now + 15;
             try {
                 /** @var callable():int $backlogDepth */
                 $backlogDepth = [$this->outbox, 'backlogDepth'];

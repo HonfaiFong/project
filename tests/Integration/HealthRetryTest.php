@@ -49,8 +49,8 @@ final class HealthRetryTest extends TestCase
             self::assertFileExists($directory . '/proxy-ready');
             // Negative control: the original fail-fast channel exposes the reset.
             $plainChannel = new \Grpc\Channel($proxyAddress, ['credentials' => \Grpc\ChannelCredentials::createInsecure()]);
-            $plainCheck = static function () use ($plainChannel): int {
-                $options = GrpcClientContext::createCallOptions(300);
+            $plainCheck = static function (int $timeoutMs = 300) use ($plainChannel): int {
+                $options = GrpcClientContext::createCallOptions($timeoutMs);
                 $call = new \Grpc\Call($plainChannel, '/common.v1.HealthService/Check', \Grpc\Timeval::now()->add(new \Grpc\Timeval($options['timeout'])));
                 $call->startBatch([
                     \Grpc\OP_SEND_INITIAL_METADATA => $options['metadata'],
@@ -64,7 +64,9 @@ final class HealthRetryTest extends TestCase
                 ]);
                 return $result->status->code;
             };
-            self::assertSame(\Grpc\STATUS_OK, $plainCheck());
+            // A listening RoadRunner socket does not mean its PHP worker has finished cold startup.
+            // Warm the fixture before checking reset/retry behavior under the original short deadline.
+            self::assertSame(\Grpc\STATUS_OK, $plainCheck(5000));
             file_put_contents($directory . '/reset', '1');
             self::assertSame(\Grpc\STATUS_UNAVAILABLE, $plainCheck());
 

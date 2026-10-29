@@ -241,7 +241,7 @@ final class MessageSessionSecurityTest extends TestCase
     }
 
     /** @return array{0:MessageApplicationService,1:InMemoryMessageStore} */
-    private function app(ChatMemberSnapshotClient $chat): array
+    private function app(ChatMemberSnapshotClient $chat, ?\Closure $clock = null): array
     {
         $repository = new InMemoryMessageStore();
         $ids = new class implements IdGenerator {
@@ -261,9 +261,23 @@ final class MessageSessionSecurityTest extends TestCase
                 chat: $chat,
                 ids: $ids,
                 projector: $projector,
-                clock: static fn (): string => '2026-10-11 00:00:00.000',
+                clock: $clock ?? static fn (): string => '2026-10-11 00:00:00.000',
             ),
             $repository,
         ];
+    }
+
+    public function testMessageTimestampIsSampledAfterAllocatingSequence(): void
+    {
+        $calls = 0;
+        $clock = static function () use (&$calls): string {
+            return ++$calls === 1 ? '2026-10-11 00:00:00.000' : '2026-10-11 00:00:01.000';
+        };
+        [$app, $store] = $this->app($this->chatClient([
+            'allowed' => true, 'member' => ['user_id' => '100', 'persona_id' => '101', 'identity_mode' => 1],
+        ]), $clock);
+        $app->sendMessage('100', ['conversation_id' => '900', 'client_message_id' => 'time', 'type' => 1, 'content' => '{}']);
+        self::assertSame('2026-10-11 00:00:01.000', $store->messages[0]['created_at']);
+        self::assertSame($store->messages[0]['created_at'], $store->outbox[0]['created_at']);
     }
 }

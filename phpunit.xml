@@ -10,6 +10,28 @@
         </testsuite>
         <testsuite name="Integration">
             <directory>tests/Integration</directory>
+            <exclude>tests/Integration/PhinxMigrationTest.php</exclude>
+            <exclude>tests/Integration/EloquentOutboxConcurrencyTest.php</exclude>
+            <exclude>tests/Integration/AuthWarmPathLatencyTest.php</exclude>
+            <exclude>tests/Integration/ContentPersistenceConcurrencyTest.php</exclude>
+            <exclude>tests/Integration/EloquentSocialIdentityRepositoryTest.php</exclude>
+            <exclude>tests/Integration/MySqlLeastPrivilegeTest.php</exclude>
+            <exclude>tests/Integration/PdoDeviceIsolationTest.php</exclude>
+            <exclude>tests/Integration/SocialLikeConcurrencyTest.php</exclude>
+            <exclude>tests/Integration/UserPhoneMigrationTest.php</exclude>
+            <exclude>tests/Integration/UserSocialRegistrationConcurrencyTest.php</exclude>
+        </testsuite>
+        <testsuite name="LegacyMysql">
+            <file>tests/Integration/PhinxMigrationTest.php</file>
+            <file>tests/Integration/EloquentOutboxConcurrencyTest.php</file>
+            <file>tests/Integration/AuthWarmPathLatencyTest.php</file>
+            <file>tests/Integration/ContentPersistenceConcurrencyTest.php</file>
+            <file>tests/Integration/EloquentSocialIdentityRepositoryTest.php</file>
+            <file>tests/Integration/MySqlLeastPrivilegeTest.php</file>
+            <file>tests/Integration/PdoDeviceIsolationTest.php</file>
+            <file>tests/Integration/SocialLikeConcurrencyTest.php</file>
+            <file>tests/Integration/UserPhoneMigrationTest.php</file>
+            <file>tests/Integration/UserSocialRegistrationConcurrencyTest.php</file>
         </testsuite>
     </testsuites>
 </phpunit>

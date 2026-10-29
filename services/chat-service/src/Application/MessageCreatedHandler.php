@@ -10,6 +10,7 @@ use Contracts\Gen\Message\V1\PublicMessage;
 use Google\Protobuf\PrintOptions;
 use RuntimeException;
 use Services\ChatService\Domain\RealtimeMessagePublisher;
+use Services\ChatService\Domain\Exception\InvalidMessageEvent;
 use Services\ChatService\Infrastructure\PdoChatRepository;
 
 final readonly class MessageCreatedHandler
@@ -24,27 +25,39 @@ final readonly class MessageCreatedHandler
     public function handle(EventEnvelope $event): void
     {
         if ($event->eventType !== EventTypes::MESSAGE_CREATED || $event->eventVersion !== 1) {
-            throw new RuntimeException('Unsupported message event');
+            throw new InvalidMessageEvent('Unsupported message event');
         }
         $message = $event->payload['message'] ?? null;
         if (!is_array($message) || blank($event->eventId)) {
-            throw new RuntimeException('Invalid message event');
+            throw new InvalidMessageEvent('Invalid message event');
         }
         foreach (['message_id', 'conversation_id', 'seq'] as $field) {
-            if (!is_string($message[$field] ?? null) || preg_match('/\A[1-9][0-9]{0,19}\z/', $message[$field]) !== 1) {
-                throw new RuntimeException('Invalid message event ' . $field);
+            if (!is_string($message[$field] ?? null) || preg_match('/\A[1-9][0-9]{0,18}\z/', $message[$field]) !== 1
+                || (strlen($message[$field]) === 19 && strcmp($message[$field], '9223372036854775807') > 0)) {
+                throw new InvalidMessageEvent('Invalid message event ' . $field);
             }
         }
         $conversationId = $message['conversation_id'];
-        if ($event->key !== $conversationId || empty($this->repository->findById($conversationId))
+        if ($event->key !== $conversationId
             || !is_string($message['created_at'] ?? null)
             || preg_match('/\A\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\z/', $message['created_at']) !== 1
         ) {
-            throw new RuntimeException('Message event conversation or timestamp is invalid');
+            throw new InvalidMessageEvent('Message event conversation or timestamp is invalid');
+        }
+        $timestamp = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s.v', $message['created_at'], new \DateTimeZone('UTC'));
+        if ($timestamp === false || $timestamp->format('Y-m-d H:i:s.v') !== $message['created_at']) {
+            throw new InvalidMessageEvent('Message event timestamp is invalid');
+        }
+        if (empty($this->repository->findById($conversationId))) {
+            throw new RuntimeException('Message event conversation is unavailable');
         }
         // The public Protobuf contract rejects internal or unexpected fields before fan-out.
         $public = new PublicMessage();
-        $public->mergeFromJsonString(json_encode($message, JSON_THROW_ON_ERROR));
+        try {
+            $public->mergeFromJsonString(json_encode($message, JSON_THROW_ON_ERROR));
+        } catch (\Exception $exception) {
+            throw new InvalidMessageEvent('Message event public payload is invalid', previous: $exception);
+        }
         $safeMessage = json_decode($public->serializeToJsonString(
             PrintOptions::PRESERVE_PROTO_FIELD_NAMES | PrintOptions::ALWAYS_PRINT_ENUMS_AS_INTS,
         ), true, 512, JSON_THROW_ON_ERROR);

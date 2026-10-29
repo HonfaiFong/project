@@ -4,8 +4,16 @@
     {"name":"jobs","vhost":"/","type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}},
     {"name":"jobs.dead","vhost":"/","type":"topic","durable":true,"auto_delete":false,"internal":false,"arguments":{}}
   ],
+  "policies": [
+    {"name":"chat-message-recovery","vhost":"/","pattern":"^chat\\.message\\.(created|retry\\..*)$","apply-to":"quorum_queues","priority":10,"definition":{"dead-letter-strategy":"at-least-once","overflow":"reject-publish"}}
+  ],
   "queues": [
     {"name":"chat.message.created","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum","x-dead-letter-exchange":"jobs.dead","x-delivery-limit":5}},
+    {"name":"chat.message.retry.5s","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum","x-message-ttl":5000,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"chat.message.created"}},
+    {"name":"chat.message.retry.30s","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum","x-message-ttl":30000,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"chat.message.created"}},
+    {"name":"chat.message.retry.300s","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum","x-message-ttl":300000,"x-dead-letter-exchange":"","x-dead-letter-routing-key":"chat.message.created"}},
+    {"name":"chat.message.recovery","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum"}},
+    {"name":"chat.message.invalid","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum"}},
     {"name":"user.events","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"stream","x-max-age":"7D"}},
     {"name":"feed.events","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"stream","x-max-age":"7D"}},
     {"name":"search.events","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"stream","x-max-age":"7D"}},
@@ -18,6 +26,7 @@
     {"name":"jobs.failed","vhost":"/","durable":true,"auto_delete":false,"arguments":{"x-queue-type":"quorum"}}
   ],
   "bindings": [
+    {"source":"jobs.dead","vhost":"/","destination":"chat.message.recovery","destination_type":"queue","routing_key":"message.created.v1","arguments":{}},
     {"source":"domain.events","vhost":"/","destination":"chat.message.created","destination_type":"queue","routing_key":"message.created.v1","arguments":{}},
     {"source":"domain.events","vhost":"/","destination":"user.events","destination_type":"queue","routing_key":"user.#","arguments":{}},
     {"source":"domain.events","vhost":"/","destination":"user.events","destination_type":"queue","routing_key":"persona.#","arguments":{}},

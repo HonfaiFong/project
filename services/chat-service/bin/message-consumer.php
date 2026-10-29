@@ -13,6 +13,8 @@ use PhpAmqpLib\Message\AMQPMessage;
 use PhpAmqpLib\Wire\AMQPTable;
 use Services\ChatService\Application\MessageCreatedHandler;
 use Services\ChatService\Infrastructure\RedisRealtimeMessagePublisher;
+use Services\ChatService\Infrastructure\RabbitMqMessageRecovery;
+use Services\ChatService\Domain\Exception\InvalidMessageEvent;
 
 [$application, $repository, $logger, $pdo] = require __DIR__ . '/bootstrap.php';
 
@@ -37,23 +39,34 @@ for (;;) {
             getenv('RABBITMQ_USER') ?: '', getenv('RABBITMQ_PASSWORD') ?: '',
         );
         $channel = $connection->channel();
+        $recoveryChannel = $connection->channel();
+        $recovery = new RabbitMqMessageRecovery($recoveryChannel);
         $channel->queue_declare('chat.message.created', false, true, false, false, false, new AMQPTable([
             'x-queue-type' => 'quorum', 'x-delivery-limit' => 5, 'x-dead-letter-exchange' => 'jobs.dead',
         ]));
         $channel->queue_bind('chat.message.created', 'domain.events', 'message.created.v1');
         $channel->basic_qos(0, 1, false);
+        // Explicit confirmed republishing starts a fresh delivery cycle after broker-side failures.
+        $channel->basic_consume('chat.message.recovery', '', false, false, false, false,
+            static function (AMQPMessage $delivery) use ($recovery): void {
+                $recovery->replay($delivery);
+            },
+        );
         $handler = new MessageCreatedHandler($repository, $application, new RedisRealtimeMessagePublisher($redis));
         $channel->basic_consume('chat.message.created', '', false, false, false, false,
-            static function (AMQPMessage $delivery) use ($handler): void {
+            static function (AMQPMessage $delivery) use ($handler, $recovery, $logger): void {
                 try {
                     $data = json_decode($delivery->getBody(), true, 512, JSON_THROW_ON_ERROR);
                     if (!is_array($data)) {
-                        throw new RuntimeException('Invalid event envelope');
+                        throw new InvalidMessageEvent('Invalid event envelope');
                     }
                     $handler->handle(EventEnvelope::fromArray($data));
                     $delivery->ack();
+                } catch (InvalidMessageEvent|JsonException $exception) {
+                    $recovery->quarantine($delivery);
+                    $logger->error('Invalid message event quarantined', ['exception' => $exception::class]);
                 } catch (Throwable $exception) {
-                    $delivery->nack(false, true);
+                    $recovery->retry($delivery);
                     throw $exception;
                 }
             },
@@ -72,6 +85,10 @@ for (;;) {
         // Retrying with a disconnected PDO would repeatedly dead-letter otherwise valid events.
         throw $exception;
     } finally {
+        if (isset($recoveryChannel)) {
+            try { $recoveryChannel->close(); } catch (Throwable) {}
+            unset($recoveryChannel, $recovery);
+        }
         if (isset($channel)) {
             try { $channel->close(); } catch (Throwable) {}
             unset($channel);

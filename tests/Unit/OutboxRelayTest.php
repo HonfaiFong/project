@@ -50,6 +50,29 @@ final class OutboxRelayTest extends TestCase
     {
         return new FakeOutboxRelayStore();
     }
+
+    public function testBacklogIsSampledEveryFifteenSecondsIncludingAfterFailures(): void
+    {
+        $store = $this->store();
+        $publisher = new class implements EventPublisher {
+            public function publish(OutboxRecord $event): void {}
+        };
+        $now = 100.0;
+        $relay = new OutboxRelay($store, $publisher, static function () use (&$now): float { return $now; });
+        $relay->runOnce();
+        $relay->runOnce();
+        self::assertSame(1, $store->backlogReads);
+        $now = 115.0;
+        $store->failBacklog = true;
+        $relay->runOnce();
+        $relay->runOnce();
+        self::assertSame(2, $store->backlogReads);
+        self::assertCount(4, $store->published);
+        $now = 130.0;
+        $store->failBacklog = false;
+        $relay->runOnce();
+        self::assertSame(3, $store->backlogReads);
+    }
 }
 
 final class FakeOutboxRelayStore implements OutboxRelayStore
@@ -58,6 +81,17 @@ final class FakeOutboxRelayStore implements OutboxRelayStore
     public array $published = [];
     /** @var list<string> */
     public array $failed = [];
+    public int $backlogReads = 0;
+    public bool $failBacklog = false;
+
+    public function backlogDepth(): int
+    {
+        $this->backlogReads++;
+        if ($this->failBacklog) {
+            throw new RuntimeException('metric unavailable');
+        }
+        return 3;
+    }
 
     public function releaseStaleClaims(): int { return 0; }
 

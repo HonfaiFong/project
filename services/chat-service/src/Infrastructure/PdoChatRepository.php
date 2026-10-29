@@ -272,12 +272,14 @@ final class PdoChatRepository
     {
         $statement = $this->pdo->prepare(
             'UPDATE conversations SET last_message_id = :message_id, last_message_seq = :seq, '
-            . 'last_message_at = :created_at, updated_at = :updated_at '
+            . 'last_message_at = CASE WHEN last_message_at > :compare_at THEN last_message_at ELSE :created_at END, '
+            . 'updated_at = CASE WHEN updated_at > :compare_updated THEN updated_at ELSE :updated_at END '
             . 'WHERE id = :conversation_id AND last_message_seq < :new_seq',
         );
         $statement->execute([
             'message_id' => $messageId, 'seq' => $seq, 'created_at' => $createdAt,
-            'updated_at' => $createdAt, 'conversation_id' => $conversationId, 'new_seq' => $seq,
+            'updated_at' => $createdAt, 'compare_at' => $createdAt, 'compare_updated' => $createdAt,
+            'conversation_id' => $conversationId, 'new_seq' => $seq,
         ]);
     }
 
