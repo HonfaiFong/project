@@ -36,7 +36,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     IPE_KEEP_SYSPKG_CACHE=1 IPE_PROCESSOR_COUNT=${PHP_EXTENSION_JOBS} install-php-extensions \
         pdo_mysql \
         pdo_pgsql \
-        mongodb \
         pcntl \
         posix \
         sockets \

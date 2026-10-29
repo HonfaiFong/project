@@ -19,8 +19,11 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
 {
     private OutboxEvent $model;
 
-    public function __construct(PDO $pdo, private ?Snowflake $snowflake = null)
+    public function __construct(PDO $pdo, private ?Snowflake $snowflake = null, private string $orderingColumn = 'id')
     {
+        if (!in_array($orderingColumn, ['id', 'message_seq'], true)) {
+            throw new \InvalidArgumentException('Unsupported Outbox ordering column');
+        }
         $this->model = EloquentConnection::model(OutboxEvent::class, $pdo);
     }
 
@@ -61,13 +64,17 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
     {
         $limit = max(1, min(500, $limit));
         return $this->model->getConnection()->transaction(function () use ($limit): array {
+            $connection = $this->model->getConnection();
+            $now = $connection->getDriverName() === 'pgsql'
+                ? $connection->raw('CURRENT_TIMESTAMP')
+                : gmdate('Y-m-d H:i:s.v');
             $query = $this->model->newQuery()->from('outbox_events as candidate')
                 ->select('candidate.*')->where('candidate.status', 0)
-                ->where('candidate.available_at', '<=', gmdate('Y-m-d H:i:s.v'))
+                ->where('candidate.available_at', '<=', $now)
                 ->whereNotExists(function (Builder $query): void {
                     $query->select('earlier.id')->from('outbox_events as earlier')
                         ->whereColumn('earlier.event_key', 'candidate.event_key')
-                        ->whereColumn('earlier.id', '<', 'candidate.id')
+                        ->whereColumn('earlier.' . $this->orderingColumn, '<', 'candidate.' . $this->orderingColumn)
                         ->where('earlier.status', '<>', 1);
                 })
                 ->orderBy('candidate.id')->limit($limit)

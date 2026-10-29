@@ -19,7 +19,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_pgsql, pdo_sqlite, mongodb, redis, bcmath, sockets, grpc
+          extensions: pdo, pdo_pgsql, pdo_sqlite, redis, bcmath, sockets, grpc
           coverage: none
       - run: composer install --no-interaction --prefer-dist
       - run: cp .env.example .env
@@ -50,7 +50,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: pdo, pdo_pgsql, pdo_sqlite, mongodb, redis, bcmath, sockets, grpc
+          extensions: pdo, pdo_pgsql, pdo_sqlite, redis, bcmath, sockets, grpc
           coverage: none
 
       - name: Setup Go
@@ -144,7 +144,7 @@ jobs:
         with:
           php-version: '8.4'
           # posix/pcntl 供隔离进程回归测试使用：MetricsHttpServer 依赖 posix_getppid 探测父进程存活。
-          extensions: pdo, pdo_pgsql, pdo_sqlite, mongodb, redis, bcmath, sockets, grpc, posix, pcntl
+          extensions: pdo, pdo_pgsql, pdo_sqlite, redis, bcmath, sockets, grpc, posix, pcntl
           coverage: none
 
       - name: Install Composer dependencies for E2E
@@ -156,7 +156,6 @@ jobs:
           cat >> .env <<'EOF'
           APP_ENV=testing
           PG_DATABASE=test_social_backend
-          MONGODB_DATABASE=test_message_db
           ENABLE_WECHAT_LOGIN=true
           ENABLE_QQ_LOGIN=true
           WECHAT_APP_ID=e2e-wechat-app
@@ -171,10 +170,10 @@ jobs:
           EOF
 
       - name: Start infrastructure
-        run: docker compose up -d postgres mongo mongo-init redis
+        run: docker compose up -d postgres redis
 
       - name: Wait for database readiness
-        run: make postgres-ready mongo-ready redis-ready
+        run: make postgres-ready redis-ready
 
       - name: Verify PostgreSQL rejects wrong credentials
         run: |
@@ -196,10 +195,10 @@ jobs:
       - name: Verify health RPC reconnection and deadline boundaries
         run: docker compose run --rm --no-deps auth-service php /app/vendor/bin/phpunit /app/tests/Integration/HealthRetryTest.php --cache-directory /tmp/project-phpunit-cache --fail-on-skipped
 
-      - name: Run PostgreSQL and MongoDB regression tests
+      - name: Run PostgreSQL and message storage regression tests
         timeout-minutes: 5
         run: |
-          make test-mongodb
+          make test-message
           docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 --entrypoint php database-migrate vendor/bin/phpunit tests/Integration/PostgresMigrationRuntimeTest.php --fail-on-skipped
 
       - name: Run Redis integration tests

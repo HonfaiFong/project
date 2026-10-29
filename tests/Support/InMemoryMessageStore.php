@@ -41,7 +41,7 @@ final class InMemoryMessageStore implements MessageRepositoryInterface, MessageT
         return null;
     }
 
-    public function idempotencyMatches(array $existing, array $request): bool
+    public function idempotencyMatches(array $existing, array $request, ?OperationBudget $budget = null): bool
     {
         $existingContent = $this->codec->canonicalJson($existing['content'] ?? null);
         $requestedContent = $this->codec->canonicalJson($request['content'] ?? null);

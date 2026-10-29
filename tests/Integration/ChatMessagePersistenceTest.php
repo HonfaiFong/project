@@ -246,7 +246,7 @@ final class ChatMessagePersistenceTest extends TestCase
         $sequenceState->unavailable = false;
         try {
             $chat->markRead('200', $conversationId, '3');
-            self::fail('A cursor beyond the MongoDB sequence must be rejected');
+            self::fail('A cursor beyond the persisted message sequence must be rejected');
         } catch (\Services\ChatService\Domain\Exception\ChatException $exception) {
             self::assertStringContainsString('latest persisted message', $exception->getMessage());
         }

@@ -12,7 +12,7 @@ interface MessageRepositoryInterface
     public function findBySenderClientId(string $senderUserId, string $clientMessageId, ?OperationBudget $budget = null): ?array;
 
     /** @param array<string,mixed> $existing @param array<string,mixed> $request */
-    public function idempotencyMatches(array $existing, array $request): bool;
+    public function idempotencyMatches(array $existing, array $request, ?OperationBudget $budget = null): bool;
 
     /** @return list<array<string,mixed>> */
     public function listAfter(string $conversationId, string $afterSeq, int $limit, ?OperationBudget $budget = null): array;

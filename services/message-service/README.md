@@ -8,7 +8,7 @@
 
 ## 2. Owned Data
 - Logical Database: `message_db`
-- Collections:
+- Tables:
   - `messages`
   - `conversation_sequences`
   - `outbox_events`
@@ -32,7 +32,7 @@ upper bound. It does not issue a total-count query.
   Idempotent retries return the stored message without creating another event.
 
 ## 6. Dependencies
-- MongoDB (`message_db`)
+- PostgreSQL (`message_db` schema)
 - ChatService (internal membership, block, and identity snapshot RPC)
 - RabbitMQ (Outbox relay); ChatService consumes events to update summaries and fan out online pushes.
 
@@ -52,7 +52,8 @@ sequence row and sender `client_message_id` idempotency. Every send and read
 asks ChatService for the authenticated member snapshot, so the request body
 cannot select a different persona or identity. Stored display and anonymous
 references are projected from the write-time snapshot; current User/Persona
-rows are never read by this service. JSON message payloads are compared by
-canonical value for idempotency, independent of whitespace and object key
-ordering. Run `scripts/migrate_mongodb.php` before starting the worker. The
+rows are never read by this service. JSON message payloads are stored as JSONB and compared by exact JSONB value,
+independent of whitespace and object key ordering, without PHP float conversion.
+Run `make migrate` before starting the worker. See
+`doc/POSTGRESQL_MESSAGE_STORAGE.md` for account setup and offline archive import. The
 worker intentionally does not run production DDL.

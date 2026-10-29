@@ -8,12 +8,12 @@ use RuntimeException;
 use Tests\TestCase;
 
 /**
- * Deployment contract for PostgreSQL and MongoDB account boundaries.
+ * Deployment contract for PostgreSQL account boundaries.
  *
  * These checks deliberately inspect the compose and init artifacts instead of
  * connecting as superuser.
  */
-final class MySqlLeastPrivilegeConfigTest extends TestCase
+final class DatabaseLeastPrivilegeConfigTest extends TestCase
 {
     /** @var array<string, array{user: string, password: string, schema: string}> */
     private const PG_RUNTIME_ACCOUNTS = [
@@ -82,22 +82,14 @@ final class MySqlLeastPrivilegeConfigTest extends TestCase
         self::assertStringContainsString('PG_MIGRATION_PASSWORD', $migration);
 
         $messageService = $this->serviceSection($compose, 'message-service');
-        self::assertStringContainsString('MONGODB_URI', $messageService);
-        self::assertStringContainsString('MONGODB_DATABASE', $messageService);
-        self::assertStringContainsString('MONGODB_USER=message_runtime', $messageService);
-        self::assertStringContainsString('MONGODB_RUNTIME_PASSWORD', $messageService);
+        self::assertStringContainsString('PG_SCHEMA=message_db', $messageService);
+        self::assertStringContainsString('PG_USER=message_runtime', $messageService);
+        self::assertStringContainsString('PG_MESSAGE_RUNTIME_PASSWORD', $messageService);
 
         $messageRelay = $this->serviceSection($compose, 'message-outbox-relay');
-        self::assertStringContainsString('MONGODB_URI', $messageRelay);
-        self::assertStringContainsString('MONGODB_DATABASE', $messageRelay);
-        self::assertStringContainsString('MONGODB_USER: message_outbox_relay', $messageRelay);
-        self::assertStringContainsString('MONGODB_RELAY_PASSWORD', $messageRelay);
-
-        $mongoMigrate = $this->serviceSection($compose, 'mongodb-migrate');
-        self::assertStringContainsString('MONGODB_URI', $mongoMigrate);
-        self::assertStringContainsString('MONGODB_DATABASE', $mongoMigrate);
-        self::assertStringContainsString('MONGODB_USER: message_migration', $mongoMigrate);
-        self::assertStringContainsString('MONGODB_MIGRATION_PASSWORD', $mongoMigrate);
+        self::assertStringContainsString('PG_SCHEMA: message_db', $messageRelay);
+        self::assertStringContainsString('PG_USER: message_outbox_relay', $messageRelay);
+        self::assertStringContainsString('PG_MESSAGE_OUTBOX_RELAY_PASSWORD', $messageRelay);
     }
 
     public function testEnvironmentTemplatesDeclareEveryCredentialSeparately(): void
@@ -111,11 +103,8 @@ final class MySqlLeastPrivilegeConfigTest extends TestCase
             }
             self::assertMatchesRegularExpression('/^PG_USER_OUTBOX_RELAY_PASSWORD=/m', $env, $path);
             self::assertMatchesRegularExpression('/^PG_MIGRATION_PASSWORD=/m', $env, $path);
-            self::assertMatchesRegularExpression('/^MONGODB_URI=/m', $env, $path);
-            self::assertMatchesRegularExpression('/^MONGODB_DATABASE=/m', $env, $path);
-            foreach (['ADMIN', 'RUNTIME', 'RELAY', 'MIGRATION'] as $role) {
-                self::assertMatchesRegularExpression('/^MONGODB_' . $role . '_PASSWORD=/m', $env, $path);
-            }
+            self::assertMatchesRegularExpression('/^PG_MESSAGE_RUNTIME_PASSWORD=/m', $env, $path);
+            self::assertMatchesRegularExpression('/^PG_MESSAGE_OUTBOX_RELAY_PASSWORD=/m', $env, $path);
         }
     }
 
@@ -132,6 +121,10 @@ final class MySqlLeastPrivilegeConfigTest extends TestCase
         self::assertStringContainsString('CREATE ROLE user_outbox_relay', $accounts);
         self::assertStringContainsString('GRANT USAGE ON SCHEMA user_db TO user_runtime, user_outbox_relay', $accounts);
         self::assertStringNotContainsString('SUPERUSER', $accounts);
+        $messageAccounts = $this->read('infra/docker/postgresql/init/02-message-storage.sh');
+        self::assertStringContainsString('CREATE ROLE message_runtime LOGIN', $messageAccounts);
+        self::assertStringContainsString('CREATE ROLE message_outbox_relay LOGIN', $messageAccounts);
+        self::assertStringContainsString('CREATE SCHEMA IF NOT EXISTS message_db AUTHORIZATION migration_ddl', $messageAccounts);
     }
 
     public function testRuntimeBootstrapDefaultsCannotFallBackToRoot(): void

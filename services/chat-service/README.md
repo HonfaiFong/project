@@ -34,7 +34,7 @@
   contract remains reserved for the event relay wiring.
 
 ## 6. Dependencies
-- MySQL (`chat_db`)
+- PostgreSQL (`chat_db` schema)
 - UserService (gRPC persona authorization)
 - ContentService (gRPC anonymous target resolution)
 - SocialService (gRPC for bidirectional block checks)
@@ -59,10 +59,11 @@ anonymous targets are resolved by ContentService and checked against the
 requesting user's access and SocialService's bidirectional block result.
 MessageService receives the snapshot over the internal Chat RPC. Conversation
 creation and reads use the per-service PDO repository; the worker does not run
-production DDL, and migration `20261011000300` must be applied before startup.
+production DDL, and the PostgreSQL service baseline must be applied before startup.
 
-Apply `20261012000000` with chat/message writes stopped before upgrading workers. It seeds
-`last_message_seq` and the summary from historical messages, and bounds legacy read cursors.
+The PostgreSQL baseline includes `last_message_seq`, summaries and read cursors.
+When importing historical messages, preserve the existing chat summaries and cursors;
+see `doc/POSTGRESQL_MESSAGE_STORAGE.md`.
 `MarkRead` rejects sequences above the confirmed summary; while event consumption is delayed,
 clients should synchronize and retry. ListConversations sorts by recent message time (creation
 time for empty conversations) and returns an opaque time/ID cursor. Treat it as opaque; old ID-only

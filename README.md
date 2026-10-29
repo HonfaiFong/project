@@ -14,7 +14,7 @@
   - 异步通信：基于 **RabbitMQ Streams（领域事件）和 Quorum Queues（任务）**；领域事件写入 Transactional Outbox，消费者按事件 ID 幂等处理。
 - **数据源与基础设施**:
   - 关系型业务最终事实数据源：PostgreSQL 18（固定服务 Schema，无跨服务 JOIN）。
-  - 消息最终事实数据源：MongoDB 8 副本集，消息、会话 seq 与消息 Outbox 在同一事务提交。
+  - 消息最终事实数据源：PostgreSQL 18，消息正文使用 JSONB；消息、会话 seq 与消息 Outbox 在同一事务提交。
   - 高速缓存与即时状态：Redis 7.2 (统一 Key 规范，设置明确 TTL，禁止 `KEYS *`)。
   - 消息引擎：RabbitMQ 4.1（Streams + Quorum Queues）。
   - 媒体对象存储：RustFS（S3 兼容，客户端直传 Presigned URL，不经后端流式转发）。
@@ -72,7 +72,7 @@
 全部依赖均封装于 Docker 与 `compose.yaml` 中：
 - **Docker Engine**: >= 24.0.0
 - **Docker Compose**: >= v2.20.0
-- (本地开发可选): PHP >= 8.2（带 pdo_pgsql、pdo_sqlite、mongodb、grpc、redis、bcmath），Go >= 1.27，Composer >= 2.0；并发数据库测试另需 pcntl。
+- (本地开发可选): PHP >= 8.2（带 pdo_pgsql、pdo_sqlite、grpc、redis、bcmath），Go >= 1.27，Composer >= 2.0；并发数据库测试另需 pcntl。
 
 ---
 
@@ -113,7 +113,7 @@ GitHub CI 继续使用官方源与已有的 GHA `mode=max` 层缓存。Go 模块
 ### 启动服务
 
 ```bash
-# 1. 复制配置文件，并设置 PostgreSQL / MongoDB 独立账号密码、JWT_SECRET / WS_TICKET_SECRET
+# 1. 复制配置文件，并设置 PostgreSQL 独立账号密码、JWT_SECRET / WS_TICKET_SECRET
 #    以及所有 INTERNAL_RPC_*_TOKEN
 #    （compose.yaml 对这些变量做强校验，缺失会拒绝启动）
 cp .env.example .env
@@ -127,7 +127,7 @@ make up
 curl http://127.0.0.1:8787/health
 ```
 
-> **启动与迁移顺序说明**：`make up` 启动 PostgreSQL、MongoDB 副本集、Redis 和 RabbitMQ，完成账号初始化、探活、broker 拓扑及数据库迁移，再启动业务服务。对象存储按需运行 `make storage-up`。
+> **启动与迁移顺序说明**：`make up` 启动 PostgreSQL、Redis 和 RabbitMQ，完成账号初始化、探活、broker 拓扑及数据库迁移，再启动业务服务。对象存储按需运行 `make storage-up`。
 
 Redis 在 Compose 中启用 AOF（`appendfsync everysec`）并使用持久化命名卷
 `redis_data:/data`。访问令牌和设备撤销键属于安全状态，不应按普通缓存处理；因此
@@ -149,7 +149,7 @@ COMPOSE_ENV_FILE=.env.example bash scripts/redis_revocation_persistence_test.sh
 
 内部服务的 gRPC 端口只在 Compose 内部网络暴露，不发布到宿主机；每条调用关系使用独立的 `INTERNAL_RPC_*_TOKEN`，并通过 `SERVICE_NAME` 做调用方和方法授权。部署前必须把 `.env` 中的全部 token 替换为至少 32 字节的独立随机值，包括 Message→Chat 和 Chat→Message。
 
-PostgreSQL、MongoDB、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 服务之间继续使用内部 hostname 通信，需要外部访问时再显式设置对应的 `*_BIND_ADDRESS`。
+PostgreSQL、Redis 和 RabbitMQ 的开发端口默认只绑定 `127.0.0.1`；Compose 服务之间继续使用内部 hostname 通信，需要外部访问时再显式设置对应的 `*_BIND_ADDRESS`。
 
 生产配置从 `.env.production.example` 开始，填入独立随机凭证，保持 `ENABLE_DEV_LOGIN=false`、`DEV_LOGIN_CODE` 为空。正式产品仅支持微信和 QQ 注册登录。手机号相关路由、标准化组件及开发验证码属于历史兼容代码，仅保留隔离的历史回归用途，不属于正式产品能力或新功能维护范围；生产由 Gateway 和 AuthService 双重门禁关闭，且当前没有生产短信适配器。微信/QQ 首次登录自动注册，配置真实 `WECHAT_APP_ID`/`QQ_APP_ID` 凭证并保持官方 HTTPS endpoint 后即可在生产开启。开发环境的 endpoint 覆盖（`WECHAT_TOKEN_ENDPOINT` 等）与 `SOCIAL_OAUTH_ALLOW_INSECURE_HTTP` 在生产环境会触发启动拒绝。代理部署必须配置实际受控代理的 `SOCIAL_TRUSTED_PROXY_CIDRS`，否则限流使用 socket peer；Gateway 也应只允许这些代理访问。内部 RPC token 是服务身份凭证，跨主机部署仍需受控网络和 TLS/mTLS，不能把凭证作为传输加密使用。
 
@@ -253,55 +253,22 @@ make proto
 
 ## 6. 数据库设计与迁移
 
-当前采用 PostgreSQL + MongoDB。`make migrate` 先执行 `database/postgresql/migrations/` 中的 Phinx 迁移，再运行 `scripts/migrate_mongodb.php`。从 MySQL 旧部署切换时，应暂停写入、备份并单独完成数据迁移与核对；当前入口不会自动导入旧 MySQL 数据。升级后重建受影响的业务服务、relay、consumer 与网关镜像，验证消息同步、推送和已读游标。
+所有业务持久化统一使用 PostgreSQL 18，按服务独立 schema 和角色隔离。生产迁移只执行 `database/postgresql/migrations/`，由 `meta.phinxlog` 追踪；`database/migrations/` 与 `infra/docker/mysql/` 仅保留为历史资料。
 
-数据库初始化基线位于 `infra/docker/mysql/init/01-databases.sql`，容器首次启动时自动挂载执行。后续结构变更使用 Phinx，迁移文件放在 `database/migrations/`，由 `meta.phinxlog` 追踪。历史 `infra/docker/mysql/migrations/0001` 至 `0006` SQL 和 `meta.schema_migrations` 保留，由首次 Phinx 迁移接管；未完成的旧迁移按实际字段/索引补齐，已完成记录不重放。
-- `auth_db`: 存储 `devices`, `refresh_tokens`, `outbox_events`
-- `user_db`: 存储 `users`, `personas`, `outbox_events`
-- `content_db`: 存储 `posts`, `post_media`, `comments`, `outbox_events`
-- `social_db`: 存储 `likes`, `follows`, `blocks`, `outbox_events`
-- `chat_db`: 存储 `conversations`, `conversation_members`, `outbox_events`
-- MongoDB `message_db`：存储 `messages`、`conversation_sequences`、`outbox_events`；历史消息和同步均按 `seq` 分页，尚未接入分片路由。
+| Schema | 数据 |
+| --- | --- |
+| `auth_db` | devices、refresh_tokens、social_identities、Outbox |
+| `user_db` | users、personas、Outbox |
+| `content_db` | posts、post_media、comments、Outbox |
+| `social_db` | likes、follows、blocks、Outbox |
+| `chat_db` | conversations、conversation_members、摘要与读游标、Outbox |
+| `message_db` | messages（content JSONB）、conversation_sequences、消息 Outbox |
 
-### PostgreSQL 与 MongoDB 账号边界
+运行时账号只能访问自己的 schema；`user_outbox_relay` 和 `message_outbox_relay` 仅能读取/更新各自 Outbox。`message_runtime` 只可读取/插入消息、维护序号及插入 Outbox，无消息修改或删除权限。管理员凭据只进入 PostgreSQL 容器，DDL 使用 `migration_ddl`。
 
-PostgreSQL 空卷初始化脚本 `infra/docker/postgresql/init/01-create-roles.sh` 创建固定 Schema 和角色；MongoDB 使用 `infra/docker/mongodb/init.js` 初始化副本集与集合权限。每个账号使用独立密码，业务容器不使用管理员凭据。
+新增 `PG_MESSAGE_RUNTIME_PASSWORD` 和 `PG_MESSAGE_OUTBOX_RELAY_PASSWORD`，分别设置独立随机值。`make migrate` 会先通过可重复的管理员脚本补充新消息角色/schema，兼容已有 PostgreSQL 数据卷，再执行 Phinx 增量迁移。查询迁移状态可运行 `bash scripts/run_migrations.sh status`。
 
-| 账号                           | 授权范围                                                   | 用途                 |
-|:-------------------------------|:-----------------------------------------------------------|:---------------------|
-| `auth_runtime`                 | `auth_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`               | AuthService          |
-| `user_runtime`                 | `user_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`               | UserService          |
-| `content_runtime`              | `content_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`            | ContentService       |
-| `social_runtime`               | `social_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`             | SocialService        |
-| `chat_runtime`                 | `chat_db.*` 的 `SELECT/INSERT/UPDATE/DELETE`               | ChatService          |
-| MongoDB `message_runtime`      | 消息读取/插入、序号读取/插入/更新、Outbox 插入             | MessageService       |
-| MongoDB `message_outbox_relay` | 仅 Outbox 的 find/update                                   | Message Outbox relay |
-| `user_outbox_relay`            | 仅 `user_db.outbox_events` 的 `SELECT/UPDATE`              | User outbox relay    |
-| PostgreSQL `migration_ddl`     | 固定业务 Schema 与 `meta` 的所有者；无管理员或创建角色权限 | Phinx                |
-| MongoDB `message_migration`    | 消息库 dbAdmin/readWrite                                   | MongoDB 迁移         |
-
-PostgreSQL 运行时角色只能访问所属 Schema；`user_outbox_relay` 仅能访问用户 Outbox。`POSTGRES_ADMIN_PASSWORD` 只供管理员初始化，`PG_MIGRATION_PASSWORD` 只供迁移，`PG_*_RUNTIME_PASSWORD` 供各服务。MongoDB 分别使用 `MONGODB_RUNTIME_PASSWORD`、`MONGODB_RELAY_PASSWORD` 和 `MONGODB_MIGRATION_PASSWORD`。
-
-PostgreSQL 初始化脚本只在空卷执行，不能在已有库上直接重跑包含 `CREATE ROLE` 的脚本；凭据轮换应由管理员在维护窗口执行，再重启使用该凭据的服务。MongoDB 的角色和账号初始化可通过 `docker compose run --rm mongo-init` 重新收敛，完成后也须重启相关服务。
-
-安装 Composer 依赖后应用待执行迁移（使用现有 PHP runtime 镜像）：
-```bash
-make migrate
-```
-
-常规迁移、启动和 CI 不依赖历史手机号预检查。`make preflight-phone` 仅用于已存在的旧库数据维护；规范化或修复数据应使用独立维护流程及相应数据库权限，不能提升业务运行时账号权限。
-
-查看状态、新建迁移：
-```bash
-bash scripts/run_migrations.sh status
-bash scripts/run_migrations.sh create CreateExampleTable
-```
-
-`phinx.php` 在同一 PDO 会话中取得 PostgreSQL advisory lock 后执行 Phinx。`PG_MIGRATION_LOCK_TIMEOUT` 设置等待秒数（默认 30，范围 0–300），连接关闭时释放锁。使用固定的 `auth_db`、`user_db`、`content_db`、`social_db`、`chat_db` 和 `meta` Schema，非空 `PG_SCHEMA_PREFIX` 会被拒绝。社交身份协议键使用 `C` 排序规则区分大小写；邮箱唯一性使用 ICU 不区分大小写与重音的排序规则。
-
-本机直接运行 Phinx 时，显式提供 `PG_HOST`、`PG_PORT`、`PG_DATABASE`、`PG_MIGRATION_USER` 和 `PG_MIGRATION_PASSWORD`（配置不会自动加载 `.env`）。真实数据库测试使用一次性的 `test_*` 数据库。
-
-MongoDB 迁移使用带所有权 token 的租约和版本校验和。当前版本为 `20261020000100_message_collections_v1`、`20261020000200_outbox_claimed_at_date`、`20261020000300_drop_message_id_paging_index`；升级保留消息和序号，移除旧 `_id` 分页索引。已记录迁移之后发现 Validator 或索引漂移会失败，不能将重新运行迁移当作自动修复。`--fake` 只标记 PostgreSQL 迁移版本，不能用于实际部署变更。
+消息迁移保留原有 RPC、匿名身份快照、幂等键、按 seq 的分页和事件版本。已有数据不会自动删除或导入；有需要保留的旧消息时，应停写、冻结导出并使用离线导入工具。完整步骤、账号边界与一致性约束见 [PostgreSQL 消息存储与升级](doc/POSTGRESQL_MESSAGE_STORAGE.md)。
 
 ---
 
@@ -325,7 +292,7 @@ buf lint
 
 ## 8. 端到端 E2E 验证
 
-MongoDB 自动化覆盖范围、待执行的三节点选主与容量验收见 [故障恢复验收说明](doc/MONGODB_RECOVERY_ACCEPTANCE.md)。
+消息一致性、离线导入和故障恢复验证见 [PostgreSQL 消息存储说明](doc/POSTGRESQL_MESSAGE_STORAGE.md)。
 
 `make e2e` 依次执行 `scripts/e2e_test.sh`、`scripts/social_e2e_test.sh` 和 `scripts/auth_latency_probe.sh`，覆盖微信/QQ 登录、业务接口与社交登录全链路延迟。前者通过模拟微信 OAuth 登录；社交 E2E 还验证已移除的 `/api/v1/auth/social/phone/code`、`/api/v1/auth/social/phone/bind` 路由返回 404。这些是旧手机号路由不可用的兼容性断言，不是手机号验证码登录成功链路，也不需要开启 `ENABLE_DEV_LOGIN` 或设置 `DEV_LOGIN_CODE`。
 
@@ -354,7 +321,7 @@ make e2e-social
 make e2e-social
 ```
 
-PostgreSQL/MongoDB 集成测试要求 `DATABASE_INTEGRATION=1`，并明确要求数据库名称以 `test_` 开头。配置 `.env` 中的测试数据库后，先运行 `make postgres-ready mongo-ready migrate`，再运行 `make test-postgres test-mongodb`；MongoDB 套件还验证运行时与 relay 的权限隔离。`make test-mongodb` 包含稳定的事务故障注入和提交确认丢失恢复测试，并由默认 CI 执行；这些测试不会触发多节点真实选主。多节点选主与高并发 RPC 延迟需在独立环境验证。
+PostgreSQL 集成测试要求 `DATABASE_INTEGRATION=1`，并强制数据库名称以 `test_` 开头。在独立测试环境迁移后运行 `make test-postgres test-message`；消息套件覆盖真实数据库事务、并发幂等、Outbox 顺序/租约及提交确认丢失恢复。网络分区、主备切换和高并发 RPC 延迟需另行验收。
 
 Redis/RabbitMQ 集成测试需要 `SOCIAL_TEST_REDIS_*`、`RABBITMQ_INTEGRATION=1` 等连接参数。`make test` 执行 Unit 套件和 Go tests；`make test-integration` 执行 Integration 套件，两者均禁止跳过。缺少基础设施导致 skipped 不能视为通过，E2E 失败同样阻止 CI 通过。
 
@@ -366,7 +333,7 @@ Redis/RabbitMQ 集成测试需要 `SOCIAL_TEST_REDIS_*`、`RABBITMQ_INTEGRATION=
 |:---------------------|:---------------------------------------------------------------|
 | `make bootstrap`     | 初始化依赖、生成 autoload 与配置                               |
 | `make up`            | 编排启动全流程（镜像检查 -> 基础设施 -> 数据迁移 -> 业务服务） |
-| `make infra-up`      | 启动 PostgreSQL、MongoDB、Redis、RabbitMQ 并导入拓扑           |
+| `make infra-up`      | 启动 PostgreSQL、Redis、RabbitMQ 并导入拓扑           |
 | `make broker-init`   | 重新导入 RabbitMQ exchange、stream 和 quorum queue 拓扑        |
 | `make storage-up`    | 启动 RustFS（storage profile）                                 |
 | `make app-up`        | 仅启动业务微服务与网关容器                                     |
@@ -377,8 +344,8 @@ Redis/RabbitMQ 集成测试需要 `SOCIAL_TEST_REDIS_*`、`RABBITMQ_INTEGRATION=
 | `make e2e`           | 执行端到端接口冒烟测试与全链路延迟探针                         |
 | `make latency-probe` | 社交登录真实链路 P50/P95/P99 延迟报告（需已启动的栈）          |
 | `make logs`          | 查看所有容器运行日志                                           |
-| `make migrate`       | 应用 PostgreSQL Phinx 与 MongoDB 版本迁移                      |
-| `make test-mongodb`  | 消息持久化、迁移升级与事务故障注入测试                         |
+| `make migrate`       | 应用 PostgreSQL Phinx 版本迁移                      |
+| `make test-message`  | 消息持久化、迁移升级与事务故障注入测试                         |
 | `make clean`         | 停止并清除本地数据卷                                           |
 
 ---
@@ -392,7 +359,6 @@ Redis/RabbitMQ 集成测试需要 `SOCIAL_TEST_REDIS_*`、`RABBITMQ_INTEGRATION=
 | `50051` | gRPC       | AuthService (RPC)                                                         |
 | `50052` | gRPC       | UserService (RPC)                                                         |
 | `5432`  | PostgreSQL | PostgreSQL 18 关系型业务库                                                |
-| `27017` | MongoDB    | MongoDB 8 消息副本集                                                      |
 | `6379`  | Redis      | Redis 7.2 缓存与即时状态                                                  |
 | `5672`  | AMQP       | RabbitMQ 任务与事件发布                                                   |
 | `5552`  | Stream     | RabbitMQ Streams 原生协议                                                 |
@@ -434,7 +400,7 @@ Outbox 的 `aggregate_id` 标识事件所属实体；`event_key` 单独保存流
 ## 13. 故障排查 (Troubleshooting)
 
 1. **容器未就绪 / 数据库连接拒绝**:
-   通过 `docker compose logs postgres mongo mongo-init` 检查数据库和副本集初始化，再运行 `make postgres-ready mongo-ready`。就绪后执行 `make migrate`，不要通过删除已有数据卷处理迁移错误。
+   通过 `docker compose logs postgres` 检查数据库初始化，再运行 `make postgres-ready`。就绪后执行 `make migrate`，不要通过删除已有数据卷处理迁移错误。
 2. **WebSocket 无法连接**:
    确认已先调用 `POST /api/v1/ws/ticket` 获取合法 Ticket；Ticket 有效期 60 秒且**单次使用**（同一 Ticket 二次握手会被网关拒绝），需在 60 秒内通过 `/ws?ticket=<ticket>` 建立连接。
 3. **日志排查**:

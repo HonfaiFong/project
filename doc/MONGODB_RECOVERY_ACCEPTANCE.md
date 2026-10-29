@@ -1,3 +1,5 @@
+> 历史资料（2026-10-29 已替代）：当前运行路径已统一到 PostgreSQL。本文保留旧设计背景，不再作为部署或验收指引。请使用 [PostgreSQL 消息存储与升级](POSTGRESQL_MESSAGE_STORAGE.md)。
+
 # MongoDB 故障恢复验收
 
 ## 自动化覆盖与限制

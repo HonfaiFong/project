@@ -1,4 +1,4 @@
-.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration test-postgres test-mongodb test-database-failover up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone postgres-ready mongo-ready redis-ready seed e2e e2e-social latency-probe logs clean
+.PHONY: all bootstrap proto lint analyse phpstan test test-unit test-integration test-postgres test-message test-database-failover up infra-up broker-init storage-up app-up down restart build-runtime rebuild-runtime migrate preflight-phone postgres-ready redis-ready seed e2e e2e-social latency-probe logs clean
 
 PHP_RUNTIME_IMAGE := project-php-runtime:rabbitmq
 GATEWAY_IMAGE     := project-realtime-gateway:redis-nonce
@@ -37,18 +37,18 @@ test-postgres:
 	@echo "Running PostgreSQL integration tests..."
 	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 --entrypoint php database-migrate vendor/bin/phpunit tests/Integration/PostgresMigrationRuntimeTest.php tests/Integration/EloquentPersistenceTest.php tests/Integration/UserOutboxTransactionTest.php --fail-on-skipped
 
-test-mongodb:
-	@echo "Running MongoDB integration tests..."
-	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 -e MONGODB_TEST_RUNTIME_PASSWORD=replace-with-random-local-mongo-runtime-password -e MONGODB_TEST_RELAY_PASSWORD=replace-with-random-local-mongo-relay-password --entrypoint php mongodb-migrate vendor/bin/phpunit tests/Integration/MongoMessagePersistenceTest.php tests/Integration/MongoTransactionFailoverTest.php --fail-on-skipped
+test-message:
+	@echo "Running PostgreSQL message persistence and recovery tests..."
+	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 --entrypoint php database-migrate vendor/bin/phpunit tests/Integration/PostgresMessagePersistenceTest.php --fail-on-skipped
 
 test-database-failover:
 	@echo "Running transaction fault injection, idempotent recovery and Redis persistence tests..."
-	docker compose run --rm --no-deps -e DATABASE_INTEGRATION=1 -e MONGODB_TEST_RUNTIME_PASSWORD=replace-with-random-local-mongo-runtime-password -e MONGODB_TEST_RELAY_PASSWORD=replace-with-random-local-mongo-relay-password --entrypoint php mongodb-migrate vendor/bin/phpunit tests/Integration/MongoTransactionFailoverTest.php --fail-on-skipped
+	$(MAKE) test-message
 	bash scripts/redis_revocation_persistence_test.sh
 
 infra-up:
-	docker compose up -d postgres mongo mongo-init redis rabbitmq
-	$(MAKE) postgres-ready mongo-ready redis-ready
+	docker compose up -d postgres redis rabbitmq
+	$(MAKE) postgres-ready redis-ready
 	$(MAKE) broker-init
 
 broker-init:
@@ -61,7 +61,7 @@ storage-up:
 app-up:
 	docker compose up -d auth-service user-service user-outbox-relay message-outbox-relay chat-message-consumer content-service social-service chat-service message-service api-gateway realtime-gateway
 
-# 标准开发入口: 镜像校验/构建 -> 启动基础设施 -> 等待 PostgreSQL / MongoDB 就绪 -> 迁移数据库 -> 启动应用服务
+# 标准开发入口: 镜像校验/构建 -> 启动基础设施 -> 等待 PostgreSQL 就绪 -> 迁移数据库 -> 启动应用服务
 up:
 	@if ! docker image inspect $(PHP_RUNTIME_IMAGE) >/dev/null 2>&1; then \
 		echo ">>> $(PHP_RUNTIME_IMAGE) 不存在,先构建 PHP runtime..."; \
@@ -71,10 +71,10 @@ up:
 		echo ">>> $(GATEWAY_IMAGE) 不存在,先构建 realtime gateway..."; \
 		docker compose build realtime-gateway; \
 	fi
-	@echo ">>> 启动基础设施 (PostgreSQL / MongoDB / Redis / RabbitMQ)..."
-	docker compose up -d postgres mongo mongo-init redis rabbitmq
+	@echo ">>> 启动基础设施 (PostgreSQL / Redis / RabbitMQ)..."
+	docker compose up -d postgres redis rabbitmq
 	@$(MAKE) broker-init
-	@$(MAKE) postgres-ready mongo-ready redis-ready
+	@$(MAKE) postgres-ready redis-ready
 	@echo ">>> 执行数据库基线与增量迁移..."
 	@$(MAKE) migrate
 	@echo ">>> 启动业务应用与网关服务..."
@@ -97,7 +97,6 @@ rebuild-runtime:
 migrate:
 	@echo "Applying database migrations with Phinx..."
 	bash scripts/run_migrations.sh
-	docker compose run --rm --no-deps mongodb-migrate
 
 postgres-ready:
 	@echo ">>> Waiting for PostgreSQL SQL readiness..."
@@ -113,11 +112,6 @@ postgres-ready:
 		echo ">>> PostgreSQL SQL readiness timed out"; \
 		exit 1; \
 	fi
-
-mongo-ready:
-	docker compose up -d mongo-init
-	@container_id=$$(docker compose ps -aq mongo-init); \
-		test -n "$$container_id" && test "$$(docker wait "$$container_id")" = 0
 
 redis-ready:
 	@echo ">>> 等待 Redis readiness..."
@@ -154,7 +148,7 @@ e2e:
 e2e-social:
 	bash scripts/social_e2e_test.sh
 
-# 针对运行中的服务栈，报告真实社交登录调用链（网关 -> gRPC -> OAuth/PostgreSQL / MongoDB/Redis -> user-service）的 P50/P95/P99。
+# 针对运行中的服务栈，报告真实社交登录调用链（网关 -> gRPC -> OAuth/PostgreSQL/Redis -> user-service）的 P50/P95/P99。
 latency-probe:
 	bash scripts/auth_latency_probe.sh
 

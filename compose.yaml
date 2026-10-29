@@ -14,6 +14,8 @@ services:
       PG_CONTENT_RUNTIME_PASSWORD: ${PG_CONTENT_RUNTIME_PASSWORD:?Set PG_CONTENT_RUNTIME_PASSWORD in .env}
       PG_SOCIAL_RUNTIME_PASSWORD: ${PG_SOCIAL_RUNTIME_PASSWORD:?Set PG_SOCIAL_RUNTIME_PASSWORD in .env}
       PG_CHAT_RUNTIME_PASSWORD: ${PG_CHAT_RUNTIME_PASSWORD:?Set PG_CHAT_RUNTIME_PASSWORD in .env}
+      PG_MESSAGE_RUNTIME_PASSWORD: ${PG_MESSAGE_RUNTIME_PASSWORD:?Set PG_MESSAGE_RUNTIME_PASSWORD in .env}
+      PG_MESSAGE_OUTBOX_RELAY_PASSWORD: ${PG_MESSAGE_OUTBOX_RELAY_PASSWORD:?Set PG_MESSAGE_OUTBOX_RELAY_PASSWORD in .env}
       PG_USER_OUTBOX_RELAY_PASSWORD: ${PG_USER_OUTBOX_RELAY_PASSWORD:?Set PG_USER_OUTBOX_RELAY_PASSWORD in .env}
     ports:
       - "${PG_BIND_ADDRESS:-127.0.0.1}:${PG_PORT:-5432}:5432"
@@ -26,57 +28,6 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
-
-  mongo:
-    image: mongo:8.0
-    container_name: social-mongo
-    restart: unless-stopped
-    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--keyFile", "/run/mongo-keyfile/keyfile", "--auth"]
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ADMIN_USER:-mongo_admin}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ADMIN_PASSWORD:?Set MONGODB_ADMIN_PASSWORD in .env}
-    depends_on:
-      mongo-keyfile-init:
-        condition: service_completed_successfully
-    ports:
-      - "${MONGODB_BIND_ADDRESS:-127.0.0.1}:${MONGODB_PORT:-27017}:27017"
-    volumes:
-      - mongo_data:/data/db
-      - mongo_keyfile:/run/mongo-keyfile:ro
-    healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --host 127.0.0.1 -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'quit(db.hello().isWritablePrimary ? 0 : 1)' >/dev/null 2>&1"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-
-  mongo-keyfile-init:
-    image: mongo:8.0
-    restart: "no"
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command: ['if [ ! -s /keyfile/keyfile ]; then openssl rand -base64 756 > /keyfile/keyfile; fi; chown 999:999 /keyfile/keyfile; chmod 400 /keyfile/keyfile']
-    volumes:
-      - mongo_keyfile:/keyfile
-
-  mongo-init:
-    image: mongo:8.0
-    restart: "no"
-    depends_on:
-      mongo:
-        condition: service_started
-    environment:
-      MONGODB_ADMIN_USER: ${MONGODB_ADMIN_USER:-mongo_admin}
-      MONGODB_ADMIN_PASSWORD: ${MONGODB_ADMIN_PASSWORD:?Set MONGODB_ADMIN_PASSWORD in .env}
-      MONGODB_DATABASE: ${MONGODB_DATABASE:-message_db}
-      MONGODB_RUNTIME_PASSWORD: ${MONGODB_RUNTIME_PASSWORD:?Set MONGODB_RUNTIME_PASSWORD in .env}
-      MONGODB_RELAY_PASSWORD: ${MONGODB_RELAY_PASSWORD:?Set MONGODB_RELAY_PASSWORD in .env}
-      MONGODB_MIGRATION_PASSWORD: ${MONGODB_MIGRATION_PASSWORD:?Set MONGODB_MIGRATION_PASSWORD in .env}
-    volumes:
-      - ./infra/docker/mongodb/init.sh:/init.sh:ro
-      - ./infra/docker/mongodb/init.js:/init.js:ro
-    entrypoint: ["bash", "/init.sh"]
-
 
   redis:
     image: redis:7.2.4-alpine
@@ -225,25 +176,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-  mongodb-migrate:
-    image: project-php-runtime:rabbitmq
-    profiles:
-      - migration
-    working_dir: /app
-    entrypoint: ["php", "scripts/migrate_mongodb.php"]
-    environment:
-      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017/?replicaSet=rs0}
-      MONGODB_USER: message_migration
-      MONGODB_PASSWORD: ${MONGODB_MIGRATION_PASSWORD:?Set MONGODB_MIGRATION_PASSWORD in .env}
-      MONGODB_DATABASE: ${MONGODB_DATABASE:-message_db}
-    volumes:
-      - .:/app
-    depends_on:
-      mongo:
-        condition: service_healthy
-      mongo-init:
-        condition: service_completed_successfully
 
   fake-oauth:
     image: project-php-runtime:rabbitmq
@@ -585,6 +517,7 @@ services:
       - "9100"
     environment:
       - SERVICE_NAME=message-service
+      - MESSAGE_OPERATION_BUDGET_MS=${MESSAGE_OPERATION_BUDGET_MS:-600}
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       - OTEL_SERVICE_NAME=message-service
       - OTEL_SERVICE_INSTANCE_ID=${OTEL_SERVICE_INSTANCE_ID_MESSAGE_SERVICE:-message-service}
@@ -607,19 +540,12 @@ services:
       - INTERNAL_RPC_CHAT_MESSAGE_TOKEN=${INTERNAL_RPC_CHAT_MESSAGE_TOKEN:?Set INTERNAL_RPC_CHAT_MESSAGE_TOKEN in .env}
       - GRPC_CHAT_SERVICE=chat-service:50055
       - GRPC_CHAT_SERVICE_TOKEN=${INTERNAL_RPC_MESSAGE_CHAT_TOKEN:?Set INTERNAL_RPC_MESSAGE_CHAT_TOKEN in .env}
-      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017/?replicaSet=rs0}
-      - MONGODB_RPC_CONNECT_TIMEOUT_MS=${MONGODB_RPC_CONNECT_TIMEOUT_MS:-250}
-      - MONGODB_RPC_SERVER_SELECTION_TIMEOUT_MS=${MONGODB_RPC_SERVER_SELECTION_TIMEOUT_MS:-250}
-      - MONGODB_RPC_SOCKET_TIMEOUT_MS=${MONGODB_RPC_SOCKET_TIMEOUT_MS:-500}
-      - MONGODB_RPC_QUERY_TIMEOUT_MS=${MONGODB_RPC_QUERY_TIMEOUT_MS:-300}
-      - MONGODB_RPC_WRITE_TIMEOUT_MS=${MONGODB_RPC_WRITE_TIMEOUT_MS:-250}
-      - MONGODB_RPC_COMMIT_TIMEOUT_MS=${MONGODB_RPC_COMMIT_TIMEOUT_MS:-150}
-      - MONGODB_RPC_BUDGET_RESERVE_MS=${MONGODB_RPC_BUDGET_RESERVE_MS:-100}
-      - MONGODB_RPC_RETRY_DELAY_MS=${MONGODB_RPC_RETRY_DELAY_MS:-10}
-      - MONGODB_RPC_MAX_TRANSACTION_ATTEMPTS=${MONGODB_RPC_MAX_TRANSACTION_ATTEMPTS:-3}
-      - MONGODB_USER=message_runtime
-      - MONGODB_PASSWORD=${MONGODB_RUNTIME_PASSWORD:?Set MONGODB_RUNTIME_PASSWORD in .env}
-      - MONGODB_DATABASE=${MONGODB_DATABASE:-message_db}
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_DATABASE=${PG_DATABASE:-social_backend}
+      - PG_USER=message_runtime
+      - PG_PASSWORD=${PG_MESSAGE_RUNTIME_PASSWORD:?Set PG_MESSAGE_RUNTIME_PASSWORD in .env}
+      - PG_SCHEMA=message_db
       - ANONYMOUS_IDENTITY_KEY=${ANONYMOUS_IDENTITY_KEY:?Set ANONYMOUS_IDENTITY_KEY in .env}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -628,10 +554,8 @@ services:
     volumes:
       - .:/app
     depends_on:
-      mongo:
+      postgres:
         condition: service_healthy
-      mongo-init:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
       chat-service:
@@ -685,10 +609,12 @@ services:
       OTEL_SERVICE_NAME: message-outbox-relay
       OTEL_SERVICE_INSTANCE_ID: ${OTEL_SERVICE_INSTANCE_ID_OUTBOX_RELAY:-message-outbox-relay}
       OTEL_DEPLOYMENT_ENVIRONMENT: ${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
-      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017/?replicaSet=rs0}
-      MONGODB_USER: message_outbox_relay
-      MONGODB_PASSWORD: ${MONGODB_RELAY_PASSWORD:?Set MONGODB_RELAY_PASSWORD in .env}
-      MONGODB_DATABASE: ${MONGODB_DATABASE:-message_db}
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DATABASE: ${PG_DATABASE:-social_backend}
+      PG_USER: message_outbox_relay
+      PG_PASSWORD: ${PG_MESSAGE_OUTBOX_RELAY_PASSWORD:?Set PG_MESSAGE_OUTBOX_RELAY_PASSWORD in .env}
+      PG_SCHEMA: message_db
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: "5672"
       RABBITMQ_USER: ${RABBITMQ_USER:?Set RABBITMQ_USER in .env}
@@ -696,10 +622,8 @@ services:
     volumes:
       - .:/app
     depends_on:
-      mongo:
+      postgres:
         condition: service_healthy
-      mongo-init:
-        condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
       rabbitmq-init:
@@ -940,8 +864,6 @@ services:
 
 volumes:
   postgres_data:
-  mongo_data:
-  mongo_keyfile:
   mysql_data:
   redis_data:
   rabbitmq_data:

@@ -13,6 +13,7 @@ use JsonException;
 use Packages\Identity\AnonymousAuthorProjector;
 use Packages\Identity\AnonymousReferenceFactory;
 use Packages\GrpcCommon\OperationBudget;
+use Packages\Database\PostgresErrorClassifier;
 use Packages\Tracing\TraceContext;
 use Services\MessageService\Domain\ChatMemberSnapshotClient;
 use Services\MessageService\Domain\Exception\MessageException;
@@ -88,15 +89,14 @@ final class MessageApplicationService
         ];
         $existing = $this->repository->findBySenderClientId($trustedUserId, $clientMessageId, $budget);
         if (!empty($existing)) {
-            if (!$this->repository->idempotencyMatches($existing, $normalized)) {
+            if (!$this->repository->idempotencyMatches($existing, $normalized, $budget)) {
                 throw MessageException::duplicate('client_message_id was already used for a different message');
             }
 
             return $this->publicMessage($existing);
         }
 
-        // Values outside the transaction callback stay stable if MongoDB asks
-        // us to retry a transient transaction.
+        // Values outside the transaction callback stay stable on transaction retries.
         $now = ($this->clock)();
         $messageId = $this->ids->nextId();
         $eventId = TraceContext::generateUuidV7();
@@ -114,10 +114,11 @@ final class MessageApplicationService
                 $messageId,
                 $eventId,
                 $traceId,
+                $budget,
             ): PublicMessage {
                 $existing = $transaction->findBySenderClientId($trustedUserId, $clientMessageId);
                 if (!empty($existing)) {
-                    if (!$this->repository->idempotencyMatches($existing, $normalized)) {
+                    if (!$this->repository->idempotencyMatches($existing, $normalized, $budget)) {
                         throw MessageException::duplicate('client_message_id was already used for a different message');
                     }
                     return $this->publicMessage($existing);
@@ -167,7 +168,7 @@ final class MessageApplicationService
             if (empty($existing)) {
                 throw $exception;
             }
-            if (!$this->repository->idempotencyMatches($existing, $normalized)) {
+            if (!$this->repository->idempotencyMatches($existing, $normalized, $budget)) {
                 throw MessageException::duplicate('client_message_id was already used for a different message');
             }
             return $this->publicMessage($existing);
@@ -346,11 +347,6 @@ final class MessageApplicationService
 
     private function isDuplicateKey(Throwable $e): bool
     {
-        for ($current = $e; $current !== null; $current = $current->getPrevious()) {
-            if ((int)$current->getCode() === 11000) {
-                return true;
-            }
-        }
-        return false;
+        return PostgresErrorClassifier::isUniqueViolation($e);
     }
 }
