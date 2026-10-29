@@ -24,6 +24,9 @@ final readonly class ContentController
     ) {
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function createPost(GatewayRequest $request): Response
     {
         $this->requireActor($request);
@@ -34,11 +37,17 @@ final readonly class ContentController
         return ApiResponse::success($result, 201);
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function getPost(string $postId): Response
     {
         return ApiResponse::success($this->contentClient->getPost($postId));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function createComment(GatewayRequest $request, string $postId): Response
     {
         $this->requireActor($request);
@@ -52,6 +61,9 @@ final readonly class ContentController
         return ApiResponse::success(['comment' => $this->contentClient->createComment($fields)['comment'] ?? []], 201);
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function listComments(GatewayRequest $request, string $postId): Response
     {
         $pageSize = max(1, min(100, (int)$request->get('page_size', 20)));
@@ -61,12 +73,18 @@ final readonly class ContentController
         return ApiResponse::success($this->contentClient->listComments($postId, $parentId, $pageSize, $cursor));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function deletePost(GatewayRequest $request, string $postId): Response
     {
         $this->requireActor($request);
         return ApiResponse::success($this->contentClient->deletePost($postId));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function deleteComment(GatewayRequest $request, string $commentId): Response
     {
         $this->requireActor($request);
@@ -76,6 +94,7 @@ final readonly class ContentController
     /**
      * The two public boards. The board follows the post author's identity
      * mode; comments never move a post between boards.
+     * @throws \Random\RandomException
      */
     public function feed(GatewayRequest $request): Response
     {
@@ -95,7 +114,10 @@ final readonly class ContentController
         ));
     }
 
-    /** Public MAIN posts of one persona; alias content never appears here. */
+    /**
+     * Public MAIN posts of one persona; alias content never appears here.
+     * @throws \Exception
+     */
     public function personaPosts(GatewayRequest $request, string $personaId): Response
     {
         $this->requireActor($request);
@@ -118,7 +140,10 @@ final readonly class ContentController
         ));
     }
 
-    /** Own management view: both identities and every non-deleted state. */
+    /**
+     * Own management view: both identities and every non-deleted state.
+     * @throws \Random\RandomException
+     */
     public function myPosts(GatewayRequest $request): Response
     {
         $this->requireActor($request);

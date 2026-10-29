@@ -16,6 +16,9 @@ use Webman\MiddlewareInterface;
 
 final class TraceMiddleware implements MiddlewareInterface
 {
+    /**
+     * @throws \Throwable
+     */
     public function process(Request $request, callable $handler): Response
     {
         if (!$request instanceof GatewayRequest) {

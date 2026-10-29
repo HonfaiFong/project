@@ -17,7 +17,7 @@ final class MessageContentCodec
             // Validate grammar, but never compare the decoded PHP numbers: they may be floats.
             json_decode($value, false, 512, JSON_THROW_ON_ERROR);
             $pattern = <<<'REGEX'
-~"(?:\\.|[^"\\])*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?~s
+~"(?:\x5c.|[^"\x5c])*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?~
 REGEX;
             // Tag strings as well as numbers so JSON strings cannot impersonate numeric tokens.
             $tagged = preg_replace_callback($pattern, function (array $match): string {

@@ -25,6 +25,7 @@ final readonly class AuthMiddleware implements MiddlewareInterface
 
     /**
      * @throws Exception
+     * @throws \Throwable
      */
     public function process(Request $request, callable $handler): Response
     {

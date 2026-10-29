@@ -57,13 +57,14 @@ function withLockedState(string $stateFile, callable $operation): mixed
             ftruncate($handle, strlen($encoded));
             fflush($handle);
 
-            return $result;
         } finally {
             flock($handle, LOCK_UN);
         }
     } finally {
         fclose($handle);
     }
+
+    return $result;
 }
 
 /**

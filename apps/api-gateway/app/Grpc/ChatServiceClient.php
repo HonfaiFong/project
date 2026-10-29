@@ -62,12 +62,18 @@ final class ChatServiceClient
         return ['conversation' => $this->conversation($response->getConversation())];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function get(string $conversationId): array
     {
         $response = $this->call('/chat.v1.ChatService/GetConversation', new GetConversationRequest(['conversation_id' => $conversationId]), GetConversationResponse::class);
         return ['conversation' => $this->conversation($response->getConversation())];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function list(int $pageSize, string $cursor): array
     {
         $response = $this->call('/chat.v1.ChatService/ListConversations', new ListConversationsRequest([
@@ -80,12 +86,18 @@ final class ChatServiceClient
         ];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function checkCanMessage(string $recipientUserId): array
     {
         $response = $this->call('/chat.v1.ChatService/CheckCanMessage', new CheckCanMessageRequest(['recipient_user_id' => $recipientUserId]), CheckCanMessageResponse::class);
         return ['allowed' => $response->getAllowed(), 'reason' => $response->getReason()];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function markRead(string $conversationId, string $seq): array
     {
         $response = $this->call('/chat.v1.ChatService/MarkRead', new MarkReadRequest(['conversation_id' => $conversationId, 'seq' => $seq]), MarkReadResponse::class);

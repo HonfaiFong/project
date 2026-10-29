@@ -15,6 +15,9 @@ final readonly class MessageController
 {
     public function __construct(private MessageServiceClient $messageClient) {}
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function send(GatewayRequest $request, string $conversationId): Response
     {
         $this->actor($request);
@@ -26,6 +29,9 @@ final readonly class MessageController
         ), 201);
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function sync(GatewayRequest $request, string $conversationId): Response
     {
         $this->actor($request);
@@ -36,6 +42,9 @@ final readonly class MessageController
         ));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function list(GatewayRequest $request, string $conversationId): Response
     {
         $this->actor($request);

@@ -52,12 +52,12 @@ final readonly class AnonymousAuthorSnapshot
     /**
      * @return array{
      *   identity_mode:int,
-     *   persona_id:?string,
-     *   display_name:?string,
-     *   avatar_key:?string,
-     *   anonymous_ref:?string,
-     *   scope_type:?string,
-     *   scope_id:?string
+     *   persona_id:string|null,
+     *   display_name:string|null,
+     *   avatar_key:string|null,
+     *   anonymous_ref:string|null,
+     *   scope_type:string|null,
+     *   scope_id:string|null
      * }
      */
     public function toArray(): array

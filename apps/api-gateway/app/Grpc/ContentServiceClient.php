@@ -54,6 +54,7 @@ final class ContentServiceClient
     /**
      * @param array<string,mixed> $fields
      * @param list<array<string,mixed>> $media
+     * @throws \Exception
      */
     public function createPost(array $fields, array $media): array
     {
@@ -84,6 +85,9 @@ final class ContentServiceClient
         return ['post' => $this->post($response->getPost())];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function getPost(string $postId): array
     {
         $response = $this->call('/content.v1.ContentService/GetPost', new GetPostRequest([
@@ -93,7 +97,10 @@ final class ContentServiceClient
         return ['post' => $this->post($response->getPost())];
     }
 
-    /** @param list<string> $postIds */
+    /**
+     * @param list<string> $postIds
+     * @throws \Exception
+     */
     public function batchGetPosts(array $postIds): array
     {
         $response = $this->call('/content.v1.ContentService/BatchGetPosts', new BatchGetPostsRequest([
@@ -103,7 +110,10 @@ final class ContentServiceClient
         return ['posts' => array_map(fn (PublicPost $post): array => $this->post($post), iterator_to_array($response->getPosts()))];
     }
 
-    /** @param array<string,mixed> $fields */
+    /**
+     * @param array<string,mixed> $fields
+     * @throws \Exception
+     */
     public function createComment(array $fields): array
     {
         $response = $this->call('/content.v1.ContentService/CreateComment', new CreateCommentRequest([
@@ -120,6 +130,9 @@ final class ContentServiceClient
         return ['comment' => $this->comment($response->getComment())];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function listComments(string $postId, string $parentId, int $pageSize, string $cursor): array
     {
         $response = $this->call('/content.v1.ContentService/ListComments', new ListCommentsRequest([
@@ -142,6 +155,9 @@ final class ContentServiceClient
         ];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function listPosts(int $scope, string $personaId, int $identityFilter, int $pageSize, string $cursor): array
     {
         $response = $this->call('/content.v1.ContentService/ListPosts', new ListPostsRequest([
@@ -165,6 +181,9 @@ final class ContentServiceClient
         ];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function deletePost(string $postId): array
     {
         $response = $this->call('/content.v1.ContentService/DeletePost', new DeletePostRequest([
@@ -174,6 +193,9 @@ final class ContentServiceClient
         return ['success' => $response->getSuccess()];
     }
 
+    /**
+     * @throws \Exception
+     */
     public function deleteComment(string $commentId): array
     {
         $response = $this->call('/content.v1.ContentService/DeleteComment', new DeleteCommentRequest([

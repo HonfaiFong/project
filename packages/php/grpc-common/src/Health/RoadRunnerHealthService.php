@@ -39,6 +39,9 @@ final class RoadRunnerHealthService implements HealthServiceInterface
         $this->readinessChecker = $readinessChecker;
     }
 
+    /**
+     * @throws \Throwable
+     */
     public function Check(ContextInterface $ctx, HealthCheckRequest $in): HealthCheckResponse
     {
         $this->authorizer?->authorize($ctx, 'Check');

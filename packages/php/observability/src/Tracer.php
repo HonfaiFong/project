@@ -10,6 +10,9 @@ final class Tracer
 {
     private static ?SpanExporter $exporter = null;
 
+    /**
+     * @throws \Random\RandomException
+     */
     public static function enter(
         string $name,
         int $kind = Span::KIND_INTERNAL,
@@ -50,6 +53,9 @@ final class Tracer
         return self::$exporter ??= new OtlpHttpExporter();
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     private static function traceId(string $candidate): string
     {
         return preg_match('/\A[0-9a-f]{32}\z/i', $candidate) === 1 ? strtolower($candidate) : bin2hex(random_bytes(16));

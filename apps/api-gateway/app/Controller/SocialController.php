@@ -21,49 +21,66 @@ final readonly class SocialController
     public function unlikePost(GatewayRequest $request, string $postId): Response { return $this->unlike($request, 1, $postId); }
     public function unlikeComment(GatewayRequest $request, string $commentId): Response { return $this->unlike($request, 2, $commentId); }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function follow(GatewayRequest $request, string $personaId): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->socialClient->follow($personaId, $this->followerPersonaId($request), $this->mainMode($request)));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function unfollow(GatewayRequest $request, string $personaId): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->socialClient->unfollow($personaId, $this->followerPersonaId($request), $this->mainMode($request)));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function block(GatewayRequest $request, string $userId): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->socialClient->block($userId, $this->mainMode($request)));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function unblock(GatewayRequest $request, string $userId): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->socialClient->unblock($userId, $this->mainMode($request)));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     private function like(GatewayRequest $request, int $targetType, string $targetId): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->socialClient->like($this->personaId($request), $targetType, $targetId, $this->mainMode($request)));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     private function unlike(GatewayRequest $request, int $targetType, string $targetId): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->socialClient->unlike($this->personaId($request), $targetType, $targetId, $this->mainMode($request)));
     }
 
-    private function actor(GatewayRequest $request): string
+    private function actor(GatewayRequest $request): void
     {
         $userId = trim($request->authContext['user_id']);
         if (blank($userId)) {
             throw new RuntimeException(ErrorCode::AUTH_UNAUTHORIZED->message(), ErrorCode::AUTH_UNAUTHORIZED->value);
         }
-        return $userId;
     }
 
     private function personaId(GatewayRequest $request): string

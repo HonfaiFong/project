@@ -151,7 +151,10 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
             ]) === 1;
     }
 
-    /** @param array<string,mixed> $row */
+    /**
+     * @param array<string,mixed> $row
+     * @throws \JsonException
+     */
     private function record(array $row): OutboxRecord
     {
         return new OutboxRecord(
@@ -171,6 +174,9 @@ final readonly class OutboxRepository implements EventOutboxInterface, OutboxRel
         );
     }
 
+    /**
+     * @throws \Exception
+     */
     private function dateString(mixed $value): string
     {
         if ($value instanceof DateTimeInterface) {

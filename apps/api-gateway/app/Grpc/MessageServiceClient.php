@@ -6,7 +6,6 @@ namespace Apps\ApiGateway\Grpc;
 
 use Contracts\Errors\ErrorCode;
 use Contracts\Gen\Common\V1\PaginationRequest;
-use Contracts\Gen\Common\V1\PublicAuthor;
 use Contracts\Gen\Message\V1\GetMessagesRequest;
 use Contracts\Gen\Message\V1\GetMessagesResponse;
 use Contracts\Gen\Message\V1\PublicMessage;
@@ -65,6 +64,7 @@ final class MessageServiceClient
      * @template T of Message
      * @param class-string<T> $responseClass
      * @return T
+     * @throws \Exception
      */
     private function call(string $method, Message $request, string $responseClass): Message
     {

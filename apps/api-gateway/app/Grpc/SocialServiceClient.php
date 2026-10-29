@@ -110,6 +110,7 @@ final class SocialServiceClient
      * @template T of Message
      * @param class-string<T> $responseClass
      * @return T
+     * @throws \Exception
      */
     private function call(string $method, Message $request, string $responseClass): Message
     {

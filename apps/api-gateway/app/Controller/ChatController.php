@@ -16,6 +16,9 @@ final readonly class ChatController
 {
     public function __construct(private ChatServiceClient $chatClient) {}
 
+    /**
+     * @throws \Exception
+     */
     public function create(GatewayRequest $request): Response
     {
         $this->actor($request);
@@ -40,24 +43,36 @@ final readonly class ChatController
         ], $target), 201);
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function get(GatewayRequest $request, string $conversationId): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->chatClient->get($conversationId));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function list(GatewayRequest $request): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->chatClient->list(max(1, min(100, (int)$request->get('page_size', 20))), trim((string)$request->get('cursor', ''))));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function checkCanMessage(GatewayRequest $request, string $recipientUserId): Response
     {
         $this->actor($request);
         return ApiResponse::success($this->chatClient->checkCanMessage($recipientUserId));
     }
 
+    /**
+     * @throws \Random\RandomException
+     */
     public function markRead(GatewayRequest $request, string $conversationId): Response
     {
         $this->actor($request);
